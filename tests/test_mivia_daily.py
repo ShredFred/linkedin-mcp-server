@@ -96,6 +96,7 @@ def test_event_scout_spreads_over_days_within_the_search_budget(tmp_path, monkey
     second = asyncio.run(c.event_scout())
     assert second["due"] and not second.get("deferred")
     assert {e["event_id"] for e in second["upcoming"]} == {"ka", "kb", "kc"}
+    assert second["past"] == []  # past events are reported separately (none here)
     assert sorted(second["upcoming"][0]["found_by"])  # merged sources
     third = asyncio.run(c.event_scout())
     assert third == {"enabled": True, "due": False, "last_run": third["last_run"]}

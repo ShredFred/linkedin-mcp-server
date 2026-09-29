@@ -543,6 +543,9 @@ class Collector:
             "new_events": new if known else [],
             "first_run": not known,
             "upcoming": [ev for ev in found.values() if not ev.get("past")],
+            # Past events stay harvestable (attendee lists remain visible,
+            # measured 2026-09-29); the hq planner takes them as sources.
+            "past": [ev for ev in found.values() if ev.get("past")],
         }
 
     async def harvest(self) -> list[dict[str, Any]]:
