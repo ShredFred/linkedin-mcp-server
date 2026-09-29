@@ -213,6 +213,19 @@ def test_fork_tools_are_registered_and_tagged():
         "send_campaign_batch",
         "connect_guarded",
         "outreach_quota",
+        # stage 2
+        "get_post_engagers",
+        "get_post_analytics",
+        "pace_status",
+        "invite_to_event",
+        "withdraw_invitations",
+        "follow_up_list",
+        "set_contact_note",
+        "get_profile_viewers",
+        "comment_on_post",
+        "job_watch",
+        "list_groups",
+        "get_group_members",
     }
     assert all("mivia" in t.tags for t in tools)
 

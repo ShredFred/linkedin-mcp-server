@@ -48,6 +48,15 @@ def _network(extractor: Any) -> MiviaNetworkReader:
     return MiviaNetworkReader(extractor._mivia_session, extractor._mivia_navigator)
 
 
+def _pace(action: str, count: int = 1, *, tool: str) -> dict[str, Any] | None:
+    """Ask the pacer; return a refusal dict when the budget is spent."""
+    try:
+        outreach.Pacer(outreach.Ledger.default()).take(action, count, tool=tool)
+    except outreach.PaceExceeded as spent:
+        return {"status": "pace_budget_spent", "pace": spent.state}
+    return None
+
+
 def _composer(extractor: Any) -> MiviaPostComposer:
     return MiviaPostComposer(extractor._mivia_session, extractor._mivia_navigator)
 
@@ -86,6 +95,7 @@ async def _send_and_verify(
             "kind": "message",
             "recipient": outreach.recipient_key(username),
             "text_sha": sha,
+            "text_head": outreach.text_head(message),
             "campaign": campaign,
             "status": "attempted",
             "started_at": started,
@@ -183,6 +193,9 @@ def register_mivia_tools(
             profile_urn, headline, connected_on (ISO date or null)}].
         """
         since_date = date.fromisoformat(since) if since else None
+        refusal = _pace("page_read", tool="list_connections")
+        if refusal:
+            return refusal
         return await _run(
             ctx,
             "list_connections",
@@ -217,6 +230,9 @@ def register_mivia_tools(
                 call again with start_page=next_page until complete is true.
         """
         event_id = event_id.strip().strip("/").rsplit("/", 1)[-1]
+        refusal = _pace("search", max_pages, tool="get_event_attendees")
+        if refusal:
+            return refusal
         return await _run(
             ctx,
             "get_event_attendees",
@@ -245,6 +261,9 @@ def register_mivia_tools(
             profile_url, headline, sent_text}]. sent_text is LinkedIn's relative
             wording ("Vor 18 Stunden gesendet"), kept as rendered.
         """
+        refusal = _pace("page_read", tool="list_sent_invitations")
+        if refusal:
+            return refusal
         return await _run(
             ctx,
             "list_sent_invitations",
@@ -344,6 +363,9 @@ def register_mivia_tools(
                 "status": "dry_run",
                 "ledger": str(ledger.path),
             }
+        refusal = _pace("message", tool="send_message_verified")
+        if refusal:
+            return {"recipient": username, **refusal}
         return await _run(
             ctx,
             "send_message_verified",
@@ -415,6 +437,9 @@ def register_mivia_tools(
         }
         if not confirm_send:
             return {**plan, "status": "dry_run"}
+        refusal = _pace("message", tool="send_campaign_batch")
+        if refusal:
+            return {**plan, **refusal}
 
         async def body(ex: Any) -> dict[str, Any]:
             if not plan["canary_verified"]:
@@ -491,6 +516,9 @@ def register_mivia_tools(
             return {"recipient": username, "status": "cap_reached", "quota": q}
         if not confirm_send:
             return {"recipient": username, "status": "dry_run", "quota": q}
+        refusal = _pace("invite", tool="connect_guarded")
+        if refusal:
+            return {"recipient": username, **refusal}
 
         async def body(ex: Any) -> dict[str, Any]:
             attempt = uuid.uuid4().hex
@@ -553,3 +581,7 @@ def register_mivia_tools(
             invites_per_day=invites_per_day,
             canary=outreach.DEFAULT_CANARY,
         )
+
+    from linkedin_mcp_server.tools.mivia_stage2 import register_mivia_stage2_tools
+
+    register_mivia_stage2_tools(mcp, tool_timeout=tool_timeout)

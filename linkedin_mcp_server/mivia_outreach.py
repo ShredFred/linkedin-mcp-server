@@ -178,6 +178,221 @@ def quota(
     }
 
 
+# --- pacer (Taktgeber) ------------------------------------------------------
+#
+# One budget per action kind, per day and per rolling week. Every fork tool,
+# read or write, asks the pacer before it touches LinkedIn and records what it
+# used. Sources: provider consensus (LinkedIn publishes none) -- invites 20-40,
+# profile views <=150, likes+comments 50-150, ~150 actions/day in total;
+# Frederik's tighter message/invite caps above win where they are lower.
+# Messages and invites keep their own attempt rows; the pacer counts those
+# directly so nothing is double-booked.
+
+PACE_BUDGETS: dict[str, dict[str, int]] = {
+    "profile_view": {"day": 150, "week": 700},
+    "like": {"day": 40, "week": 200},
+    "comment": {"day": 8, "week": 30},
+    "invite": {"day": INVITES_PER_DAY_DEFAULT, "week": INVITES_PER_WEEK_MAX},
+    "event_invite": {"day": 25, "week": 150},
+    "withdraw": {"day": 30, "week": 150},
+    "message": {"day": MESSAGES_PER_DAY_DEFAULT, "week": 60},
+    "search": {"day": 40, "week": 200},
+    "page_read": {"day": 300, "week": 1500},
+}
+# Everything that is visible to another member counts against one total.
+PACE_WRITE_KINDS = {"like", "comment", "invite", "event_invite", "message", "withdraw"}
+PACE_WRITE_TOTAL_PER_DAY = 150
+# LinkedIn's own event-invitation ceiling per organiser account and week.
+EVENT_INVITES_PLATFORM_PER_WEEK = 1000
+
+_LEDGER_KINDS = {"message", "invite"}
+
+
+class PaceExceeded(Exception):
+    """Raised by :meth:`Pacer.take` when a budget is spent."""
+
+    def __init__(self, state: dict[str, Any]):
+        super().__init__(f"pace budget for {state.get('action')} is spent")
+        self.state = state
+
+
+@dataclass
+class Pacer:
+    ledger: Ledger
+
+    def used(self, action: str, since: datetime) -> int:
+        if action in _LEDGER_KINDS:
+            exclude = [DEFAULT_CANARY] if action == "message" else []
+            return self.ledger.count_since(action, since, exclude=exclude)
+        total = 0
+        for row in self.ledger.rows():
+            if row.get("kind") != "pace" or row.get("action") != action:
+                continue
+            if datetime.fromisoformat(row["at"]) >= since:
+                total += int(row.get("count", 1))
+        return total
+
+    def _writes_today(self) -> int:
+        return sum(self.used(kind, day_start()) for kind in PACE_WRITE_KINDS)
+
+    def state(self, action: str) -> dict[str, Any]:
+        if action not in PACE_BUDGETS:
+            raise ValueError(f"unknown pace action: {action}")
+        budget = PACE_BUDGETS[action]
+        day = self.used(action, day_start())
+        week = self.used(action, week_window_start())
+        left = min(budget["day"] - day, budget["week"] - week)
+        if action in PACE_WRITE_KINDS:
+            left = min(left, PACE_WRITE_TOTAL_PER_DAY - self._writes_today())
+        return {
+            "action": action,
+            "today": day,
+            "per_day": budget["day"],
+            "last_7_days": week,
+            "per_week": budget["week"],
+            "left": max(0, left),
+        }
+
+    def take(
+        self, action: str, count: int = 1, *, tool: str | None = None
+    ) -> dict[str, Any]:
+        """Reserve *count* units or raise :class:`PaceExceeded`.
+
+        Messages and invites are recorded by their own attempt rows; for them
+        this only checks. Everything else is booked here, before the action,
+        because an action that may have happened must count.
+        """
+        state = self.state(action)
+        if state["left"] < count:
+            raise PaceExceeded({**state, "requested": count})
+        if action not in _LEDGER_KINDS:
+            self.ledger.append(
+                {"kind": "pace", "action": action, "count": count, "tool": tool}
+            )
+            state = self.state(action)
+        return state
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "actions": {a: self.state(a) for a in PACE_BUDGETS},
+            "writes_today": self._writes_today(),
+            "writes_per_day": PACE_WRITE_TOTAL_PER_DAY,
+            "ledger": str(self.ledger.path),
+        }
+
+
+# --- replies, follow-ups, contact notes -------------------------------------
+
+NOTES_ENV = "MIVIA_LINKEDIN_NOTES"
+FOLLOW_UP_DAYS_DEFAULT = 5
+
+_SENDER_RE = re.compile(r"Profil von (.+?) anzeigen|View (.+?)[’']s profile")
+
+
+def reply_after(conversation_text: str, message: str) -> dict[str, Any]:
+    """Did anyone other than the sender write after *message* in this thread?
+
+    The thread pane renders each message block behind "Profil von <Name>
+    anzeigen". The sender is whoever owns the block holding our text; any later
+    block by another name is a reply. The inbox list above the thread repeats
+    names too, so only text after our message counts.
+    """
+    haystack = conversation_text or ""
+    # Search the first line in the raw text; the last occurrence is the thread
+    # pane, not the inbox preview above it. *message* may be the whole text or
+    # the stored head.
+    first_line = text_head(message)
+    pos = haystack.rfind(first_line)
+    if pos < 0:
+        return {"found": False, "replied": None}
+    before = list(_SENDER_RE.finditer(haystack[:pos]))
+    sender = next((g for g in before[-1].groups() if g), None) if before else None
+    after = haystack[pos + len(first_line) :]
+    for match in _SENDER_RE.finditer(after):
+        name = next(g for g in match.groups() if g)
+        if sender is None or name.strip() != sender.strip():
+            excerpt = after[match.end() :].strip().split("\n")
+            body = [ln.strip() for ln in excerpt[1:6] if ln.strip()]
+            return {
+                "found": True,
+                "replied": True,
+                "sender": sender,
+                "by": name.strip(),
+                "excerpt": " ".join(body)[:280] or None,
+            }
+    return {"found": True, "replied": False, "sender": sender}
+
+
+def notes_path() -> Path:
+    configured = os.environ.get(NOTES_ENV)
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".linkedin-mcp" / "mivia-contact-notes.json"
+
+
+class ContactNotes:
+    """Local keywords per contact (never sent anywhere): {key: {tags, note, at}}."""
+
+    def __init__(self, path: Path | None = None):
+        self.path = path or notes_path()
+
+    def load(self) -> dict[str, Any]:
+        if not self.path.exists():
+            return {}
+        return json.loads(self.path.read_text(encoding="utf-8"))
+
+    def get(self, username: str) -> dict[str, Any] | None:
+        return self.load().get(recipient_key(username))
+
+    def set(
+        self, username: str, *, tags: list[str] | None, note: str | None, replace: bool
+    ) -> dict[str, Any]:
+        data = self.load()
+        key = recipient_key(username)
+        entry = {} if replace else dict(data.get(key) or {})
+        if tags is not None:
+            merged = tags if replace else sorted(set(entry.get("tags", [])) | set(tags))
+            entry["tags"] = [t.strip() for t in merged if t.strip()]
+        if note is not None:
+            entry["note"] = note
+        entry["at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        data[key] = entry
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, self.path)
+        return entry
+
+
+def sent_messages(
+    ledger: Ledger, *, include_canary: bool = False
+) -> list[dict[str, Any]]:
+    """Latest state of every message attempt that may have left, newest first."""
+    rows = [
+        r
+        for r in ledger.latest_by_attempt().values()
+        if r.get("kind") == "message"
+        and r.get("status") in {"sent", "verified", "unverified"}
+    ]
+    if not include_canary:
+        rows = [r for r in rows if r.get("recipient") != recipient_key(DEFAULT_CANARY)]
+    rows.sort(key=lambda r: r.get("started_at") or r.get("at"), reverse=True)
+    return rows
+
+
+def text_head(message: str) -> str:
+    """First line, at most 80 characters: enough to find the message in a thread."""
+    return next((ln for ln in message.split("\n") if ln.strip()), message).strip()[:80]
+
+
+def last_block_sender(conversation_text: str) -> str | None:
+    """Sender of the newest message block in the thread pane."""
+    matches = list(_SENDER_RE.finditer(conversation_text or ""))
+    if not matches:
+        return None
+    return next(g for g in matches[-1].groups() if g).strip()
+
+
 def delivered_in_conversation(message: str, conversation: dict[str, Any]) -> bool:
     """True when the read-back conversation text contains the whole message."""
     sections = conversation.get("sections") or {}

@@ -8,14 +8,26 @@
 >
 > **Added tools**
 >
+> - `comment_on_post` — Comment on a post.
 > - `connect_guarded` — connect_with_person behind the ledger: refuses once today's invite cap (default 12, max 15) or the rolling 7-day cap (60) is reached, and never invites the same person twice.
 > - `create_post` — Compose a post on the signed-in member's personal profile.
+> - `follow_up_list` — Who answered which ledger message, and who is due for a follow-up.
 > - `get_event_attendees` — List the attendees of a LinkedIn event via people search with eventAttending, 10 per page, at human pace (3-6 s between pages).
+> - `get_group_members` — Members of a group the account belongs to (name, slug, degree, headline), in LinkedIn's rendered order.
+> - `get_post_analytics` — Impressions, members reached, reactions, comments, reposts, saves, sends, profile views and followers gained for the account's own posts.
+> - `get_post_engagers` — Who reacted to a post (with reaction kind) and who commented.
+> - `get_profile_viewers` — Who viewed the account's profile (last 90 days, newest first; full list with Premium / Sales Navigator).
+> - `invite_to_event` — Invite 1st-degree connections to a LinkedIn event.
+> - `job_watch` — Weekly job watch: saved searches (default Metallograf, Werkstoffprüfer, Wärmebehandlung in Germany, Austria and Switzerland) plus the jobs of a company list, past week only, one results page each.
 > - `list_connections` — List the account's 1st-degree connections, newest first ("Neu hinzugefügt"), with the date each connection was made.
+> - `list_groups` — The account's LinkedIn groups with id, name and member count.
 > - `list_sent_invitations` — List pending sent connection invitations.
 > - `outreach_quota` — Today's and this week's sends and invites from the local outreach ledger.
+> - `pace_status` — The pacer (Taktgeber): per action kind today's and the last seven days' use against its budget, and the daily total of visible actions.
 > - `send_campaign_batch` — Send the same text to many recipients safely, one small batch per call.
 > - `send_message_verified` — Send one message (multi-line allowed via LF) and read the conversation back to confirm the whole text arrived.
+> - `set_contact_note` — Local keywords and a short note per contact (~/.linkedin-mcp/mivia-contact-notes.json), shown by follow_up_list.
+> - `withdraw_invitations` — Withdraw pending connection invitations older than older_than_days (default 21).
 >
 > **Changed behaviour**
 >
