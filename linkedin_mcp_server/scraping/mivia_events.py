@@ -87,7 +87,9 @@ _SECTION_RE = re.compile(
 
 
 # ... and on a single-hit search the result counter ("1 Ergebnis", live 29.09.2026).
-_RESULTS_RE = re.compile(r"^(?:Etwa\s+|About\s+)?\d[\d.,]*\s+(?:Ergebnis(?:se)?|results?)$", re.I)
+_RESULTS_RE = re.compile(
+    r"^(?:Etwa\s+|About\s+)?\d[\d.,]*\s+(?:Ergebnis(?:se)?|results?)$", re.I
+)
 
 
 def parse_event_card(lines: list[str]) -> dict[str, Any]:
@@ -214,7 +216,11 @@ def parse_follower_lines(lines: list[str]) -> dict[str, Any]:
 # (a university customer) would be a wrong match.
 _EXPERIENCE_JS = r"""() => {
   const main = document.querySelector('main') || document.body;
-  const items = [...main.querySelectorAll('li, [role="listitem"]')]
+  // New layout (measured 2026-09-29): entries carry
+  // componentkey="entity-collection-item-..."; the old list items stay as fallback.
+  let items = [...main.querySelectorAll('[componentkey^="entity-collection-item"]')]
+    .filter(i => /(Heute|Present|heute)/.test(i.innerText || ''));
+  if (!items.length) items = [...main.querySelectorAll('li, [role="listitem"]')]
     .filter(i => /(Heute|Present|heute)/.test(i.innerText || ''));
   // Innermost matching item first: grouped positions nest a role list inside
   // the company item.
@@ -222,12 +228,13 @@ _EXPERIENCE_JS = r"""() => {
   const pick = leaves[0] || items[0];
   if (!pick) return null;
   const outer = items.find(o => o !== pick && o.contains(pick));
-  const lines = el => (el.innerText || '').split('\n').map(s => s.trim()).filter(Boolean).slice(0, 6);
+  // Three lines suffice (role, company, range); nothing else of the page is taken.
+  const lines = el => (el.innerText || '').split('\n').map(s => s.trim()).filter(Boolean).slice(0, 3);
   return {lines: lines(pick), outer: outer ? lines(outer) : null};
 }"""
 
 _EMPLOYMENT_TYPES = re.compile(
-    r"\s*·\s*(Vollzeit|Teilzeit|Selbstständig|Freiberuflich|Praktikum|Werkstudent|Ausbildung|"
+    r"\s*·\s*(Vollzeit|Teilzeit|Selbstständig|Freiberuflich|Praktikum|Werkstudent|Werkstudium|Minijob|Befristet|Saisonal|Ausbildung|Duales Studium|"
     r"Full-time|Part-time|Self-employed|Freelance|Internship|Apprenticeship|Contract)\b.*$",
     re.I,
 )

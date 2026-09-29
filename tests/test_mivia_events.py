@@ -105,6 +105,20 @@ def test_current_position_single_and_grouped():
         "employer": "Robert Bosch GmbH",
         "role": "Head of Quality",
     }
+    # Live layout 2026-09-29 (entity-collection-item): no spaces around the dash.
+    live = {
+        "lines": [
+            "Student Assistant",
+            "hpulcas GmbH · Werkstudium",
+            "Apr. 2024–Heute · 2 Jahre 6 Monate",
+            "Freiberg, Sachsen, Deutschland · Vor Ort",
+        ],
+        "outer": None,
+    }
+    assert parse_current_position(live) == {
+        "employer": "hpulcas GmbH",
+        "role": "Student Assistant",
+    }
     no_company = {"lines": ["Freelancer", "Jan. 2020 – Heute"], "outer": None}
     assert parse_current_position(no_company) is None
     assert parse_current_position(None) is None
@@ -152,9 +166,16 @@ def test_event_summary_drops_person_names_and_extra_fields():
     assert s["organiser"] == "AWT"
     assert "Steinbacher" not in repr(s)
     assert set(s) == {
-        "event_id", "url", "title", "date_text", "organiser",
-        "attendees", "attendees_text", "past",
+        "event_id",
+        "url",
+        "title",
+        "date_text",
+        "organiser",
+        "attendees",
+        "attendees_text",
+        "past",
     }
+
 
 def test_parse_event_card_skips_result_counter():
     card = parse_event_card(
