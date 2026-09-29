@@ -191,6 +191,13 @@ class Collector:
             )
         except (Busy, LoginRequired):
             raise
+        except SearchLimitReached as exc:
+            # Any part (radar attendees, ...) that runs into LinkedIn's monthly
+            # limit sets the pacer lock, not only the harvest.
+            self.pacer.record_limit_hit("search", tool=f"mivia_daily:{name}")
+            self.errors.append(
+                {"part": name, "error": "monthly_search_limit", "detail": str(exc)[:200]}
+            )
         except Exception as exc:  # one part must not stop the others
             name_ = type(exc).__name__
             if name_ in {"AuthenticationError"}:

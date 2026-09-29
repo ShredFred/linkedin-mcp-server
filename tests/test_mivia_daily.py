@@ -425,3 +425,16 @@ def test_harvest_after_a_limit_hit_defers_with_the_monthly_reason(tmp_path, monk
     c.pacer.record_limit_hit("search")
     (row,) = asyncio.run(c.harvest())
     assert row["deferred"] == "monthly_search_limit"
+
+
+def test_any_part_hitting_the_monthly_limit_sets_the_pacer_lock(tmp_path, monkeypatch):
+    from linkedin_mcp_server.scraping.mivia_network import SearchLimitReached
+
+    c = _harvest_collector(tmp_path, monkeypatch, [])
+
+    async def radar():
+        raise SearchLimitReached("limit")
+
+    assert asyncio.run(c._part("radar", radar())) is None
+    assert c.errors[-1]["error"] == "monthly_search_limit"
+    assert c.pacer.state("search")["left"] == 0 and c.pacer.state("search")["month_limit_hit"]
