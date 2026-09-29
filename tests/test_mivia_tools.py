@@ -215,3 +215,20 @@ def test_fork_tools_are_registered_and_tagged():
         "outreach_quota",
     }
     assert all("mivia" in t.tags for t in tools)
+
+
+def test_readme_fork_block_is_current():
+    """A new fork tool must show up in the README summary (scripts/mivia_readme.py)."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    run = subprocess.run(
+        [sys.executable, str(root / "scripts" / "mivia_readme.py"), "--check"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert run.returncode == 0, run.stderr
