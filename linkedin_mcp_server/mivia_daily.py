@@ -30,7 +30,7 @@ import logging
 import random
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +41,7 @@ from linkedin_mcp_server.scraping.mivia_engagement import (
     engager_key,
 )
 from linkedin_mcp_server.scraping.mivia_actions import MiviaActions
+from linkedin_mcp_server.scraping.mivia_events import MiviaEventFinder
 
 logger = logging.getLogger("mivia_daily")
 
@@ -129,6 +130,7 @@ class Collector:
         self.navigator = extractor._mivia_navigator
         self.engagement = MiviaEngagementReader(self.session, self.navigator)
         self.actions = MiviaActions(self.session, self.navigator)
+        self.events = MiviaEventFinder(self.session, self.navigator)
         self.pacer = outreach.Pacer(outreach.Ledger.default())
         self.seen = SeenStore()
         self.state_path = state_dir / "mivia-daily-state.json"
@@ -423,12 +425,181 @@ class Collector:
             "first_run": not known,
         }
 
+    async def followers(self) -> dict[str, Any]:
+        """New followers of the administered page (strongest inbound signal)."""
+        spec = self.cfg.get("page_followers") or {}
+        if not spec.get("enabled", False) or not spec.get("page_id"):
+            return {"enabled": False}
+        store_key = f"followers:{spec['page_id']}"
+        known_keys = self.seen.keys(store_key)
+        known_hrefs = {k.split(":", 2)[1] for k in known_keys if k.count(":") >= 2}
+        self._take("page_read")
+        res = await self.events.page_followers(
+            str(spec["page_id"]), known=known_hrefs, limit=int(spec.get("limit", 60))
+        )
+        if not res["available"]:
+            return {"enabled": True, "available": False, "reason": res.get("reason")}
+        new = [f for f in res["followers"] if f["href"] not in known_hrefs]
+        if not known_keys:
+            # First run: only recent follows count as new, not the whole history.
+            cutoff = (
+                datetime.now().astimezone()
+                - timedelta(days=int(spec.get("first_run_days", 60)))
+            ).strftime("%Y-%m")
+            new = [f for f in new if (f.get("followed_month") or "") >= cutoff]
+        self.seen.remember(
+            store_key, {f"follower:{f['href']}:" for f in res["followers"]}
+        )
+        return {
+            "enabled": True,
+            "available": True,
+            "read": len(res["followers"]),
+            "new_followers": new,
+            "first_run": not known_keys,
+        }
+
+    async def event_scout(self) -> dict[str, Any]:
+        """Weekly: events by keyword and organiser page; new ones since last cycle.
+
+        Budget-aware: takes only as many queries as today's search budget
+        leaves (minus a reserve) and continues the next day where it stopped;
+        the cycle closes after the last query. Measured 2026-09-29: an
+        all-or-nothing request of 15 failed after the fair scan had used 31 of
+        40 searches.
+        """
+        spec = self.cfg.get("events") or {}
+        if not spec.get("enabled", False):
+            return {"enabled": False}
+        state = self._state()
+        scout = state.get("event_scout") or {}
+        queries = [["k", k] for k in spec.get("keywords") or []] + [
+            ["o", o] for o in spec.get("organisers") or []
+        ]
+        cursor = int(scout.get("cursor") or 0)
+        last = scout.get("last_run")
+        every = int(spec.get("every_days", 7))
+        if (
+            cursor == 0
+            and last
+            and (datetime.now().astimezone() - datetime.fromisoformat(last)).days
+            < every
+        ):
+            return {"enabled": True, "due": False, "last_run": last}
+        if cursor >= len(queries):
+            cursor = 0
+        left = self.pacer.state("search")["left"] - int(spec.get("search_reserve", 5))
+        take = max(0, min(len(queries) - cursor, left))
+        if take == 0:
+            return {
+                "enabled": True,
+                "due": True,
+                "deferred": True,
+                "progress": f"{cursor}/{len(queries)}",
+            }
+        self._take("search", take)
+        found: dict[str, dict[str, Any]] = dict(scout.get("pending") or {})
+        for kind, value in queries[cursor : cursor + take]:
+            events = await self._part(
+                f"events:{value}",
+                self.events.by_keyword(value)
+                if kind == "k"
+                else self.events.by_organiser(
+                    value, include_past=bool(spec.get("include_past", False))
+                ),
+            )
+            for ev in events or []:
+                prev = found.get(ev["event_id"])
+                if prev:
+                    prev["found_by"] = sorted(set(prev["found_by"]) | {ev["found_by"]})
+                else:
+                    found[ev["event_id"]] = {**ev, "found_by": [ev["found_by"]]}
+            await self.session.delay(random.uniform(3.0, 6.0))
+        cursor += take
+        if cursor < len(queries):
+            scout.update(cursor=cursor, pending=found)
+            state["event_scout"] = scout
+            self._save_state(state)
+            return {
+                "enabled": True,
+                "due": True,
+                "deferred": True,
+                "progress": f"{cursor}/{len(queries)}",
+            }
+        known = set(scout.get("known") or [])
+        new = [ev for ev in found.values() if ev["event_id"] not in known]
+        scout.update(
+            known=sorted(known | set(found)),
+            cursor=0,
+            pending={},
+            last_run=datetime.now().astimezone().isoformat(timespec="seconds"),
+        )
+        state["event_scout"] = scout
+        self._save_state(state)
+        return {
+            "enabled": True,
+            "due": True,
+            "found": len(found),
+            "new_events": new if known else [],
+            "first_run": not known,
+            "upcoming": [ev for ev in found.values() if not ev.get("past")],
+        }
+
+    async def employer_lookup(self) -> list[dict[str, Any]]:
+        """Work the lookup queue written by the report (AGENTS.md exception of
+        2026-09-29). The report decided who may be looked up; this part only
+        reads current employer and role, nothing else leaves the page."""
+        spec = self.cfg.get("employer_lookup") or {}
+        if not spec.get("enabled") or not spec.get("queue"):
+            return []
+        path = Path(spec["queue"])
+        if not path.exists():
+            return []
+        queue = json.loads(path.read_text(encoding="utf-8")) or []
+        # Defence in depth: the report already filters; the collector refuses
+        # anything but the single permitted trigger all the same.
+        queue = [
+            e
+            for e in queue
+            if e.get("anlass") == "eigener Beitrag"
+            and str(e.get("art") or "").startswith(("Reaktion", "Kommentar"))
+        ]
+        results = []
+        for entry in queue[: int(spec.get("max_per_run", 30))]:
+            try:
+                self._take("profile_view")
+            except outreach.PaceExceeded:
+                break
+            res = await self._part(
+                f"lookup:{entry.get('profil_url')}",
+                self.events.current_employer(entry.get("profil_url", "")),
+            )
+            if res is None:
+                continue
+            results.append(
+                {
+                    k: entry.get(k)
+                    for k in ("name", "profil_url", "anlass", "art", "beitrag")
+                }
+                | {
+                    "status": res.get("status"),
+                    "employer": res.get("employer"),
+                    "role": res.get("role"),
+                }
+            )
+            await self.session.delay(random.uniform(6.0, 14.0))
+        return results
+
     async def run(self) -> dict[str, Any]:
         started = datetime.now().astimezone().isoformat(timespec="seconds")
         report: dict[str, Any] = {"started_at": started}
         report["posts"] = await self._part("own_posts", self.own_posts()) or []
         report["radar"] = await self._part("radar", self.radar()) or {}
         report["viewers"] = await self._part("viewers", self.viewers()) or {}
+        report["followers"] = await self._part("followers", self.followers()) or {}
+        report["events"] = await self._part("event_scout", self.event_scout()) or {}
+        report["lookups"] = (
+            await self._part("employer_lookup", self.employer_lookup()) or []
+        )
         report["pace"] = self.pacer.summary()
         report["errors"] = self.errors
         report["finished_at"] = (

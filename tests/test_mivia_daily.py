@@ -54,6 +54,125 @@ def test_company_posts_view_as_member_and_admin_redirect_refused(tmp_path, monke
         asyncio.run(c._urns(mivia_daily.company_posts_url("mivia"), 3))
 
 
+def test_event_scout_spreads_over_days_within_the_search_budget(tmp_path, monkeypatch):
+    monkeypatch.setenv("MIVIA_LINKEDIN_LEDGER", str(tmp_path / "ledger.jsonl"))
+    from linkedin_mcp_server import mivia_outreach as outreach
+
+    class Session:
+        page = None
+
+        async def delay(self, _s):
+            return None
+
+    class Ex:
+        _mivia_session = Session()
+        _mivia_navigator = object()
+
+    cfg = {
+        "events": {
+            "enabled": True,
+            "keywords": ["a", "b", "c"],
+            "organisers": ["o1", "o2"],
+            "search_reserve": 0,
+        }
+    }
+    c = mivia_daily.Collector(Ex(), cfg, tmp_path)
+
+    class Finder:
+        async def by_keyword(self, k):
+            return [{"event_id": f"k{k}", "found_by": f"keyword:{k}", "past": False}]
+
+        async def by_organiser(self, o, include_past=False):
+            return [{"event_id": "ka", "found_by": f"organiser:{o}", "past": False}]
+
+    c.events = Finder()
+    # Only 2 searches left today.
+    ledger = outreach.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append({"kind": "pace", "action": "search", "count": 38, "tool": "t"})
+    first = asyncio.run(c.event_scout())
+    assert first["deferred"] and first["progress"] == "2/5"
+    # Next day: budget again (simulate by clearing the ledger).
+    (tmp_path / "ledger.jsonl").write_text("", encoding="utf-8")
+    second = asyncio.run(c.event_scout())
+    assert second["due"] and not second.get("deferred")
+    assert {e["event_id"] for e in second["upcoming"]} == {"ka", "kb", "kc"}
+    assert sorted(second["upcoming"][0]["found_by"])  # merged sources
+    third = asyncio.run(c.event_scout())
+    assert third == {"enabled": True, "due": False, "last_run": third["last_run"]}
+
+
+def test_employer_lookup_refuses_other_triggers_and_returns_two_fields(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("MIVIA_LINKEDIN_LEDGER", str(tmp_path / "ledger.jsonl"))
+    queue = tmp_path / "q.json"
+    queue.write_text(
+        json.dumps(
+            [
+                {
+                    "name": "Rea",
+                    "profil_url": "https://www.linkedin.com/in/rea/",
+                    "anlass": "eigener Beitrag",
+                    "art": "Reaktion (like)",
+                },
+                {
+                    "name": "Fol",
+                    "profil_url": "https://www.linkedin.com/in/fol/",
+                    "anlass": "Follower",
+                    "art": "Follower seit 2026-09",
+                },
+                {
+                    "name": "Vis",
+                    "profil_url": "https://www.linkedin.com/in/vis/",
+                    "anlass": "eigener Beitrag",
+                    "art": "Profilbesuch",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class Session:
+        page = None
+
+        async def delay(self, _s):
+            return None
+
+    class Ex:
+        _mivia_session = Session()
+        _mivia_navigator = object()
+
+    c = mivia_daily.Collector(
+        Ex(), {"employer_lookup": {"enabled": True, "queue": str(queue)}}, tmp_path
+    )
+    looked = []
+
+    class Finder:
+        async def current_employer(self, url):
+            looked.append(url)
+            return {
+                "status": "ok",
+                "employer": "Acme",
+                "role": "Lead",
+                "photo": "x",
+                "skills": ["y"],
+            }
+
+    c.events = Finder()
+    res = asyncio.run(c.employer_lookup())
+    assert looked == ["https://www.linkedin.com/in/rea/"]
+    assert set(res[0]) == {
+        "name",
+        "profil_url",
+        "anlass",
+        "art",
+        "beitrag",
+        "status",
+        "employer",
+        "role",
+    }
+
+
 def test_post_head_skips_card_labels():
     text = "Nummer des Feedbeitrags 1\nFeed-Beitrag\n4 Monat(e)\nVor 4 Jahren waren wir das erste Mal auf der CONTROL."
     assert (

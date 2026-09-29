@@ -11,9 +11,11 @@
 > - `comment_on_post` — Comment on a post.
 > - `connect_guarded` — connect_with_person behind the ledger: refuses once today's invite cap (default 12, max 15) or the rolling 7-day cap (60) is reached, and never invites the same person twice.
 > - `create_post` — Compose a post on the signed-in member's personal profile.
+> - `find_events` — Find LinkedIn events by keyword (event search, upcoming only) and by organiser page (company slug; its "Events" tab, upcoming and with include_past also past ones).
 > - `follow_up_list` — Who answered which ledger message, and who is due for a follow-up.
 > - `get_event_attendees` — List the attendees of a LinkedIn event via people search with eventAttending, 10 per page, at human pace (3-6 s between pages).
 > - `get_group_members` — Members of a group the account belongs to (name, slug, degree, headline), in LinkedIn's rendered order.
+> - `get_page_followers` — Newest followers of a company page the account administers (numeric page id, e.g.
 > - `get_post_analytics` — Impressions, members reached, reactions, comments, reposts, saves, sends, profile views and followers gained for the account's own posts.
 > - `get_post_engagers` — Who reacted to a post (with reaction kind) and who commented.
 > - `get_profile_viewers` — Who viewed the account's profile (last 90 days, newest first; full list with Premium / Sales Navigator).

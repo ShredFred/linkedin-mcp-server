@@ -23,6 +23,7 @@ from linkedin_mcp_server import mivia_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.scraping.identifiers import normalize_person_identifier
 from linkedin_mcp_server.scraping.mivia_actions import MiviaActions, parse_group_id
+from linkedin_mcp_server.scraping.mivia_events import MiviaEventFinder
 from linkedin_mcp_server.scraping.mivia_engagement import (
     MiviaEngagementReader,
     SeenStore,
@@ -738,6 +739,96 @@ def register_mivia_stage2_tools(
             ctx,
             "get_group_members",
             lambda ex: _actions(ex).group_members(group_id, limit),
+        )
+
+    # -- events and page followers -------------------------------------------------
+
+    @mcp.tool(
+        timeout=BATCH_TIMEOUT_SECONDS,
+        title="Find Events",
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+        tags={TAG, "search", "scraping"},
+    )
+    async def find_events(
+        ctx: Context,
+        keywords: list[str] | None = None,
+        organisers: list[str] | None = None,
+        include_past: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Find LinkedIn events by keyword (event search, upcoming only) and by
+        organiser page (company slug; its "Events" tab, upcoming and with
+        include_past also past ones). Each event: event_id, title, date_text,
+        place, organiser, description, attendees, url, found_by, past.
+        Duplicates across keywords/organisers are merged. At most 12 queries.
+        """
+        kws = [k for k in (keywords or []) if k.strip()][:12]
+        orgs = [o for o in (organisers or []) if o.strip()][: max(0, 12 - len(kws))]
+        refusal = _pace("search", max(1, len(kws) + len(orgs)), tool="find_events")
+        if refusal:
+            return refusal
+
+        async def body(ex: Any) -> dict[str, Any]:
+            finder = MiviaEventFinder(ex._mivia_session, ex._mivia_navigator)
+            found: dict[str, dict[str, Any]] = {}
+            errors = []
+            for index, (kind, value) in enumerate(
+                [("k", k) for k in kws] + [("o", o) for o in orgs]
+            ):
+                if index:
+                    await asyncio.sleep(random.uniform(3.0, 6.0))
+                try:
+                    events = (
+                        (await finder.by_keyword(value))
+                        if kind == "k"
+                        else (
+                            await finder.by_organiser(value, include_past=include_past)
+                        )
+                    )
+                except Exception as exc:  # one query must not stop the rest
+                    errors.append({"query": value, "error": str(exc)[:200]})
+                    continue
+                for ev in events:
+                    prev = found.get(ev["event_id"])
+                    if prev:
+                        prev["found_by"] = sorted(
+                            set(prev["found_by"]) | {ev["found_by"]}
+                        )
+                    else:
+                        found[ev["event_id"]] = {**ev, "found_by": [ev["found_by"]]}
+            return {
+                "count": len(found),
+                "events": list(found.values()),
+                "errors": errors,
+            }
+
+        return await _run(ctx, "find_events", body)
+
+    @mcp.tool(
+        timeout=tool_timeout,
+        title="Get Page Followers",
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+        tags={TAG, "network", "scraping"},
+    )
+    async def get_page_followers(
+        page_id: str,
+        ctx: Context,
+        limit: Annotated[int, Field(ge=1, le=300)] = 50,
+    ) -> dict[str, Any]:
+        """
+        Newest followers of a company page the account administers (numeric
+        page id, e.g. MiViA 81728804), with name, degree, headline and the
+        month followed. Needs page admin rights; otherwise available=false.
+        """
+        refusal = _pace("page_read", tool="get_page_followers")
+        if refusal:
+            return refusal
+        return await _run(
+            ctx,
+            "get_page_followers",
+            lambda ex: MiviaEventFinder(
+                ex._mivia_session, ex._mivia_navigator
+            ).page_followers(page_id.strip(), known=set(), limit=limit),
         )
 
 
