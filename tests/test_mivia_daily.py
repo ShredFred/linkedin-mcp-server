@@ -248,3 +248,58 @@ def test_a_failing_part_does_not_stop_the_others(tmp_path, monkeypatch):
     assert report["posts"] == []
     assert report["viewers"]["total_viewers"] == 1
     assert report["errors"][0]["part"] == "own_posts"
+
+
+def test_harvest_reads_only_ordered_pages_within_budget(tmp_path, monkeypatch):
+    monkeypatch.setenv("MIVIA_LINKEDIN_LEDGER", str(tmp_path / "ledger.jsonl"))
+    from linkedin_mcp_server import mivia_outreach as outreach
+
+    class Session:
+        page = None
+
+        async def delay(self, _s):
+            return None
+
+    class Ex:
+        _mivia_session = Session()
+        _mivia_navigator = object()
+
+    good, other = "7286622235937701888", "7457346711301214208"
+    cfg = {
+        "harvest": {
+            "enabled": True,
+            "max_pages": 4,
+            "search_reserve": 0,
+            "orders": [
+                {"event_id": "bad", "pages": 1},
+                {"event_id": good, "register_id": "r1", "start_page": 3, "pages": 3},
+                {"event_id": other, "register_id": "r2", "pages": 5},
+            ],
+        }
+    }
+    c = mivia_daily.Collector(Ex(), cfg, tmp_path)
+    calls = []
+
+    class Actions:
+        async def get_event_attendees(self, eid, page, pages):
+            calls.append((eid, page, pages))
+            people = [{"slug": f"{eid[-2:]}-{page}-{i}", "name": "X"} for i in range(pages)]
+            people.append({"slug": "me", "action": "self"})
+            return {"attendees": people, "pages_read": pages, "complete": False,
+                    "next_page": page + pages}
+
+    c.actions = Actions()
+    res = asyncio.run(c.harvest())
+    assert res[0]["error"] == "bad_event_id"
+    assert calls == [(good, 3, 3), (other, 1, 1)]  # cap: 4 pages in total
+    assert res[1]["last_page"] == 5 and not res[1]["complete"]
+    assert all(a.get("action") != "self" for a in res[1]["attendees"])
+    assert res[2]["last_page"] == 1
+    # Budget spent: nothing is read.
+    ledger = outreach.Ledger(tmp_path / "ledger.jsonl")
+    ledger.append({"kind": "pace", "action": "search", "count": 40, "tool": "t"})
+    calls.clear()
+    spent = asyncio.run(c.harvest())
+    assert [r for r in spent if "attendees" in r] == []
+    assert [r.get("deferred") for r in spent[1:]] == ["search_budget_spent"] * 2
+    assert calls == []

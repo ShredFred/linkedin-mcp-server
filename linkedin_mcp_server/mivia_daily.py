@@ -544,6 +544,80 @@ class Collector:
             "upcoming": [ev for ev in found.values() if not ev.get("past")],
         }
 
+    async def harvest(self) -> list[dict[str, Any]]:
+        """Read attendee pages of the events the source planner chose.
+
+        The planner (mivia-hq ``linkedin_quellen.py``) decides WHICH event and
+        WHICH pages; this part only reads them, within the search budget minus a
+        reserve, and reports what it read. It keeps no per-event state of its
+        own: the next start page is the planner's business, so a lost report
+        re-reads a page instead of silently skipping one.
+        """
+        spec = self.cfg.get("harvest") or {}
+        if not spec.get("enabled"):
+            return []
+        orders = list(spec.get("orders") or [])
+        left = self.pacer.state("search")["left"] - int(spec.get("search_reserve", 8))
+        cap = min(int(spec.get("max_pages", 15)), max(0, left))
+        results: list[dict[str, Any]] = []
+        for order in orders:
+            if cap <= 0:
+                # Said, not swallowed: the report shows the budget as the reason.
+                results.append(
+                    {
+                        "event_id": str(order.get("event_id") or ""),
+                        "register_id": order.get("register_id"),
+                        "deferred": "search_budget_spent",
+                    }
+                )
+                continue
+            event_id = str(order.get("event_id") or "")
+            if not re.fullmatch(r"\d{19}", event_id):
+                results.append({"event_id": event_id, "error": "bad_event_id"})
+                continue
+            start = max(1, int(order.get("start_page") or 1))
+            want = max(1, min(int(order.get("pages") or 1), cap))
+            self._take("search", want)
+            cap -= want
+            attendees: list[dict[str, Any]] = []
+            page_no, last_read, complete = start, start - 1, False
+            end = start + want - 1
+            try:
+                while page_no <= end:
+                    chunk = await self.actions.get_event_attendees(
+                        event_id, page_no, min(10, end - page_no + 1)
+                    )
+                    attendees += chunk["attendees"]
+                    last_read = page_no + chunk["pages_read"] - 1
+                    if chunk["complete"] or not chunk["next_page"]:
+                        complete = True
+                        break
+                    page_no = chunk["next_page"]
+            except (Busy, LoginRequired, outreach.PaceExceeded):
+                raise
+            except Exception as exc:  # one event must not stop the others
+                results.append(
+                    {
+                        "event_id": event_id,
+                        "register_id": order.get("register_id"),
+                        "error": f"{type(exc).__name__}: {exc}"[:200],
+                        "start_page": start,
+                    }
+                )
+                continue
+            results.append(
+                {
+                    "event_id": event_id,
+                    "register_id": order.get("register_id"),
+                    "mode": order.get("mode"),
+                    "start_page": start,
+                    "last_page": last_read,
+                    "complete": complete,
+                    "attendees": [a for a in attendees if a.get("action") != "self"],
+                }
+            )
+        return results
+
     async def employer_lookup(self) -> list[dict[str, Any]]:
         """Work the lookup queue written by the report (AGENTS.md exception of
         2026-09-29). The report decided who may be looked up; this part only
@@ -597,6 +671,7 @@ class Collector:
         report["viewers"] = await self._part("viewers", self.viewers()) or {}
         report["followers"] = await self._part("followers", self.followers()) or {}
         report["events"] = await self._part("event_scout", self.event_scout()) or {}
+        report["harvest"] = await self._part("harvest", self.harvest()) or []
         report["lookups"] = (
             await self._part("employer_lookup", self.employer_lookup()) or []
         )
