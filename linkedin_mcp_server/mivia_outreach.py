@@ -206,14 +206,18 @@ def quota(
 # directly so nothing is double-booked.
 
 PACE_BUDGETS: dict[str, dict[str, int]] = {
-    "profile_view": {"day": 150, "week": 700},
+    # Jessica has Sales Navigator (Frederik, 2026-09-30): vendor values for SN are
+    # 250-400 profile views and 80-100 search pages a day (Dripify, salesrobot;
+    # LinkedIn publishes none). Set at the lower end; the monthly-limit lock
+    # (record_limit_hit) stays the backstop if LinkedIn disagrees.
+    "profile_view": {"day": 250, "week": 1200},
     "like": {"day": 40, "week": 200},
     "comment": {"day": 8, "week": 30},
     "invite": {"day": INVITES_PER_DAY_MAX, "week": INVITES_PER_WEEK_MAX},
     "event_invite": {"day": 25, "week": 150},
     "withdraw": {"day": 30, "week": 150},
     "message": {"day": MESSAGES_PER_DAY_MAX, "week": MESSAGES_PER_WEEK_MAX},
-    "search": {"day": 40, "week": 200},
+    "search": {"day": 80, "week": 400},
     "page_read": {"day": 300, "week": 1500},
 }
 # Everything that is visible to another member counts against one total.

@@ -88,7 +88,7 @@ def test_event_scout_spreads_over_days_within_the_search_budget(tmp_path, monkey
     c.events = Finder()
     # Only 2 searches left today.
     ledger = outreach.Ledger(tmp_path / "ledger.jsonl")
-    ledger.append({"kind": "pace", "action": "search", "count": 38, "tool": "t"})
+    ledger.append({"kind": "pace", "action": "search", "count": outreach.PACE_BUDGETS["search"]["day"] - 2, "tool": "t"})
     first = asyncio.run(c.event_scout())
     assert first["deferred"] and first["progress"] == "2/5"
     # Next day: budget again (simulate by clearing the ledger).
@@ -299,7 +299,7 @@ def test_harvest_reads_only_ordered_pages_within_budget(tmp_path, monkeypatch):
     assert res[2]["last_page"] == 1
     # Budget spent: nothing is read.
     ledger = outreach.Ledger(tmp_path / "ledger.jsonl")
-    ledger.append({"kind": "pace", "action": "search", "count": 40, "tool": "t"})
+    ledger.append({"kind": "pace", "action": "search", "count": outreach.PACE_BUDGETS["search"]["day"], "tool": "t"})
     calls.clear()
     spent = asyncio.run(c.harvest())
     assert [r for r in spent if "attendees" in r] == []
