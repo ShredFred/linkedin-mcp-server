@@ -86,10 +86,16 @@ _SECTION_RE = re.compile(
 )
 
 
+# ... and on a single-hit search the result counter ("1 Ergebnis", live 29.09.2026).
+_RESULTS_RE = re.compile(r"^(?:Etwa\s+|About\s+)?\d[\d.,]*\s+(?:Ergebnis(?:se)?|results?)$", re.I)
+
+
 def parse_event_card(lines: list[str]) -> dict[str, Any]:
     """Title, date, place, organiser, description and attendees from card lines."""
     # A card walk can swallow the section heading above the first card.
-    lines = [ln for ln in lines if not _SECTION_RE.match(ln)]
+    lines = [
+        ln for ln in lines if not _SECTION_RE.match(ln) and not _RESULTS_RE.match(ln)
+    ]
     title = lines[0] if lines else None
     date_line = next((ln for ln in lines[1:4] if _DATE_RE.match(ln)), None)
     place, organiser = None, None

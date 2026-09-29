@@ -155,3 +155,10 @@ def test_event_summary_drops_person_names_and_extra_fields():
         "event_id", "url", "title", "date_text", "organiser",
         "attendees", "attendees_text", "past",
     }
+
+def test_parse_event_card_skips_result_counter():
+    card = parse_event_card(
+        ["1 Ergebnis", "HK 2026", "Di., 13. Okt. bis Do., 15. Okt.", "Köln • Von AWT"]
+    )
+    assert card["title"] == "HK 2026"
+    assert card["date_text"].startswith("Di.")
