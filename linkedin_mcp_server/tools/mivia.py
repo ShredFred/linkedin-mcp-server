@@ -248,7 +248,15 @@ def register_mivia_tools(
             return refusal
 
         async def body(ex: Any) -> dict[str, Any]:
-            raw = await _network(ex).get_event_attendees(event_id, start_page, max_pages)
+            from linkedin_mcp_server.scraping.mivia_network import SearchLimitReached
+
+            try:
+                raw = await _network(ex).get_event_attendees(event_id, start_page, max_pages)
+            except SearchLimitReached as exc:
+                # Same lock as the collector: manual calls stop hitting the wall too.
+                outreach.Pacer(outreach.Ledger.default()).record_limit_hit(
+                    "search", tool="get_event_attendees")
+                return {"status": "monthly_search_limit", "detail": str(exc)}
             return project_attendees(raw, limit, fields)
 
         return await _run(ctx, "get_event_attendees", body)

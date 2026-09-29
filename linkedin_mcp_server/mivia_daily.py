@@ -624,6 +624,8 @@ class Collector:
                 if chunk["complete"] or not chunk["next_page"]:
                     complete = True
                     break
+                if chunk["next_page"] <= page_no:
+                    break  # no progress: never read and book the same page twice
                 page_no = chunk["next_page"]
             row: dict[str, Any] = {
                 "event_id": event_id,
