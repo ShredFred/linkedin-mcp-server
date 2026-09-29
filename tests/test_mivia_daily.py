@@ -291,7 +291,8 @@ def test_harvest_reads_only_ordered_pages_within_budget(tmp_path, monkeypatch):
     c.actions = Actions()
     res = asyncio.run(c.harvest())
     assert res[0]["error"] == "bad_event_id"
-    assert calls == [(good, 3, 3), (other, 1, 1)]  # cap: 4 pages in total
+    # One page per call, cap 4 pages in total.
+    assert calls == [(good, 3, 1), (good, 4, 1), (good, 5, 1), (other, 1, 1)]
     assert res[1]["last_page"] == 5 and not res[1]["complete"]
     assert all(a.get("action") != "self" for a in res[1]["attendees"])
     assert res[2]["last_page"] == 1
@@ -303,3 +304,91 @@ def test_harvest_reads_only_ordered_pages_within_budget(tmp_path, monkeypatch):
     assert [r for r in spent if "attendees" in r] == []
     assert [r.get("deferred") for r in spent[1:]] == ["search_budget_spent"] * 2
     assert calls == []
+
+
+def _harvest_collector(tmp_path, monkeypatch, orders, max_pages=10):
+    monkeypatch.setenv("MIVIA_LINKEDIN_LEDGER", str(tmp_path / "ledger.jsonl"))
+
+    class Session:
+        page = None
+
+        async def delay(self, _s):
+            return None
+
+    class Ex:
+        _mivia_session = Session()
+        _mivia_navigator = object()
+
+    cfg = {"harvest": {"enabled": True, "max_pages": max_pages, "search_reserve": 0, "orders": orders}}
+    return mivia_daily.Collector(Ex(), cfg, tmp_path)
+
+
+def test_harvest_keeps_pages_read_before_a_failure(tmp_path, monkeypatch):
+    eid = "7286622235937701888"
+    c = _harvest_collector(tmp_path, monkeypatch, [{"event_id": eid, "start_page": 1, "pages": 4}])
+
+    class Actions:
+        async def get_event_attendees(self, e, page, pages):
+            if page == 3:
+                raise TimeoutError("page did not load")
+            return {"attendees": [{"slug": f"p{page}", "name": "X"}], "pages_read": 1,
+                    "complete": False, "next_page": page + 1}
+
+    c.actions = Actions()
+    (row,) = asyncio.run(c.harvest())
+    assert row["error"].startswith("TimeoutError")
+    assert [a["slug"] for a in row["attendees"]] == ["p1", "p2"]
+    assert row["last_page"] == 2 and row["complete"] is False
+    # Only the pages actually attempted are booked (3), not the 4 ordered.
+    assert c.pacer.state("search")["today"] == 3
+
+
+def test_harvest_pace_limit_mid_run_keeps_partial_and_defers_rest(tmp_path, monkeypatch):
+    from linkedin_mcp_server import mivia_outreach as outreach
+
+    a, b = "7286622235937701888", "7457346711301214208"
+    c = _harvest_collector(tmp_path, monkeypatch, [{"event_id": a, "pages": 3}, {"event_id": b, "pages": 2}])
+    taken = []
+    real_take = c._take
+
+    def take(action, n=1):
+        taken.append(n)
+        if len(taken) == 2:
+            raise outreach.PaceExceeded({"action": action, "left": 0})
+        real_take(action, n)
+
+    c._take = take
+
+    class Actions:
+        async def get_event_attendees(self, e, page, pages):
+            return {"attendees": [{"slug": f"{e[-1]}{page}", "name": "X"}], "pages_read": 1,
+                    "complete": False, "next_page": page + 1}
+
+    c.actions = Actions()
+    res = asyncio.run(c.harvest())
+    assert res[0]["partial"] == "search_budget_spent" and res[0]["last_page"] == 1
+    assert len(res[0]["attendees"]) == 1
+    assert res[1] == {"event_id": b, "register_id": None, "deferred": "search_budget_spent"}
+
+
+def test_monthly_search_limit_stops_harvest_without_marking_complete(tmp_path, monkeypatch):
+    from linkedin_mcp_server.scraping.mivia_network import SearchLimitReached, is_search_limit_text
+
+    assert is_search_limit_text("You've reached the monthly limit for profile searches")
+    assert is_search_limit_text("Sie haben das monatliche Limit für Suchen erreicht")
+    assert not is_search_limit_text("Keine Ergebnisse gefunden")
+    a, b = "7286622235937701888", "7457346711301214208"
+    c = _harvest_collector(tmp_path, monkeypatch, [{"event_id": a, "pages": 3}, {"event_id": b, "pages": 2}])
+
+    class Actions:
+        async def get_event_attendees(self, e, page, pages):
+            if page == 2:
+                raise SearchLimitReached("limit")
+            return {"attendees": [{"slug": "p1", "name": "X"}], "pages_read": 1,
+                    "complete": False, "next_page": page + 1}
+
+    c.actions = Actions()
+    res = asyncio.run(c.harvest())
+    assert res[0]["partial"] == "monthly_search_limit" and res[0]["complete"] is False
+    assert res[0]["last_page"] == 1
+    assert res[1]["deferred"] == "search_budget_spent"  # rest of the run is not attempted

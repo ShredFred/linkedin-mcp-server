@@ -33,6 +33,26 @@ _EVENT_ID_RE = re.compile(r"^\d{10,25}$")
 
 # Human pace. Reading is not what LinkedIn restricts, but a burst of page loads
 # is what a detector sees first.
+# LinkedIn's commercial use limit for people searches (monthly, resets on the
+# 1st at midnight PST; help article a524372). When it is reached, the results
+# are hidden -- which looks exactly like an empty last page. Wording as used
+# on the German and English UI; matched on the page text only when no card
+# came back.
+_SEARCH_LIMIT_RE = re.compile(
+    r"commercial use limit|monthly limit for (?:profile )?search|reached the (?:monthly )?limit"
+    r"|kommerzielle[nr]? Nutzung|monatliche[ns]? (?:Such)?[Ll]imit|Limit für (?:Profil)?[Ss]uchen",
+    re.IGNORECASE,
+)
+
+
+class SearchLimitReached(RuntimeError):
+    """LinkedIn hides people-search results for the rest of the month."""
+
+
+def is_search_limit_text(text: str | None) -> bool:
+    return bool(_SEARCH_LIMIT_RE.search(text or ""))
+
+
 _SCROLL_PAUSE = (1.8, 3.2)
 _PAGE_PAUSE = (3.0, 6.0)
 
@@ -453,6 +473,13 @@ class MiviaNetworkReader:
             cards = await self._cards()
             pages_read += 1
             if not cards:
+                body = await self._page.evaluate(
+                    "() => (document.querySelector('main') || document.body).innerText.slice(0, 4000)"
+                )
+                if is_search_limit_text(body):
+                    raise SearchLimitReached(
+                        "LinkedIn commercial use limit for people searches reached"
+                    )
                 exhausted = True
                 break
             new = 0

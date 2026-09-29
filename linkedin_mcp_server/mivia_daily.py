@@ -42,6 +42,7 @@ from linkedin_mcp_server.scraping.mivia_engagement import (
 )
 from linkedin_mcp_server.scraping.mivia_actions import MiviaActions
 from linkedin_mcp_server.scraping.mivia_events import MiviaEventFinder
+from linkedin_mcp_server.scraping.mivia_network import SearchLimitReached
 
 logger = logging.getLogger("mivia_daily")
 
@@ -577,45 +578,60 @@ class Collector:
                 continue
             start = max(1, int(order.get("start_page") or 1))
             want = max(1, min(int(order.get("pages") or 1), cap))
-            self._take("search", want)
-            cap -= want
             attendees: list[dict[str, Any]] = []
             page_no, last_read, complete = start, start - 1, False
-            end = start + want - 1
-            try:
-                while page_no <= end:
-                    chunk = await self.actions.get_event_attendees(
-                        event_id, page_no, min(10, end - page_no + 1)
-                    )
-                    attendees += chunk["attendees"]
-                    last_read = page_no + chunk["pages_read"] - 1
-                    if chunk["complete"] or not chunk["next_page"]:
-                        complete = True
-                        break
-                    page_no = chunk["next_page"]
-            except (Busy, LoginRequired, outreach.PaceExceeded):
-                raise
-            except Exception as exc:  # one event must not stop the others
-                results.append(
-                    {
-                        "event_id": event_id,
-                        "register_id": order.get("register_id"),
-                        "error": f"{type(exc).__name__}: {exc}"[:200],
-                        "start_page": start,
-                    }
-                )
-                continue
-            results.append(
-                {
-                    "event_id": event_id,
-                    "register_id": order.get("register_id"),
-                    "mode": order.get("mode"),
-                    "start_page": start,
-                    "last_page": last_read,
-                    "complete": complete,
-                    "attendees": [a for a in attendees if a.get("action") != "self"],
+            error: str | None = None
+            stop_all = False
+            # One page per call, booked when it is read: a failure on page 3
+            # keeps pages 1-2 (read and paid) instead of losing them.
+            while page_no < start + want:
+                try:
+                    self._take("search", 1)
+                except outreach.PaceExceeded:
+                    # A limit the "left" figure did not show (burst, week):
+                    # keep what was read, defer the rest of the run.
+                    error, stop_all = "search_budget_spent", True
+                    break
+                cap -= 1
+                try:
+                    chunk = await self.actions.get_event_attendees(event_id, page_no, 1)
+                except (Busy, LoginRequired):
+                    raise
+                except SearchLimitReached:
+                    # Monthly limit: nothing more today (or this month) -- no
+                    # event may be marked as harvested because of it.
+                    error, stop_all = "monthly_search_limit", True
+                    break
+                except Exception as exc:  # one event must not stop the others
+                    error = f"{type(exc).__name__}: {exc}"[:200]
+                    break
+                attendees += chunk["attendees"]
+                last_read = page_no
+                if chunk["complete"] or not chunk["next_page"]:
+                    complete = True
+                    break
+                page_no = chunk["next_page"]
+            row: dict[str, Any] = {
+                "event_id": event_id,
+                "register_id": order.get("register_id"),
+                "mode": order.get("mode"),
+                "start_page": start,
+                "last_page": last_read,
+                "complete": complete and not error,
+                "attendees": [a for a in attendees if a.get("action") != "self"],
+            }
+            limits = ("search_budget_spent", "monthly_search_limit")
+            if error in limits and last_read < start:
+                row = {k: row[k] for k in ("event_id", "register_id")} | {
+                    "deferred": error
                 }
-            )
+            elif error in limits:
+                row["partial"] = error
+            elif error:
+                row["error"] = error
+            results.append(row)
+            if stop_all:
+                cap = 0
         return results
 
     async def employer_lookup(self) -> list[dict[str, Any]]:
