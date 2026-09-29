@@ -389,3 +389,22 @@ class MiviaEventFinder:
                 }
             )
         return out
+
+
+def event_summary(ev: dict[str, Any]) -> dict[str, Any]:
+    """Event master data only: id, url, title, date text, organiser, attendees.
+
+    The attendee line may start with a person name ("X und 307 weitere ...");
+    only the count leaves the finder, never the line itself.
+    """
+    n = ev.get("attendees")
+    return {
+        "event_id": ev.get("event_id"),
+        "url": ev.get("url"),
+        "title": ev.get("title"),
+        "date_text": ev.get("date_text"),
+        "organiser": ev.get("organiser"),
+        "attendees": n,
+        "attendees_text": None if n is None else f"{n} Teilnehmende",
+        "past": bool(ev.get("past")),
+    }

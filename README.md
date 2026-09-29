@@ -13,6 +13,7 @@
 > - `create_post` — Compose a post on the signed-in member's personal profile.
 > - `find_events` — Find LinkedIn events by keyword (event search, upcoming only) and by organiser page (company slug; its "Events" tab, upcoming and with include_past also past ones).
 > - `follow_up_list` — Who answered which ledger message, and who is due for a follow-up.
+> - `get_company_events` — Events tab of one organiser page (/company/<slug>/events/).
 > - `get_event_attendees` — List the attendees of a LinkedIn event via people search with eventAttending, 10 per page, at human pace (3-6 s between pages).
 > - `get_group_members` — Members of a group the account belongs to (name, slug, degree, headline), in LinkedIn's rendered order.
 > - `get_page_followers` — Newest followers of a company page the account administers (numeric page id, e.g.
@@ -26,6 +27,7 @@
 > - `list_sent_invitations` — List pending sent connection invitations.
 > - `outreach_quota` — Today's and this week's sends and invites from the local outreach ledger.
 > - `pace_status` — The pacer (Taktgeber): per action kind today's and the last seven days' use against its budget, and the daily total of visible actions.
+> - `search_events` — One LinkedIn event search (/search/results/events/?keywords=...).
 > - `send_campaign_batch` — Send the same text to many recipients safely, one small batch per call.
 > - `send_message_verified` — Send one message (multi-line allowed via LF) and read the conversation back to confirm the whole text arrived.
 > - `set_contact_note` — Local keywords and a short note per contact (~/.linkedin-mcp/mivia-contact-notes.json), shown by follow_up_list.

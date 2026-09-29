@@ -23,7 +23,7 @@ from linkedin_mcp_server import mivia_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.scraping.identifiers import normalize_person_identifier
 from linkedin_mcp_server.scraping.mivia_actions import MiviaActions, parse_group_id
-from linkedin_mcp_server.scraping.mivia_events import MiviaEventFinder
+from linkedin_mcp_server.scraping.mivia_events import MiviaEventFinder, event_summary
 from linkedin_mcp_server.scraping.mivia_engagement import (
     MiviaEngagementReader,
     SeenStore,
@@ -803,6 +803,65 @@ def register_mivia_stage2_tools(
             }
 
         return await _run(ctx, "find_events", body)
+
+    @mcp.tool(
+        timeout=tool_timeout,
+        title="Search Events",
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+        tags={TAG, "search", "scraping"},
+    )
+    async def search_events(
+        ctx: Context, keywords: str, limit: int = 10
+    ) -> dict[str, Any]:
+        """
+        One LinkedIn event search (/search/results/events/?keywords=...).
+        Per hit only event master data: event_id, url, title, date_text,
+        organiser, attendees (count), attendees_text, past. No person data.
+        limit 1-25. Reads only; nothing is clicked.
+        """
+        kw = (keywords or "").strip()
+        if not kw:
+            return {"error": "keywords required"}
+        limit = max(1, min(int(limit), 25))
+        refusal = _pace("search", 1, tool="search_events")
+        if refusal:
+            return refusal
+
+        async def body(ex: Any) -> dict[str, Any]:
+            finder = MiviaEventFinder(ex._mivia_session, ex._mivia_navigator)
+            events = await finder.by_keyword(kw, max_pages=1 if limit <= 10 else 3)
+            out = [event_summary(e) for e in events][:limit]
+            return {"keywords": kw, "count": len(out), "events": out}
+
+        return await _run(ctx, "search_events", body)
+
+    @mcp.tool(
+        timeout=tool_timeout,
+        title="Get Company Events",
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+        tags={TAG, "company", "scraping"},
+    )
+    async def get_company_events(
+        ctx: Context, company_slug: str, include_past: bool = False
+    ) -> dict[str, Any]:
+        """
+        Events tab of one organiser page (/company/<slug>/events/). Same
+        fields as search_events. Upcoming only unless include_past.
+        """
+        slug = (company_slug or "").strip().strip("/")
+        if not slug or "/" in slug:
+            return {"error": "company_slug must be a bare slug"}
+        refusal = _pace("search", 1, tool="get_company_events")
+        if refusal:
+            return refusal
+
+        async def body(ex: Any) -> dict[str, Any]:
+            finder = MiviaEventFinder(ex._mivia_session, ex._mivia_navigator)
+            events = await finder.by_organiser(slug, include_past=include_past)
+            out = [event_summary(e) for e in events]
+            return {"company_slug": slug, "count": len(out), "events": out}
+
+        return await _run(ctx, "get_company_events", body)
 
     @mcp.tool(
         timeout=tool_timeout,

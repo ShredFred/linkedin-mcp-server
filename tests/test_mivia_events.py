@@ -127,3 +127,31 @@ def test_follower_lines():
         "followed_month": "2026-09",
     }
     assert parse_follower_lines(["X", "März 2025"])["followed_month"] == "2025-03"
+
+
+def test_event_summary_drops_person_names_and_extra_fields():
+    from linkedin_mcp_server.scraping.mivia_events import event_summary
+
+    lines = [
+        "HK Heat Treatment Congress",
+        "Di., 20. Okt. 2026",
+        "Köln • Von AWT",
+        "Matthias Steinbacher und 307 weitere Personen nehmen teil",
+    ]
+    ev = {
+        "event_id": "7457346711301214208",
+        **parse_event_card(lines),
+        "url": "https://www.linkedin.com/events/7457346711301214208/",
+        "found_by": "keyword:HK",
+        "past": False,
+    }
+    s = event_summary(ev)
+    assert s["event_id"] == "7457346711301214208"
+    assert s["attendees"] == 308
+    assert s["attendees_text"] == "308 Teilnehmende"
+    assert s["organiser"] == "AWT"
+    assert "Steinbacher" not in repr(s)
+    assert set(s) == {
+        "event_id", "url", "title", "date_text", "organiser",
+        "attendees", "attendees_text", "past",
+    }
