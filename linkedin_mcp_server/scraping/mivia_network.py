@@ -242,6 +242,47 @@ def _profile_url(slug: str) -> str:
     return f"https://www.linkedin.com/in/{quote(slug, safe='-_.')}/"
 
 
+
+ATTENDEE_FIELDS_MINIMAL = ("slug", "name", "headline", "degree")
+ATTENDEE_FIELDS_CARD = ATTENDEE_FIELDS_MINIMAL + ("location", "action", "page")
+
+
+def project_attendees(
+    result: dict[str, Any], limit: int | None = None, fields: str = "minimal"
+) -> dict[str, Any]:
+    """Reduce an attendee read to what one search card shows -- no profile calls.
+
+    ``minimal`` keeps slug, name, headline and degree; ``card`` adds location,
+    button state and page (still the same card). The account itself is dropped.
+    ``readable`` is false when the first page shows no card at all: LinkedIn
+    lists attendees only to an account that has RSVP'd, and an empty first page
+    is indistinguishable from that, so it is reported instead of read as "0".
+    """
+    keep = ATTENDEE_FIELDS_CARD if fields == "card" else ATTENDEE_FIELDS_MINIMAL
+    people = [a for a in result.get("attendees") or [] if a.get("action") != "self"]
+    cut = limit is not None and len(people) > limit
+    if limit is not None:
+        people = people[:limit]
+    out = {
+        k: result[k]
+        for k in ("event_id", "start_page", "pages_read", "next_page", "complete")
+        if k in result
+    }
+    if cut:
+        out["complete"] = False
+    first_empty = result.get("start_page") == 1 and not result.get("attendees")
+    out.update(
+        readable=not (first_empty and result.get("pages_read", 0) >= 1),
+        fields=fields if fields == "card" else "minimal",
+        count=len(people),
+        attendees=[{k: a.get(k) for k in keep} for a in people],
+    )
+    if not out["readable"]:
+        out["reason"] = "empty_first_page_rsvp_likely_required"
+    if result.get("warnings"):
+        out["warnings"] = result["warnings"]
+    return out
+
 def event_attendees_url(event_id: str, page: int) -> str:
     if not _EVENT_ID_RE.match(event_id):
         raise ValueError("event_id must be the numeric LinkedIn event id")

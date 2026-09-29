@@ -260,3 +260,58 @@ def test_readme_fork_block_is_current():
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert run.returncode == 0, run.stderr
+
+
+class TestProjectAttendees:
+    RAW = {
+        "event_id": "7449450258214014977",
+        "start_page": 1,
+        "pages_read": 1,
+        "next_page": 2,
+        "complete": False,
+        "attendees": [
+            {"name": "Ich", "slug": "me", "degree": 0, "action": "self",
+             "headline": "x", "location": "y", "profile_urn": "u0", "page": 1},
+            {"name": "A B", "slug": "a-b", "degree": 2, "action": "connect",
+             "headline": "Leiter Labor bei X", "location": "Bayern",
+             "profile_url": "https://www.linkedin.com/in/a-b/", "profile_urn": "u1", "page": 1},
+            {"name": "C D", "slug": "c-d", "degree": 1, "action": "message",
+             "headline": "QS", "location": "Wien", "profile_urn": "u2", "page": 1},
+        ],
+    }
+
+    def test_minimal_keeps_four_fields_and_drops_self(self):
+        from linkedin_mcp_server.scraping.mivia_network import project_attendees
+
+        out = project_attendees(self.RAW)
+        assert out["readable"] is True and out["count"] == 2
+        assert [set(a) for a in out["attendees"]] == [{"slug", "name", "headline", "degree"}] * 2
+        assert "profile_urn" not in str(out)
+
+    def test_card_and_limit(self):
+        from linkedin_mcp_server.scraping.mivia_network import project_attendees
+
+        out = project_attendees(self.RAW, limit=1, fields="card")
+        assert out["count"] == 1 and out["complete"] is False
+        assert set(out["attendees"][0]) == {"slug", "name", "headline", "degree", "location", "action", "page"}
+
+    def test_empty_first_page_is_not_readable(self):
+        from linkedin_mcp_server.scraping.mivia_network import project_attendees
+
+        out = project_attendees({"event_id": "1", "start_page": 1, "pages_read": 1,
+                                 "next_page": None, "complete": True, "attendees": []})
+        assert out["readable"] is False and out["reason"].startswith("empty_first_page")
+        later = project_attendees({"start_page": 3, "pages_read": 1, "complete": True, "attendees": []})
+        assert later["readable"] is True
+
+
+def test_event_attendees_tool_caps_pages_by_limit(monkeypatch):
+    import linkedin_mcp_server.tools.mivia as m
+
+    taken = []
+    monkeypatch.setattr(m, "_pace", lambda action, count=1, *, tool: taken.append(count) or {"status": "stop"})
+    mcp = FastMCP("t")
+    register_mivia_tools(mcp)
+    res = asyncio.run(mcp.call_tool("get_event_attendees", {"event_id": "7449450258214014977", "limit": 25}))
+    assert taken == [3]
+    assert "stop" in str(res)

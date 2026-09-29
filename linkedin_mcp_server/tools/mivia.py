@@ -18,7 +18,7 @@ import random
 import re
 import uuid
 from datetime import date, datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
@@ -31,7 +31,10 @@ from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_er
 from linkedin_mcp_server.error_handler import raise_tool_error
 from linkedin_mcp_server.scraping.contracts import refuse_an_invalid_message
 from linkedin_mcp_server.scraping.identifiers import normalize_person_identifier
-from linkedin_mcp_server.scraping.mivia_network import MiviaNetworkReader
+from linkedin_mcp_server.scraping.mivia_network import (
+    MiviaNetworkReader,
+    project_attendees,
+)
 from linkedin_mcp_server.scraping.mivia_post import MiviaPostComposer
 
 logger = logging.getLogger(__name__)
@@ -213,6 +216,8 @@ def register_mivia_tools(
         ctx: Context,
         start_page: Annotated[int, Field(ge=1, le=100)] = 1,
         max_pages: Annotated[int, Field(ge=1, le=15)] = 10,
+        limit: Annotated[int | None, Field(ge=1, le=150)] = None,
+        fields: Literal["minimal", "card"] = "minimal",
     ) -> dict[str, Any]:
         """
         List the attendees of a LinkedIn event via people search with
@@ -228,18 +233,25 @@ def register_mivia_tools(
             start_page: First results page to read (default 1).
             max_pages: Pages to read in this call (default 10). For long lists
                 call again with start_page=next_page until complete is true.
+            limit: Stop after this many attendees; pages are capped to
+                ceil(limit / 10), and only those pages are charged to the budget.
+            fields: "minimal" (slug, name, headline, degree -- the default) or
+                "card" (adds location, button state, page; same card). Neither
+                opens a profile. "readable": false means the first page was
+                empty -- usually the account has not RSVP'd.
         """
         event_id = event_id.strip().strip("/").rsplit("/", 1)[-1]
+        if limit is not None:
+            max_pages = min(max_pages, -(-limit // 10))
         refusal = _pace("search", max_pages, tool="get_event_attendees")
         if refusal:
             return refusal
-        return await _run(
-            ctx,
-            "get_event_attendees",
-            lambda ex: _network(ex).get_event_attendees(
-                event_id, start_page, max_pages
-            ),
-        )
+
+        async def body(ex: Any) -> dict[str, Any]:
+            raw = await _network(ex).get_event_attendees(event_id, start_page, max_pages)
+            return project_attendees(raw, limit, fields)
+
+        return await _run(ctx, "get_event_attendees", body)
 
     @mcp.tool(
         timeout=tool_timeout,
