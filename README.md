@@ -9,7 +9,7 @@
 > **Added tools**
 >
 > - `comment_on_post` — Comment on a post.
-> - `connect_guarded` — connect_with_person behind the ledger: refuses once today's invite cap (default 12, max 15) or the rolling 7-day cap (60) is reached, and never invites the same person twice.
+> - `connect_guarded` — connect_with_person behind the ledger: refuses once today's invite cap (default 20, max 25) or the rolling 7-day cap (100) is reached, and never invites the same person twice.
 > - `create_post` — Compose a post on the signed-in member's personal profile.
 > - `find_events` — Find LinkedIn events by keyword (event search, upcoming only) and by organiser page (company slug; its "Events" tab, upcoming and with include_past also past ones).
 > - `follow_up_list` — Who answered which ledger message, and who is due for a follow-up.

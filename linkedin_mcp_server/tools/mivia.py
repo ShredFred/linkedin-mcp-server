@@ -397,7 +397,7 @@ def register_mivia_tools(
            read back verified, the call sends only to the canary and stops.
         2. Afterwards each call sends to at most batch_size (<=3) recipients not
            yet in the ledger for this text, with 25-70 s random gaps, within the
-           daily message cap (default 12, hard max 15; canary sends excluded).
+           daily message cap (default 30, hard max 40; canary sends excluded).
         3. It stops at the first recipient that is not read back verified.
 
         Call repeatedly (spread over the day) until remaining is empty. With
@@ -455,7 +455,7 @@ def register_mivia_tools(
                     if outcome["verified"]
                     else "stopped",
                 }
-            # The pacer also binds the week (60) and the daily total of visible
+            # The pacer also binds the week (200) and the daily total of visible
             # actions, which the day quota alone does not see.
             pace_left = outreach.Pacer(ledger).state("message")["left"]
             take = min(batch_size, q["messages_left_today"], pace_left, len(targets))
@@ -506,7 +506,7 @@ def register_mivia_tools(
     ) -> dict[str, Any]:
         """
         connect_with_person behind the ledger: refuses once today's invite cap
-        (default 12, max 15) or the rolling 7-day cap (60) is reached, and never
+        (default 20, max 25) or the rolling 7-day cap (100) is reached, and never
         invites the same person twice. Records every attempt.
         """
         username = normalize_person_identifier(linkedin_username)

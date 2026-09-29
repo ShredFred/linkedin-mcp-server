@@ -6,9 +6,9 @@ afterwards, so a crash between the two leaves an ``attempted`` row that blocks a
 second send to the same person: an unknown outcome is treated as sent. A
 duplicate message costs more than a missing one.
 
-Caps (Frederik, 2026-09-29): 10-15 messages/day, 10-15 invites/day, 60
-invites/week. The defaults sit inside those bands; the hard maxima are the band
-tops and cannot be raised by a caller.
+Caps (Frederik, 2026-09-29, raised the same day): messages default 30, hard
+max 40/day, 200/week; invites default 20, hard max 25/day, 100 per rolling 7
+days. The hard maxima cannot be raised by a caller.
 """
 
 from __future__ import annotations
@@ -27,11 +27,12 @@ from typing import Any, Iterable
 
 LEDGER_ENV = "MIVIA_LINKEDIN_LEDGER"
 
-MESSAGES_PER_DAY_DEFAULT = 12
-MESSAGES_PER_DAY_MAX = 15
-INVITES_PER_DAY_DEFAULT = 12
-INVITES_PER_DAY_MAX = 15
-INVITES_PER_WEEK_MAX = 60
+MESSAGES_PER_DAY_DEFAULT = 30
+MESSAGES_PER_DAY_MAX = 40
+INVITES_PER_DAY_DEFAULT = 20
+INVITES_PER_DAY_MAX = 25
+INVITES_PER_WEEK_MAX = 100
+MESSAGES_PER_WEEK_MAX = 200
 
 DEFAULT_CANARY = "frederikstadler"
 
@@ -194,10 +195,10 @@ PACE_BUDGETS: dict[str, dict[str, int]] = {
     "profile_view": {"day": 150, "week": 700},
     "like": {"day": 40, "week": 200},
     "comment": {"day": 8, "week": 30},
-    "invite": {"day": INVITES_PER_DAY_DEFAULT, "week": INVITES_PER_WEEK_MAX},
+    "invite": {"day": INVITES_PER_DAY_MAX, "week": INVITES_PER_WEEK_MAX},
     "event_invite": {"day": 25, "week": 150},
     "withdraw": {"day": 30, "week": 150},
-    "message": {"day": MESSAGES_PER_DAY_DEFAULT, "week": 60},
+    "message": {"day": MESSAGES_PER_DAY_MAX, "week": MESSAGES_PER_WEEK_MAX},
     "search": {"day": 40, "week": 200},
     "page_read": {"day": 300, "week": 1500},
 }

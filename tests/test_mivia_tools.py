@@ -166,7 +166,7 @@ class TestLedger:
                 "started_at": now.isoformat(),
             }
         )
-        for i in range(58):
+        for i in range(98):
             at = (now - timedelta(days=1 + i % 6)).isoformat()
             ledger.append(
                 {
@@ -182,8 +182,19 @@ class TestLedger:
         )
         assert q["messages_per_day"] == outreach.MESSAGES_PER_DAY_MAX
         assert q["messages_today"] == 12
-        assert q["messages_left_today"] == 3
-        assert q["invites_left_today"] == 2  # weekly cap 60 binds before the daily 15
+        assert q["messages_left_today"] == 28
+        assert q["invites_left_today"] == 2  # weekly cap 100 binds before the daily 25
+
+    def test_cap_values(self):
+        # Frederik, 2026-09-29: raised caps. Changing them is a decision, not a refactor.
+        assert outreach.INVITES_PER_DAY_DEFAULT == 20
+        assert outreach.INVITES_PER_DAY_MAX == 25
+        assert outreach.INVITES_PER_WEEK_MAX == 100
+        assert outreach.MESSAGES_PER_DAY_DEFAULT == 30
+        assert outreach.MESSAGES_PER_DAY_MAX == 40
+        assert outreach.PACE_BUDGETS["invite"] == {"day": 25, "week": 100}
+        assert outreach.PACE_BUDGETS["message"] == {"day": 40, "week": 200}
+        assert outreach.PACE_WRITE_TOTAL_PER_DAY == 150
 
     def test_read_back(self):
         conv = {
