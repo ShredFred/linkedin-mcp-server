@@ -68,6 +68,8 @@ class LinkedInExtractor:
         self._conversations = ConversationReader(
             session, navigator, content, profile_page
         )
+        # MiViA fork: raw collaborators for the fork's own tools (tools/mivia.py).
+        self._mivia_session, self._mivia_navigator = session, navigator
 
     async def get_page_text(self) -> str:
         """Extract innerText from the main content area of the current page."""

@@ -229,8 +229,9 @@ class TestSendMessage:
 
     @pytest.mark.parametrize(
         "message",
-        ["First\nSecond", "First\rSecond", "First\tSecond", "First\x7fSecond"],
-        ids=["newline", "carriage-return", "tab", "del"],
+        # MiViA fork: LF is allowed (multi-line messages), so it left this list.
+        ["First\rSecond", "First\tSecond", "First\x7fSecond"],
+        ids=["carriage-return", "tab", "del"],
     )
     async def test_control_message_is_rejected_before_browser_interaction(
         self, mock_page, message

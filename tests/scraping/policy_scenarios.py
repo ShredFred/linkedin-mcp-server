@@ -1062,6 +1062,8 @@ async def _facade_contract_trace() -> dict[str, Any]:
                 "output": tool.output_schema,
             }
             for tool in sorted(tools, key=lambda item: item.name)
+            # MiViA fork: fork tools are contracted in tests/test_mivia_tools.py.
+            if "mivia" not in tool.tags
         }
     return {
         "schema_version": 1,
@@ -1153,7 +1155,7 @@ async def build_policy_traces() -> dict[str, dict[str, Any]]:
         "message-sent.json": await _messaging_submission_scenario("sent"),
         "message-cancelled.json": await _messaging_cancellation_scenario(),
         "message-blank.json": await _invalid_message_scenario("   ", "blank"),
-        "message-c0.json": await _invalid_message_scenario("line\nbreak", "c0"),
+        "message-c0.json": await _invalid_message_scenario("line\rbreak", "c0"),
         "message-del.json": await _invalid_message_scenario("text\x7f", "del"),
         "connect.json": await _connect_scenario(),
         "get-my-profile.json": await _get_my_profile_scenario(),

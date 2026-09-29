@@ -85,7 +85,7 @@ class TestMessageActionResult:
 
 
 class TestRefuseAnInvalidMessage:
-    @pytest.mark.parametrize("message", ["line\nbreak", "before\tafter", "text\x7f"])
+    @pytest.mark.parametrize("message", ["line\rbreak", "before\tafter", "text\x7f"])
     def test_every_c0_or_del_character_is_refused(self, message: str):
         assert refuse_an_invalid_message("alice", message) == message_action_result(
             "https://www.linkedin.com/in/alice/",

@@ -176,6 +176,8 @@ async def _wire_tools(
         (
             tool.model_dump(mode="json", by_alias=True, exclude_none=True)
             for tool in tools
+            # MiViA fork: fork tools are contracted in tests/test_mivia_tools.py.
+            if "mivia" not in (tool.meta or {}).get("fastmcp", {}).get("tags", [])
         ),
         key=lambda tool: tool["name"],
     )

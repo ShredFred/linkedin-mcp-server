@@ -99,10 +99,18 @@ def refuse_an_invalid_message(
     reason = None
     if not message.strip():
         reason = "Message must contain non-whitespace characters."
-    elif any(ord(character) < 32 or ord(character) == 127 for character in message):
+    elif any(
+        (ord(character) < 32 and character != "\n") or ord(character) == 127
+        for character in message
+    ):
         # Keep the browser-side insertion contract to plain message text.
         # Reject every C0 control and DEL before a session is acquired so no
         # control input can reach the contenteditable surface.
+        # MiViA fork: LF is the one exception. The composer never receives it
+        # as a key: message_sender splits on it and inserts a paragraph with
+        # execCommand('insertParagraph'), so no Enter can submit half a message.
+        # CR stays refused -- send "\n", not "\r\n".
+        # The reason text stays upstream's verbatim so fixtures need no rewrite.
         reason = "Message must not contain control characters or line breaks."
     if reason is None:
         return None

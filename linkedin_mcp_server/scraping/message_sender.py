@@ -137,6 +137,12 @@ _MESSAGE_CLEANUP_TIMEOUT_SECONDS = 1.0
 # the send-toggle class only when the verified composer has no Send button.
 # If the class changes, confirmed sends remain unavailable.
 _MESSAGE_COMPOSER_INSPECT_JS = r"""
+    // MiViA fork: multi-line messages. The editor renders one block per line,
+    // so innerText and textContent no longer equal the raw message. Compare a
+    // canonical form on both sides: newline runs (with surrounding blanks)
+    // collapse to one LF. For a single-line message this is only a trim.
+    const mcpCanon = value => String(value || '')
+        .replace(/[ \t ]*\n[\s ]*/g, '\n').trim();
     const visible = element => {
         const visibility = element && getComputedStyle(element).visibility;
         return !!(
@@ -372,7 +378,7 @@ _MESSAGE_CONFIRMATION_PREPARE_JS = (
             !arg.owner.contains(pinned.editor) ||
             document.activeElement !== pinned.editor ||
             pinned.ownedMessage !== arg.expected ||
-            (pinned.editor.innerText || pinned.editor.textContent || '') !== arg.expected
+            mcpCanon(pinned.editor.innerText || pinned.editor.textContent) !== mcpCanon(arg.expected)
         ) {
             return null;
         }
@@ -401,7 +407,7 @@ _MESSAGE_CONFIRMATION_PREPARE_JS = (
                 element => !requireVisible || visible(element)
             );
             const matches = elements.filter(
-                element => (element.innerText || '') === state.expected
+                element => mcpCanon(element.innerText) === mcpCanon(state.expected)
             );
             const smallest = matches.filter(
                 element => !matches.some(
@@ -530,7 +536,7 @@ _MESSAGE_CONFIRMATION_READY_JS = (
             if (!visible(node)) return false;
             const elements = [node, ...node.querySelectorAll('*')].filter(visible);
             const matches = elements.filter(
-                element => (element.innerText || '') === arg.expected
+                element => mcpCanon(element.innerText) === mcpCanon(arg.expected)
             );
             return matches.filter(
                 element => !matches.some(
@@ -759,6 +765,12 @@ _MESSAGE_COMPOSER_FOCUS_JS = (
 )
 
 _MESSAGE_COMPOSER_PINNED_JS = r"""
+    // MiViA fork: multi-line messages. The editor renders one block per line,
+    // so innerText and textContent no longer equal the raw message. Compare a
+    // canonical form on both sides: newline runs (with surrounding blanks)
+    // collapse to one LF. For a single-line message this is only a trim.
+    const mcpCanon = value => String(value || '')
+        .replace(/[ \t ]*\n[\s ]*/g, '\n').trim();
     const visible = element => {
         const visibility = element && getComputedStyle(element).visibility;
         return !!(
@@ -941,8 +953,19 @@ _MESSAGE_COMPOSER_WRITE_JS = (
         ) {
             return 'unsupported';
         }
-        const inserted = document.execCommand('insertText', false, arg.message);
-        if ((editor.innerText || editor.textContent || '') === arg.message) {
+        // MiViA fork: one insertText per line, a paragraph between lines.
+        // insertParagraph is an editing command, not a key event, so LinkedIn's
+        // Enter handling never sees it.
+        let inserted = true;
+        arg.message.split('\n').forEach((line, index) => {
+            if (index > 0) {
+                inserted = document.execCommand('insertParagraph', false) === true && inserted;
+            }
+            if (line) {
+                inserted = document.execCommand('insertText', false, line) === true && inserted;
+            }
+        });
+        if (mcpCanon(editor.innerText || editor.textContent) === mcpCanon(arg.message)) {
             pinned.ownedMessage = arg.message;
         }
         if (inserted !== true) return 'unsupported';
@@ -951,7 +974,7 @@ _MESSAGE_COMPOSER_WRITE_JS = (
             !pinned ||
             document.activeElement !== editor ||
             pinned.ownedMessage !== arg.message ||
-            (editor.innerText || editor.textContent || '') !== arg.message
+            mcpCanon(editor.innerText || editor.textContent) !== mcpCanon(arg.message)
         ) {
             return 'invalid';
         }
@@ -968,7 +991,7 @@ _MESSAGE_COMPOSER_SUBMIT_READY_JS = (
             !pinned ||
             document.activeElement !== pinned.editor ||
             pinned.ownedMessage !== arg.message ||
-            (pinned.editor.innerText || pinned.editor.textContent || '') !== arg.message
+            mcpCanon(pinned.editor.innerText || pinned.editor.textContent) !== mcpCanon(arg.message)
         ) {
             return 'invalid';
         }
@@ -980,6 +1003,12 @@ _MESSAGE_COMPOSER_SUBMIT_READY_JS = (
 )
 
 _MESSAGE_COMPOSER_CLEANUP_JS = r"""(owner, arg) => {
+    // MiViA fork: multi-line messages. The editor renders one block per line,
+    // so innerText and textContent no longer equal the raw message. Compare a
+    // canonical form on both sides: newline runs (with surrounding blanks)
+    // collapse to one LF. For a single-line message this is only a trim.
+    const mcpCanon = value => String(value || '')
+        .replace(/[ \t ]*\n[\s ]*/g, '\n').trim();
     const pinned = owner?.__linkedinMcpComposer;
     if (!pinned || pinned.ownedMessage !== arg.message) return false;
     const {editor, ancestorChain} = pinned;
@@ -999,7 +1028,7 @@ _MESSAGE_COMPOSER_CLEANUP_JS = r"""(owner, arg) => {
         currentChain.some((scope, index) => scope !== ancestorChain[index]) ||
         !currentChain.includes(owner) ||
         !owner.contains(editor) ||
-        (editor.innerText || editor.textContent || '') !== arg.message
+        mcpCanon(editor.innerText || editor.textContent) !== mcpCanon(arg.message)
     ) {
         return false;
     }
@@ -1023,7 +1052,7 @@ _MESSAGE_COMPOSER_SUBMIT_JS = (
             !pinned ||
             document.activeElement !== pinned.editor ||
             pinned.ownedMessage !== arg.message ||
-            (pinned.editor.innerText || pinned.editor.textContent || '') !== arg.message
+            mcpCanon(pinned.editor.innerText || pinned.editor.textContent) !== mcpCanon(arg.message)
         ) {
             return 'invalid';
         }
