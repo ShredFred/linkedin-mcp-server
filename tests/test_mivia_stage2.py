@@ -345,3 +345,123 @@ class TestContactNotes:
         notes.set("bob", tags=["neu"], note=None, replace=True)
         assert notes.get("bob")["tags"] == ["neu"]
         assert "note" not in notes.get("bob")
+
+
+class TestJobWatch:
+    def test_titles_from_references_never_ids(self):
+        from linkedin_mcp_server.tools.mivia_stage2 import job_titles
+
+        refs = {
+            "search_results": [
+                {
+                    "kind": "job",
+                    "url": "/jobs/view/4472429782/",
+                    "text": " Metallograf (m/w/d) ",
+                },
+                {"kind": "job", "url": "/jobs/view/4460972089/"},
+                {"kind": "company", "url": "/company/x/", "text": "Logo"},
+            ]
+        }
+        assert job_titles(refs) == {"4472429782": "Metallograf (m/w/d)"}
+        assert job_titles(None) == {}
+
+    @pytest.mark.parametrize(
+        "keywords,stem",
+        [
+            ("Metallograf", "metallogra"),
+            ("Werkstoffprüfer", "werkstoffprüf"),
+            ("Wärmebehandlung", "wärmebehandl"),
+            ("Härterei Leiter", "härterei"),
+        ],
+    )
+    def test_stem(self, keywords, stem):
+        from linkedin_mcp_server.tools.mivia_stage2 import keyword_stem
+
+        assert keyword_stem(keywords) == stem
+
+
+class TestReviewFixes:
+    """Regression tests for the review round of 2026-09-29."""
+
+    def test_percent_with_decimal_comma(self):
+        out = parse_post_summary("Im Netzwerk\n12,5 %\nAußerhalb des Netzwerks\n87,5 %")
+        assert out == {"in_network_pct": 12.5, "outside_network_pct": 87.5}
+        assert parse_post_summary("1.400\nImpressionen")["impressions"] == 1400
+
+    def test_idless_engagers_keep_distinct_keys(self):
+        from linkedin_mcp_server.scraping.mivia_engagement import engager_key
+
+        a = engager_key("reaction", None, "like", name="Anna A")
+        b = engager_key("reaction", None, "like", name="Bert B")
+        assert a != b
+        assert engager_key("reaction", "x", "like", name="egal") == "reaction:x:like"
+
+    def test_person_name_folding(self):
+        assert (
+            outreach.person_name("Jessica  Schneider  (she/her)") == "Jessica Schneider"
+        )
+
+    def test_reply_ignores_sender_label_variants(self):
+        text = (
+            THREAD.replace(
+                "Profil von Jessica Schneider anzeigen\nJessica Schneider  (she/her)  12:07",
+                "Profil von Jessica Schneider anzeigen\nJessica Schneider  (she/her)  12:07",
+            )
+            + "\nProfil von Jessica Schneider (she/her) anzeigen\nJessica Schneider 12:09\n\nNachtrag\n"
+        )
+        state = outreach.reply_after(text, "Test 4/4 MCP-Fork (Calendly mit UTM)")
+        assert state["replied"] is False
+
+    def test_follow_up_list_keeps_unconfirmed_sends(self, tmp_path):
+        ledger = outreach.Ledger(tmp_path / "l.jsonl")
+        ledger.append(
+            {
+                "attempt": "1",
+                "kind": "message",
+                "recipient": "a",
+                "status": "attempted",
+                "started_at": "2026-09-01T10:00:00+02:00",
+            }
+        )
+        ledger.append(
+            {
+                "attempt": "2",
+                "kind": "message",
+                "recipient": "b",
+                "status": "attempted",
+                "started_at": "2026-09-02T10:00:00+02:00",
+            }
+        )
+        ledger.append({"attempt": "2", "status": "unknown"})
+        assert {r["recipient"] for r in outreach.sent_messages(ledger)} == {"a", "b"}
+
+    def test_pacer_lock_is_released_and_stale_lock_taken_over(self, tmp_path):
+        ledger = outreach.Ledger(tmp_path / "l.jsonl")
+        pacer = outreach.Pacer(ledger)
+        pacer.take("like", tool="t")
+        lock = ledger.path.with_suffix(".lock")
+        assert not lock.exists()
+        lock.write_text("", encoding="utf-8")
+        import os
+        import time
+
+        old = time.time() - 120
+        os.utime(lock, (old, old))
+        pacer.take("like", tool="t")
+        assert pacer.state("like")["today"] == 2
+
+    def test_pacer_summary_matches_state(self, tmp_path):
+        pacer = outreach.Pacer(outreach.Ledger(tmp_path / "l.jsonl"))
+        pacer.take("search", 3, tool="t")
+        summary = pacer.summary()
+        assert summary["actions"]["search"] == pacer.state("search")
+        assert summary["writes_today"] == 0
+
+    def test_failed_job_watch_run_does_not_count(self, tmp_path):
+        from linkedin_mcp_server.tools.mivia_stage2 import JobWatchStore
+
+        store = JobWatchStore(tmp_path / "jw.json")
+        store.record(set(), ran=False)
+        assert store.last_run() is None
+        store.record({"1"})
+        assert store.last_run() is not None and store.seen() == {"1"}

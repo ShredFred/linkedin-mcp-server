@@ -128,7 +128,8 @@ _SUMMARY_JS = r"""() => (document.querySelector('main') || document.body).innerT
 # Labels on the post-summary page (de/en) -> key. The number precedes (reach
 # block) or follows (engagement block) its label; both layouts were measured.
 _SUMMARY_BEFORE = {
-    "Impressions": "impressions",
+    "Impressions": "impressions",  # measured: the de page says "Impressions"
+    "Impressionen": "impressions",
     "Erreichte Mitglieder": "members_reached",
     "Members reached": "members_reached",
     "Mit diesem Beitrag generierte Profilansichten": "profile_views",
@@ -298,8 +299,18 @@ def parse_post_summary(text: str) -> dict[str, Any]:
                 and i + 1 < len(lines)
                 and lines[i + 1].endswith("%")
             ):
-                out[key] = _number(lines[i + 1])
+                out[key] = _percent(lines[i + 1])
     return out
+
+
+def _percent(text: str) -> float | int | None:
+    """'76 %' -> 76, '12,5 %' -> 12.5 (a decimal comma, not a thousands mark)."""
+    raw = text.strip().rstrip("%").strip().replace(" ", "").replace(",", ".")
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return int(value) if value.is_integer() else value
 
 
 # --- "only new since last run" memory ---------------------------------------
@@ -338,8 +349,13 @@ class SeenStore:
         os.replace(tmp, self.path)
 
 
-def engager_key(kind: str, ident: str | None, extra: str = "") -> str:
-    return f"{kind}:{ident or '?'}:{extra}"
+def engager_key(
+    kind: str, ident: str | None, extra: str = "", *, name: str | None = None
+) -> str:
+    """Memory key. Without an id the name stands in, so id-less engagers are
+    not all collapsed into one '?' entry."""
+    who = ident or f"name={(name or '?').strip().lower()}"
+    return f"{kind}:{who}:{extra}"
 
 
 class MiviaEngagementReader:
@@ -387,9 +403,10 @@ class MiviaEngagementReader:
         seen: set[str] = set()
         for item in state["items"][:limit]:
             ref = parse_person_ref(item["href"])
-            if ref["id"] in seen:
-                continue
-            seen.add(ref["id"])
+            if ref["id"] is not None:
+                if ref["id"] in seen:
+                    continue
+                seen.add(ref["id"])
             reactors.append(
                 {
                     **split_engager_lines(item["lines"]),

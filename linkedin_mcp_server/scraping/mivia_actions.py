@@ -134,15 +134,51 @@ _COMMENT_EDITOR = (
     '[role="textbox"][aria-label*="comment"]'
 )
 
-_COMMENT_SUBMIT_JS = r"""() => {
-  const card = document.querySelector('[componentkey^="update-card-focus"]');
-  if (!card) return null;
-  const b = [...card.querySelectorAll('button')].find(b =>
-    /^(Kommentieren|Comment|Antworten|Reply)$/i.test((b.innerText || '').trim()) &&
-    !b.getAttribute('aria-label'));
-  if (!b) return null;
-  b.setAttribute('data-mivia-submit', '1');
-  return {disabled: b.disabled, text: (b.innerText || '').trim()};
+# The submit belongs to the editor: walk up from the editor to the smallest
+# ancestor holding a "Kommentieren"/"Comment" button without aria-label, and
+# never into a comment card (whose "Antworten" buttons must not be clicked).
+_COMMENT_SUBMIT_JS = r"""(editor) => {
+  document.querySelectorAll('[data-mivia-submit]').forEach(e => e.removeAttribute('data-mivia-submit'));
+  const isSubmit = b => /^(Kommentieren|Comment)$/i.test((b.innerText || '').trim()) &&
+                        !b.getAttribute('aria-label');
+  let box = editor;
+  for (let i = 0; i < 8 && box; i++) {
+    box = box.parentElement;
+    if (!box || box.matches('[componentkey^="update-card-focus"]')) break;
+    const b = [...box.querySelectorAll('button')].find(b =>
+      isSubmit(b) && !b.closest('[componentkey^="replaceableComment_urn:li:comment:"]'));
+    if (b) {
+      b.setAttribute('data-mivia-submit', '1');
+      return {disabled: b.disabled, text: (b.innerText || '').trim(), depth: i + 1};
+    }
+  }
+  return null;
+}"""
+
+# Mark the withdraw control inside the card that links exactly to /in/<slug>/.
+_MARK_WITHDRAW_JS = r"""(slug) => {
+  document.querySelectorAll('[data-mivia-withdraw]').forEach(e => e.removeAttribute('data-mivia-withdraw'));
+  const main = document.querySelector('main') || document.body;
+  const want = '/in/' + slug.toLowerCase();
+  const own = a => {
+    try {
+      const p = new URL(a.getAttribute('href'), location.href).pathname.replace(/\/+$/, '');
+      return decodeURIComponent(p).toLowerCase() === want;
+    } catch { return false; }
+  };
+  const isWithdraw = e => /zurückziehen$|^Withdraw invitation/i.test(e.getAttribute('aria-label') || '');
+  for (const a of main.querySelectorAll('a[href*="/in/"]')) {
+    if (!own(a)) continue;
+    let card = a;
+    for (let i = 0; i < 10 && card; i++) {
+      card = card.parentElement;
+      if (!card) break;
+      const controls = [...card.querySelectorAll('a[aria-label], button[aria-label]')].filter(isWithdraw);
+      if (controls.length > 1) break;  // left the card: more than one invitation inside
+      if (controls.length === 1) { controls[0].setAttribute('data-mivia-withdraw', '1'); return true; }
+    }
+  }
+  return false;
 }"""
 
 _COMMENT_TEXTS_JS = r"""() => [...document.querySelectorAll('[componentkey^="replaceableComment_urn:li:comment:"]')]
@@ -239,14 +275,27 @@ class MiviaActions(MiviaNetworkReader):
             inv["age_days"] = sent_age_days(inv.get("sent_text"))
         return listed["invitations"]
 
+    async def _slug_present(self, slug: str) -> bool | None:
+        """Is *slug* still on the sent list? None when the list did not load fully."""
+        await self._goto(SENT_INVITATIONS_URL)
+        await self._wait_for_cards()
+        listed = await self.list_sent_invitations(1000)
+        if not listed.get("complete"):
+            return None
+        return any(inv["slug"] == slug for inv in listed["invitations"])
+
     async def withdraw(self, name: str, slug: str) -> dict[str, Any]:
-        """Withdraw one pending invitation on the already open sent page."""
-        label = f"Einladung an {name} zurückziehen"
-        link = self._page.locator(
-            f'main [aria-label="{label}"], main [aria-label="Withdraw invitation sent to {name}"]'
-        ).first
-        if await link.count() == 0:
-            return {"slug": slug, "status": "not_found"}
+        """Withdraw one pending invitation, located by its card's profile slug.
+
+        By slug, not by name: two pending invitations to namesakes would
+        otherwise withdraw whichever card renders first. The sent list must be
+        open and scrolled far enough to hold the card (list_sent_invitations
+        leaves it so).
+        """
+        marked = await self._page.evaluate(_MARK_WITHDRAW_JS, slug)
+        if not marked:
+            return {"slug": slug, "name": name, "status": "not_found"}
+        link = self._page.locator('[data-mivia-withdraw="1"]').first
         await link.scroll_into_view_if_needed()
         await self._session.delay(random.uniform(0.8, 1.6))
         await link.click()
@@ -261,15 +310,13 @@ class MiviaActions(MiviaNetworkReader):
             if await confirm.count():
                 await confirm.click()
                 await self._session.delay(random.uniform(1.5, 2.5))
-        # Verify: reload and make sure the card is gone.
-        await self._goto(SENT_INVITATIONS_URL)
-        await self._wait_for_cards()
-        still = await self._page.locator(f'main a[href*="/in/{slug}"]').count()
-        return {
-            "slug": slug,
-            "name": name,
-            "status": "withdrawn" if not still else "still_pending",
-        }
+        # Verify on a fully loaded list: the oldest invitations, which are the
+        # candidates, sit at the bottom and are not rendered without scrolling.
+        present = await self._slug_present(slug)
+        status = {True: "still_pending", False: "withdrawn", None: "unverified"}[
+            present
+        ]
+        return {"slug": slug, "name": name, "status": status}
 
     # -- comments ------------------------------------------------------------
 
@@ -291,7 +338,7 @@ class MiviaActions(MiviaNetworkReader):
                 await self._page.keyboard.insert_text(paragraph)
         await self._session.delay(random.uniform(0.8, 1.5))
         typed = _canon(await editor.inner_text())
-        submit = await self._page.evaluate(_COMMENT_SUBMIT_JS)
+        submit = await editor.evaluate(_COMMENT_SUBMIT_JS)
         if typed != _canon(text) or submit is None or submit["disabled"]:
             await self._clear(editor)
             return {
@@ -305,7 +352,10 @@ class MiviaActions(MiviaNetworkReader):
         await self._page.locator('[data-mivia-submit="1"]').first.click()
         await self._session.delay(random.uniform(3.0, 5.0))
         texts = await self._page.evaluate(_COMMENT_TEXTS_JS)
-        verified = any(_canon(text) in _canon(t) for t in texts)
+        # LinkedIn truncates long comments ("…mehr"); a prefix is enough to
+        # recognise our own fresh comment.
+        probe = _canon(text)[:150]
+        verified = any(probe in _canon(t) for t in texts)
         return {
             "status": "posted" if verified else "unverified",
             "posted": True,

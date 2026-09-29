@@ -10,6 +10,8 @@ import asyncio
 import json
 import os
 import random
+import re
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
@@ -82,7 +84,9 @@ def register_mivia_stage2_tools(
         first, suppression check and the cadence tracker decide what is used.
         """
         activity_id = parse_activity_id(post_url)
-        pages = int(include_reactors) + int(include_comments)
+        # Worst case: the analytics list plus the post page, which is read even
+        # without include_comments when the reactor list is unavailable.
+        pages = int(include_reactors) + int(include_comments or include_reactors)
         refusal = _pace("page_read", max(pages, 1), tool="get_post_engagers")
         if refusal:
             return refusal
@@ -112,10 +116,12 @@ def register_mivia_stage2_tools(
             known = store.keys(activity_id)
 
             def rkey(r: dict[str, Any]) -> str:
-                return engager_key("reaction", r["id"], r["reaction"])
+                return engager_key("reaction", r["id"], r["reaction"], name=r["name"])
 
             def ckey(c: dict[str, Any]) -> str:
-                return engager_key("comment", c["id"], c["comment_id"] or "")
+                return engager_key(
+                    "comment", c["id"], c["comment_id"] or "", name=c["name"]
+                )
 
             keys = {rkey(r) for r in reactors} | {ckey(c) for c in comments}
             if since_last_run:
@@ -316,18 +322,36 @@ def register_mivia_stage2_tools(
                     break
                 if index:
                     await asyncio.sleep(random.uniform(8.0, 20.0))
-                outcome = await actions.withdraw(inv["name"], inv["slug"])
+                # Row before the click, closed afterwards: a withdrawal that may
+                # have happened must leave a trace even if the read-back throws.
+                attempt = uuid.uuid4().hex
                 ledger.append(
                     {
+                        "attempt": attempt,
                         "kind": "withdraw",
                         "recipient": outreach.recipient_key(inv["slug"]),
-                        "status": outcome["status"],
+                        "status": "attempted",
+                        "started_at": datetime.now()
+                        .astimezone()
+                        .isoformat(timespec="seconds"),
                     }
                 )
+                try:
+                    outcome = await actions.withdraw(inv["name"], inv["slug"])
+                except BaseException:
+                    ledger.append({"attempt": attempt, "status": "unknown"})
+                    raise
+                ledger.append({"attempt": attempt, "status": outcome["status"]})
                 results.append(outcome)
                 if outcome["status"] != "withdrawn":
                     break
-            return {**plan, "status": "withdrawn", "results": results}
+            done = sum(1 for r in results if r.get("status") == "withdrawn")
+            status = (
+                "withdrawn"
+                if done == len(picked)
+                else ("partial" if done else "stopped")
+            )
+            return {**plan, "status": status, "withdrawn": done, "results": results}
 
         return await _run(ctx, "withdraw_invitations", body)
 
@@ -381,8 +405,12 @@ def register_mivia_stage2_tools(
                 )
                 try:
                     conv = await ex.get_conversation(**lookup)
-                    text = " \n".join(
-                        str(v) for v in (conv.get("sections") or {}).values()
+                    sections = conv.get("sections") or {}
+                    # Only the conversation section: other sections (inbox
+                    # previews) list names that are not replies.
+                    text = str(
+                        sections.get("conversation")
+                        or " \n".join(str(v) for v in sections.values())
                     )
                 except Exception as exc:  # one unreadable thread must not stop the list
                     entries.append(
@@ -517,13 +545,16 @@ def register_mivia_stage2_tools(
         activity_id = parse_activity_id(post_url)
         ledger = outreach.Ledger.default()
         sha = outreach.text_sha(text)
+        # Any attempt that may have posted blocks the same text again: an
+        # attempt row without outcome counts as posted (repeated text is a
+        # restriction trigger).
         repeat = next(
             (
                 r
-                for r in ledger.rows()
+                for r in ledger.latest_by_attempt().values()
                 if r.get("kind") == "comment"
                 and r.get("text_sha") == sha
-                and r.get("posted")
+                and r.get("status") in {"attempted", "unknown", "posted", "unverified"}
             ),
             None,
         )
@@ -539,17 +570,30 @@ def register_mivia_stage2_tools(
                 return refusal
 
         async def body(ex: Any) -> dict[str, Any]:
-            result = await _actions(ex).comment(activity_id, text, confirm)
-            if confirm:
-                ledger.append(
-                    {
-                        "kind": "comment",
-                        "activity": activity_id,
-                        "text_sha": sha,
-                        "posted": result.get("posted"),
-                        "status": result.get("status"),
-                    }
-                )
+            if not confirm:
+                result = await _actions(ex).comment(activity_id, text, False)
+                return {"activity_id": activity_id, **result}
+            attempt = uuid.uuid4().hex
+            ledger.append(
+                {
+                    "attempt": attempt,
+                    "kind": "comment",
+                    "activity": activity_id,
+                    "text_sha": sha,
+                    "status": "attempted",
+                    "started_at": datetime.now()
+                    .astimezone()
+                    .isoformat(timespec="seconds"),
+                }
+            )
+            try:
+                result = await _actions(ex).comment(activity_id, text, True)
+            except BaseException:
+                ledger.append({"attempt": attempt, "status": "unknown"})
+                raise
+            # Not posted (no editor, mismatch): release the text for a retry.
+            status = result.get("status") if result.get("posted") else "not_posted"
+            ledger.append({"attempt": attempt, "status": status})
             return {"activity_id": activity_id, **result}
 
         return await _run(ctx, "comment_on_post", body)
@@ -615,22 +659,42 @@ def register_mivia_stage2_tools(
                         {**search, "status": "failed", "error": str(exc)[:200]}
                     )
                     continue
+                # job_ids is upstream's scoped result list; the references also
+                # carry LinkedIn's unrelated recommendations (measured
+                # 2026-09-29: "Metallograf" -> Kfz-Mechatroniker, Drohnenpilot),
+                # so references only supply titles, never ids.
                 ids = list(dict.fromkeys(res.get("job_ids") or []))
+                titles = job_titles(res.get("references"))
                 fresh = [i for i in ids if i not in seen and i not in new_ids]
                 new_ids.update(fresh)
+                stem = keyword_stem(search.get("match") or search["keywords"])
                 results.append(
                     {
                         **search,
                         "status": "ok",
                         "found": len(ids),
-                        "new_job_ids": fresh,
-                        "new_job_urls": [
-                            f"https://www.linkedin.com/jobs/view/{i}/" for i in fresh
+                        "new_jobs": [
+                            {
+                                "job_id": i,
+                                "url": f"https://www.linkedin.com/jobs/view/{i}/",
+                                "title": titles.get(i),
+                                "title_matches": bool(
+                                    titles.get(i) and stem in titles[i].lower()
+                                )
+                                if not search.get("company")
+                                else None,
+                            }
+                            for i in fresh
                         ],
                         "url": res.get("url"),
                     }
                 )
-            store.record(new_ids)
+            # A run where every search failed (session expired, rate limit) is
+            # not a run: keeping last_run would silence the next six days.
+            ok = any(r["status"] == "ok" for r in results)
+            store.record(new_ids, ran=ok)
+            if not ok:
+                return {"status": "failed", "new_total": 0, "searches": results}
             return {"status": "ran", "new_total": len(new_ids), "searches": results}
 
         return await _run(ctx, "job_watch", body)
@@ -684,6 +748,29 @@ DEFAULT_JOB_SEARCHES = [
 ]
 
 
+_JOB_VIEW_RE = re.compile(r"/jobs/view/(\d+)")
+
+
+def job_titles(references: Any) -> dict[str, str]:
+    """job id -> title from upstream's reference lists (any section)."""
+    out: dict[str, str] = {}
+    for refs in (references or {}).values():
+        for ref in refs or []:
+            match = _JOB_VIEW_RE.search(str(ref.get("url", "")))
+            if ref.get("kind") == "job" and match and ref.get("text"):
+                out.setdefault(match.group(1), ref["text"].strip())
+    return out
+
+
+def keyword_stem(keywords: str) -> str:
+    """Lower-case stem that survives German inflection: 'Metallograf' -> 'metallogra'."""
+    word = keywords.strip().split()[0].lower() if keywords.strip() else ""
+    for suffix in ("ung", "er", "in", "f", "ph"):
+        if len(word) > 7 and word.endswith(suffix):
+            return word[: -len(suffix)]
+    return word
+
+
 def job_watch_path() -> Path:
     configured = os.environ.get("MIVIA_LINKEDIN_JOB_WATCH")
     if configured:
@@ -707,10 +794,11 @@ class JobWatchStore:
         value = self._load().get("last_run")
         return datetime.fromisoformat(value) if value else None
 
-    def record(self, new_ids: set[str]) -> None:
+    def record(self, new_ids: set[str], *, ran: bool = True) -> None:
         data = self._load()
         data["seen"] = sorted(set(data.get("seen", [])) | new_ids)
-        data["last_run"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        if ran:
+            data["last_run"] = datetime.now().astimezone().isoformat(timespec="seconds")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")

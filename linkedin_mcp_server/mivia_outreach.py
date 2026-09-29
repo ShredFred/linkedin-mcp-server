@@ -17,7 +17,9 @@ import hashlib
 import json
 import os
 import re
+import time
 import unicodedata
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -208,6 +210,33 @@ EVENT_INVITES_PLATFORM_PER_WEEK = 1000
 _LEDGER_KINDS = {"message", "invite"}
 
 
+@contextmanager
+def _file_lock(path: Path, timeout: float = 15.0, stale_after: float = 60.0):
+    """Exclusive lock by O_EXCL lock file; a lock older than *stale_after* s
+    is taken over (its holder crashed)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            try:
+                if time.time() - path.stat().st_mtime > stale_after:
+                    path.unlink(missing_ok=True)
+                    continue
+            except FileNotFoundError:
+                continue
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"pacer lock {path} held too long")
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        os.close(fd)
+        path.unlink(missing_ok=True)
+
+
 class PaceExceeded(Exception):
     """Raised by :meth:`Pacer.take` when a budget is spent."""
 
@@ -220,30 +249,63 @@ class PaceExceeded(Exception):
 class Pacer:
     ledger: Ledger
 
-    def used(self, action: str, since: datetime) -> int:
-        if action in _LEDGER_KINDS:
-            exclude = [DEFAULT_CANARY] if action == "message" else []
-            return self.ledger.count_since(action, since, exclude=exclude)
-        total = 0
-        for row in self.ledger.rows():
-            if row.get("kind") != "pace" or row.get("action") != action:
+    def _events(self) -> list[tuple[str, datetime, int]]:
+        """One ledger read: (action, started, units) for everything that counts."""
+        rows = self.ledger.rows()
+        latest: dict[str, dict[str, Any]] = {}
+        events: list[tuple[str, datetime, int]] = []
+        canary = recipient_key(DEFAULT_CANARY)
+        for row in rows:
+            if row.get("kind") == "pace":
+                events.append(
+                    (
+                        row.get("action"),
+                        datetime.fromisoformat(row["at"]),
+                        int(row.get("count", 1)),
+                    )
+                )
+            elif row.get("attempt"):
+                latest[row["attempt"]] = {**latest.get(row["attempt"], {}), **row}
+        for row in latest.values():
+            kind = row.get("kind")
+            if kind not in _LEDGER_KINDS or row.get("status") not in _COUNTED:
                 continue
-            if datetime.fromisoformat(row["at"]) >= since:
-                total += int(row.get("count", 1))
-        return total
+            if kind == "message" and row.get("recipient") == canary:
+                continue
+            started = datetime.fromisoformat(row.get("started_at") or row["at"])
+            events.append((kind, started, 1))
+        return events
 
-    def _writes_today(self) -> int:
-        return sum(self.used(kind, day_start()) for kind in PACE_WRITE_KINDS)
+    @staticmethod
+    def _sum(
+        events: list[tuple[str, datetime, int]], actions: set[str], since: datetime
+    ) -> int:
+        return sum(n for a, at, n in events if a in actions and at >= since)
 
-    def state(self, action: str) -> dict[str, Any]:
+    def used(self, action: str, since: datetime) -> int:
+        return self._sum(self._events(), {action}, since)
+
+    def _writes_today(
+        self, events: list[tuple[str, datetime, int]] | None = None
+    ) -> int:
+        return self._sum(
+            events if events is not None else self._events(),
+            PACE_WRITE_KINDS,
+            day_start(),
+        )
+
+    def state(
+        self, action: str, events: list[tuple[str, datetime, int]] | None = None
+    ) -> dict[str, Any]:
         if action not in PACE_BUDGETS:
             raise ValueError(f"unknown pace action: {action}")
+        events = events if events is not None else self._events()
         budget = PACE_BUDGETS[action]
-        day = self.used(action, day_start())
-        week = self.used(action, week_window_start())
+        day = self._sum(events, {action}, day_start())
+        week = self._sum(events, {action}, week_window_start())
         left = min(budget["day"] - day, budget["week"] - week)
         if action in PACE_WRITE_KINDS:
-            left = min(left, PACE_WRITE_TOTAL_PER_DAY - self._writes_today())
+            left = min(left, PACE_WRITE_TOTAL_PER_DAY - self._writes_today(events))
         return {
             "action": action,
             "today": day,
@@ -262,20 +324,24 @@ class Pacer:
         this only checks. Everything else is booked here, before the action,
         because an action that may have happened must count.
         """
-        state = self.state(action)
-        if state["left"] < count:
-            raise PaceExceeded({**state, "requested": count})
-        if action not in _LEDGER_KINDS:
-            self.ledger.append(
-                {"kind": "pace", "action": action, "count": count, "tool": tool}
-            )
+        # Check and book under one lock: two tool calls in parallel must not
+        # both pass the check before either books.
+        with _file_lock(self.ledger.path.with_suffix(".lock")):
             state = self.state(action)
+            if state["left"] < count:
+                raise PaceExceeded({**state, "requested": count})
+            if action not in _LEDGER_KINDS:
+                self.ledger.append(
+                    {"kind": "pace", "action": action, "count": count, "tool": tool}
+                )
+                state = self.state(action)
         return state
 
     def summary(self) -> dict[str, Any]:
+        events = self._events()
         return {
-            "actions": {a: self.state(a) for a in PACE_BUDGETS},
-            "writes_today": self._writes_today(),
+            "actions": {a: self.state(a, events) for a in PACE_BUDGETS},
+            "writes_today": self._writes_today(events),
             "writes_per_day": PACE_WRITE_TOTAL_PER_DAY,
             "ledger": str(self.ledger.path),
         }
@@ -287,6 +353,12 @@ NOTES_ENV = "MIVIA_LINKEDIN_NOTES"
 FOLLOW_UP_DAYS_DEFAULT = 5
 
 _SENDER_RE = re.compile(r"Profil von (.+?) anzeigen|View (.+?)[’']s profile")
+
+
+def person_name(name: str) -> str:
+    """Fold NBSP/whitespace runs and drop a trailing '(she/her)'-style suffix."""
+    name = re.sub(r"\s+", " ", name or "").strip()  # \s covers NBSP too
+    return re.sub(r"\s*\([^)]*\)$", "", name).strip()
 
 
 def reply_after(conversation_text: str, message: str) -> dict[str, Any]:
@@ -306,18 +378,21 @@ def reply_after(conversation_text: str, message: str) -> dict[str, Any]:
     if pos < 0:
         return {"found": False, "replied": None}
     before = list(_SENDER_RE.finditer(haystack[:pos]))
-    sender = next((g for g in before[-1].groups() if g), None) if before else None
+    sender = (
+        person_name(next((g for g in before[-1].groups() if g), "")) if before else None
+    )
     after = haystack[pos + len(first_line) :]
     for match in _SENDER_RE.finditer(after):
         name = next(g for g in match.groups() if g)
-        if sender is None or name.strip() != sender.strip():
+        name = person_name(name)
+        if sender is None or name != sender:
             excerpt = after[match.end() :].strip().split("\n")
             body = [ln.strip() for ln in excerpt[1:6] if ln.strip()]
             return {
                 "found": True,
                 "replied": True,
                 "sender": sender,
-                "by": name.strip(),
+                "by": name,
                 "excerpt": " ".join(body)[:280] or None,
             }
     return {"found": True, "replied": False, "sender": sender}
@@ -372,7 +447,10 @@ def sent_messages(
         r
         for r in ledger.latest_by_attempt().values()
         if r.get("kind") == "message"
-        and r.get("status") in {"sent", "verified", "unverified"}
+        # attempted/unknown may have left too; a follow-up list that hides them
+        # hides exactly the sends nobody could confirm.
+        and r.get("status")
+        in {"sent", "verified", "unverified", "attempted", "unknown"}
     ]
     if not include_canary:
         rows = [r for r in rows if r.get("recipient") != recipient_key(DEFAULT_CANARY)]
@@ -390,7 +468,7 @@ def last_block_sender(conversation_text: str) -> str | None:
     matches = list(_SENDER_RE.finditer(conversation_text or ""))
     if not matches:
         return None
-    return next(g for g in matches[-1].groups() if g).strip()
+    return person_name(next(g for g in matches[-1].groups() if g))
 
 
 def delivered_in_conversation(message: str, conversation: dict[str, Any]) -> bool:

@@ -455,7 +455,10 @@ def register_mivia_tools(
                     if outcome["verified"]
                     else "stopped",
                 }
-            take = min(batch_size, q["messages_left_today"], len(targets))
+            # The pacer also binds the week (60) and the daily total of visible
+            # actions, which the day quota alone does not see.
+            pace_left = outreach.Pacer(ledger).state("message")["left"]
+            take = min(batch_size, q["messages_left_today"], pace_left, len(targets))
             if take == 0:
                 return {
                     **plan,
