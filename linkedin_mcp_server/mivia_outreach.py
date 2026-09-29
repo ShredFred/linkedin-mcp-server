@@ -21,7 +21,7 @@ import time
 import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -147,6 +147,20 @@ def day_start(now: datetime | None = None) -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+def month_start_pst(now: datetime | None = None) -> datetime:
+    """LinkedIn's commercial use limit resets 'at midnight PST on the 1st of each
+    calendar month' (help article a524372).
+
+    A fixed UTC-8 on purpose: Windows has no tz database without the `tzdata`
+    package, and ZoneInfo would then raise in every pacer call of every tool.
+    Daylight saving shifts the reset by one hour at most, which does not matter
+    for a monthly limit.
+    """
+    pst = timezone(timedelta(hours=-8))
+    now = (now or datetime.now().astimezone()).astimezone(pst)
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
 def week_window_start(now: datetime | None = None) -> datetime:
     """Rolling seven days, so a Monday reset cannot double a week's volume."""
     now = now or datetime.now().astimezone()
@@ -265,6 +279,10 @@ class Pacer:
                         int(row.get("count", 1)),
                     )
                 )
+            elif row.get("kind") == "limit_hit":
+                events.append(
+                    (f"{row.get('action')}_limit_hit", datetime.fromisoformat(row["at"]), 1)
+                )
             elif row.get("attempt"):
                 latest[row["attempt"]] = {**latest.get(row["attempt"], {}), **row}
         for row in latest.values():
@@ -307,6 +325,23 @@ class Pacer:
         left = min(budget["day"] - day, budget["week"] - week)
         if action in PACE_WRITE_KINDS:
             left = min(left, PACE_WRITE_TOTAL_PER_DAY - self._writes_today(events))
+        extra: dict[str, Any] = {}
+        month = month_start_pst()
+        hits = [at for a, at, _ in events if a == f"{action}_limit_hit" and at >= month]
+        if hits:
+            # LinkedIn itself said "no more this month": every tool stops until
+            # the reset, instead of hammering a wall that is logged per account.
+            left = 0
+            first = min(hits)
+            reset = month.replace(month=month.month % 12 + 1, year=month.year + (month.month == 12))
+            extra = {
+                "month_limit_hit": first.isoformat(timespec="seconds"),
+                # The measured limit of this account: what was used when it hit.
+                "used_this_month_at_hit": sum(
+                    n for a, at, n in events if a == action and month <= at <= first
+                ),
+                "resets_at": reset.isoformat(),
+            }
         return {
             "action": action,
             "today": day,
@@ -314,7 +349,12 @@ class Pacer:
             "last_7_days": week,
             "per_week": budget["week"],
             "left": max(0, left),
+            **extra,
         }
+
+    def record_limit_hit(self, action: str = "search", *, tool: str | None = None) -> None:
+        """LinkedIn showed its monthly limit notice: remember it until the reset."""
+        self.ledger.append({"kind": "limit_hit", "action": action, "tool": tool})
 
     def take(
         self, action: str, count: int = 1, *, tool: str | None = None

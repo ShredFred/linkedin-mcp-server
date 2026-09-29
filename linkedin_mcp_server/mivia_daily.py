@@ -558,8 +558,10 @@ class Collector:
         if not spec.get("enabled"):
             return []
         orders = list(spec.get("orders") or [])
-        left = self.pacer.state("search")["left"] - int(spec.get("search_reserve", 8))
+        search = self.pacer.state("search")
+        left = search["left"] - int(spec.get("search_reserve", 8))
         cap = min(int(spec.get("max_pages", 15)), max(0, left))
+        why = "monthly_search_limit" if search.get("month_limit_hit") else "search_budget_spent"
         results: list[dict[str, Any]] = []
         for order in orders:
             if cap <= 0:
@@ -568,7 +570,7 @@ class Collector:
                     {
                         "event_id": str(order.get("event_id") or ""),
                         "register_id": order.get("register_id"),
-                        "deferred": "search_budget_spent",
+                        "deferred": why,
                     }
                 )
                 continue
@@ -598,8 +600,10 @@ class Collector:
                 except (Busy, LoginRequired):
                     raise
                 except SearchLimitReached:
-                    # Monthly limit: nothing more today (or this month) -- no
-                    # event may be marked as harvested because of it.
+                    # Monthly limit: nothing more this month -- no event may be
+                    # marked as harvested because of it, and the pacer now
+                    # refuses searches for every tool until the reset.
+                    self.pacer.record_limit_hit("search", tool="mivia_daily")
                     error, stop_all = "monthly_search_limit", True
                     break
                 except Exception as exc:  # one event must not stop the others

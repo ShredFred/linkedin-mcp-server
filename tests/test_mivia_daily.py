@@ -392,3 +392,35 @@ def test_monthly_search_limit_stops_harvest_without_marking_complete(tmp_path, m
     assert res[0]["partial"] == "monthly_search_limit" and res[0]["complete"] is False
     assert res[0]["last_page"] == 1
     assert res[1]["deferred"] == "search_budget_spent"  # rest of the run is not attempted
+
+
+def test_limit_hit_blocks_searches_until_the_monthly_reset(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from linkedin_mcp_server import mivia_outreach as outreach
+
+    monkeypatch.setenv("MIVIA_LINKEDIN_LEDGER", str(tmp_path / "ledger.jsonl"))
+    pacer = outreach.Pacer(outreach.Ledger(tmp_path / "ledger.jsonl"))
+    pacer.take("search", 7, tool="t")
+    assert pacer.state("search")["left"] > 0
+    pacer.record_limit_hit("search", tool="t")
+    st = pacer.state("search")
+    assert st["left"] == 0 and st["used_this_month_at_hit"] == 7 and st["resets_at"]
+    with pytest.raises(outreach.PaceExceeded):
+        pacer.take("search", 1)
+    # Other actions are not affected.
+    assert pacer.state("page_read")["left"] > 0
+    # A hit from last month no longer blocks.
+    last_month = outreach.month_start_pst() - timedelta(days=2)
+    (tmp_path / "ledger.jsonl").write_text(
+        json.dumps({"kind": "limit_hit", "action": "search", "at": last_month.isoformat()}) + "\n",
+        encoding="utf-8")
+    assert pacer.state("search")["left"] > 0
+    assert outreach.month_start_pst(datetime(2026, 10, 1, 7, 30, tzinfo=timezone.utc)).month == 9
+
+
+def test_harvest_after_a_limit_hit_defers_with_the_monthly_reason(tmp_path, monkeypatch):
+    c = _harvest_collector(tmp_path, monkeypatch, [{"event_id": "7286622235937701888", "pages": 2}])
+    c.pacer.record_limit_hit("search")
+    (row,) = asyncio.run(c.harvest())
+    assert row["deferred"] == "monthly_search_limit"
