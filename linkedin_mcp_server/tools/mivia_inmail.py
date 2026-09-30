@@ -54,8 +54,10 @@ def precheck_inmail(
         return {"status": "subject_too_long", "max": SUBJECT_MAX}
     if len(body) > INMAIL_BODY_MAX:
         return {"status": "body_too_long", "max": INMAIL_BODY_MAX}
-    findings = check_message(subject, None) + [
-        f for f in check_message(body, None) if f["code"] != "salutation_unverifiable"
+    findings = [
+        f
+        for f in check_message(subject, None) + check_message(body, None)
+        if f["code"] != "salutation_unverifiable"
     ]
     if findings:
         return {"status": "content_check_failed", "findings": findings}
@@ -128,8 +130,14 @@ def register_mivia_inmail_tools(
                 }
             if target["status"] != "ok":
                 return {"recipient": username, **target}
-            findings = check_message(body, target.get("name"))
-            findings = [f for f in findings if f["code"].startswith("salutation")]
+            # Subject and body both: "Hallo Herr Maier" in the subject line
+            # greets the previous recipient just as visibly as in the body.
+            findings = [
+                f
+                for text in (subject, body)
+                for f in check_message(text, target.get("name"))
+                if f["code"].startswith("salutation")
+            ]
             if findings:
                 return {
                     "recipient": username,

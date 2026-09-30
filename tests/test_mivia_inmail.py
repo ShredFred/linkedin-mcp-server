@@ -164,3 +164,26 @@ class TestToolGates:
         assert self._call("edit_sent_message", {"thread": "x", "new_text": "a"})["status"] == "invalid_thread"
         out = self._call("edit_sent_message", {"thread": "2-abcdefghijkl", "new_text": "http://x.de"})
         assert out["status"] == "content_check_failed"
+
+
+class TestHardening20260930:
+    def test_subject_salutation_not_blocked_before_profile_read(self):
+        assert precheck_inmail("a", "Hallo Herr König", "Text") is None
+
+    def test_edit_landed_only_on_target_index(self):
+        from linkedin_mcp_server.scraping.mivia_inmail import edit_landed
+
+        msgs = [
+            {"index": 0, "own": True, "text": "Danke und bis bald"},
+            {"index": 1, "own": True, "text": "Alter Text"},
+        ]
+        assert not edit_landed(msgs, {"index": 1}, "Danke")
+        msgs[1]["text"] = "Danke (bearbeitet)"
+        assert edit_landed(msgs, {"index": 1}, "Danke")
+        assert not edit_landed(msgs, {"index": 5}, "Danke")
+        assert not edit_landed([{"index": 1, "own": False, "text": "Danke"}], {"index": 1}, "Danke")
+
+    def test_umlaut_and_nbsp_canon(self):
+        from linkedin_mcp_server.scraping.mivia_inmail import canon
+
+        assert canon("Grüße  an  Jörg\n") == "Grüße an Jörg"

@@ -132,6 +132,24 @@ def pick_own_message(
     return {"status": "ok", "message": hits[0]}
 
 
+def edit_landed(
+    messages: list[dict[str, Any]], target: dict[str, Any], new_text: str
+) -> bool:
+    """True when the edited message itself now carries *new_text*.
+
+    Only the message at the target's index counts. Matching any own message
+    reported a short new text ("Danke") as landed because an older message
+    already contained it.
+    """
+    want = canon(new_text)
+    hit = next((m for m in messages if m.get("index") == target.get("index")), None)
+    if hit is None or not hit.get("own"):
+        return False
+    got = canon(hit.get("text", ""))
+    # LinkedIn may append an "(bearbeitet)"/"Edited" marker after the text.
+    return got == want or (got.startswith(want) and len(got) - len(want) <= 20)
+
+
 _TOP_CARD_JS = r"""() => {
   const main = document.querySelector('main') || document.body;
   const sec = main.querySelector('section') || main;
@@ -413,9 +431,7 @@ class MiviaInmail(MiviaActions):
         await save.click()
         await self._wait(3.0, 5.0)
         reread = await self.thread_messages(url)
-        own = [m for m in reread.get("messages", []) if m.get("own")]
-        want = canon(new_text)
-        found = any(canon(m["text"]) == want or want in canon(m["text"]) for m in own)
+        found = edit_landed(reread.get("messages", []), message, new_text)
         return {
             "status": "verified" if found else "unverified",
             "edited": True,
