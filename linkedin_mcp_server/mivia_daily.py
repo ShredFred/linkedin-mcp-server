@@ -44,6 +44,7 @@ from linkedin_mcp_server.scraping.mivia_actions import MiviaActions
 from linkedin_mcp_server.scraping.mivia_events import MiviaEventFinder
 from linkedin_mcp_server.scraping.mivia_network import (
     EVENT_COUNT_JS as _EVENT_COUNT_JS,
+    read_event_count,
     SearchLimitReached,
 )
 
@@ -319,7 +320,7 @@ class Collector:
         state = self._state()
         ev = (state.get("events") or {}).get(event_id) or {}
         await self._goto(f"https://www.linkedin.com/events/{event_id}/")
-        count = await self.session.page.evaluate(_EVENT_COUNT_JS)
+        count = await read_event_count(self.session.page, self.session)
         result: dict[str, Any] = {
             "event_id": event_id,
             "attendee_count": count,

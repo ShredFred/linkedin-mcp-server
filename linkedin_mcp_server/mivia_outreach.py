@@ -521,3 +521,28 @@ def delivered_in_conversation(message: str, conversation: dict[str, Any]) -> boo
     sections = conversation.get("sections") or {}
     haystack = canonical_text(" ".join(str(v) for v in sections.values()))
     return canonical_text(message) in haystack
+
+
+def pace_report() -> dict[str, Any]:
+    """Read-only pacer state for callers outside the fork (MiViA HQ).
+
+    HQ plans its catalogue and harvest share from this instead of a copied
+    number: the caps, today's and the week's use, and what is left per action.
+    Reading it books nothing.
+    """
+    return {
+        "schema": "mivia-pace-report.v1",
+        "budgets": PACE_BUDGETS,
+        "write_kinds": sorted(PACE_WRITE_KINDS),
+        "write_total_per_day": PACE_WRITE_TOTAL_PER_DAY,
+        **Pacer(Ledger.default()).summary(),
+    }
+
+
+if __name__ == "__main__":  # pragma: no cover - thin CLI
+    import sys
+
+    if sys.argv[1:] != ["--pace-report"]:
+        print("usage: python -m linkedin_mcp_server.mivia_outreach --pace-report", file=sys.stderr)
+        raise SystemExit(2)
+    print(json.dumps(pace_report(), ensure_ascii=True))

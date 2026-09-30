@@ -58,6 +58,26 @@ _SEARCH_LIMIT_RE = re.compile(
 )
 
 
+
+EVENT_COUNT_WAIT_SECONDS = 12.0
+
+
+async def read_event_count(page: Any, session: Any, timeout: float = EVENT_COUNT_WAIT_SECONDS) -> int | None:
+    """Attendee total of the open event page, waiting for the late line.
+
+    Shared by the tool and by mivia_daily, so both read the count the same
+    way: right after navigation the line was missing on both events read on
+    30.09.2026 and present six seconds later. Without the wait the daily run
+    saw ``None`` and never triggered a full scan.
+    """
+    deadline = session.monotonic() + timeout
+    while True:
+        count = await page.evaluate(EVENT_COUNT_JS)
+        if count is not None or session.monotonic() >= deadline:
+            return count
+        await session.delay(1.0)
+
+
 class SearchLimitReached(RuntimeError):
     """LinkedIn hides people-search results for the rest of the month."""
 
@@ -475,13 +495,7 @@ class MiviaNetworkReader:
         await self._session.check_rate_limit()
         # The attendee line renders late: right after navigation it was missing on
         # both events read on 30.09.2026 and present six seconds later.
-        count = None
-        deadline = self._session.monotonic() + 12.0
-        while True:
-            count = await self._page.evaluate(EVENT_COUNT_JS)
-            if count is not None or self._session.monotonic() >= deadline:
-                break
-            await self._session.delay(1.0)
+        count = await read_event_count(self._page, self._session)
         return {"event_id": event_id, "attendee_count": count}
 
     async def get_event_attendees(
