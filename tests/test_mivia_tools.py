@@ -242,6 +242,7 @@ def test_fork_tools_are_registered_and_tagged():
         "search_events",
         "get_company_events",
         "get_page_followers",
+        "outreach_selftest",
     }
     assert all("mivia" in t.tags for t in tools)
 

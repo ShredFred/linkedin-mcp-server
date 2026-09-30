@@ -8,7 +8,7 @@ import logging
 import re
 import time
 from typing import Any, Literal
-from urllib.parse import ParseResult, parse_qs, urljoin, urlparse
+from urllib.parse import ParseResult, parse_qs, unquote, urljoin, urlparse
 
 import anyio
 import anyio.lowlevel
@@ -21,6 +21,7 @@ from linkedin_mcp_server.scraping.identifiers import (
     normalize_profile_urn,
     person_profile_url,
 )
+import linkedin_mcp_server.scraping.mivia_urls as mivia_urls
 from linkedin_mcp_server.scraping.navigation import PageNavigator
 from linkedin_mcp_server.scraping.session import ScrapingSession
 
@@ -175,8 +176,15 @@ _MESSAGE_COMPOSER_INSPECT_JS = r"""
             ) {
                 return null;
             }
+            // MiViA fork: compare the decoded, lower-cased slug, the same
+            // rule as scraping/mivia_urls.py. LinkedIn emits umlaut slugs
+            // percent-encoded, so a raw compare failed them all.
             const match = /^\/in\/([^/?#]+)(?:\/.*)?$/.exec(url.pathname);
-            return match ? `/in/${match[1]}/` : null;
+            if (!match) return null;
+            let decoded;
+            try { decoded = decodeURIComponent(match[1]); } catch { return null; }
+            if (!decoded || /[\/?#%\s\x00-\x1f\x7f]/.test(decoded)) return null;
+            return `/in/${decoded.toLowerCase()}/`;
         } catch {
             return null;
         }
@@ -555,9 +563,10 @@ _MESSAGE_CONFIRMATION_READY_JS = (
                 return false;
             }
             const identifier = /^\/in\/([^/]+)/.exec(path)?.[1];
-            return !!identifier && (
-                identifier === arg.profileUrn || `/in/${identifier}/` === arg.profilePath
-            );
+            if (!identifier) return false;
+            let key;
+            try { key = decodeURIComponent(identifier).toLowerCase(); } catch { return false; }
+            return identifier === arg.profileUrn || `/in/${key}/` === arg.profilePath;
         };
         // LinkedIn heads a message with links to its sender's profile
         // (measured). A follow-up from the same sender is assumed to be
@@ -803,8 +812,15 @@ _MESSAGE_COMPOSER_PINNED_JS = r"""
             ) {
                 return null;
             }
+            // MiViA fork: compare the decoded, lower-cased slug, the same
+            // rule as scraping/mivia_urls.py. LinkedIn emits umlaut slugs
+            // percent-encoded, so a raw compare failed them all.
             const match = /^\/in\/([^/?#]+)(?:\/.*)?$/.exec(url.pathname);
-            return match ? `/in/${match[1]}/` : null;
+            if (!match) return null;
+            let decoded;
+            try { decoded = decodeURIComponent(match[1]); } catch { return null; }
+            if (!decoded || /[\/?#%\s\x00-\x1f\x7f]/.test(decoded)) return null;
+            return `/in/${decoded.toLowerCase()}/`;
         } catch {
             return null;
         }
@@ -1062,7 +1078,6 @@ _MESSAGE_COMPOSER_SUBMIT_JS = (
 )
 
 _LINKEDIN_MESSAGE_HOST_RE = re.compile(r"^(?:[a-z0-9-]+\.)*linkedin\.com$")
-_PROFILE_PATH_RE = re.compile(r"^/in/[^/?#]+/$")
 # A thread id is base64url and keeps its padding literally. Measured live:
 # /messaging/thread/2-ZDBkMjZiY2Ut...XzEwMA==/ is what LinkedIn redirects an
 # existing conversation to, and rejecting it stopped every send to a member
@@ -1126,26 +1141,23 @@ def _normalize_profile_urn(value: str | None) -> str | None:
     return candidate.removeprefix(_PROFILE_URN_PREFIX)
 
 
-_PROFILE_ACCEPTED_QUERIES = frozenset({"", "isSelfProfile=false"})
-
-
 def _profile_path_from_url(value: str) -> str | None:
-    parsed = _safe_linkedin_url(value)
-    # MiViA fork: since 2026-09-30 LinkedIn redirects a profile opened by
-    # someone else to ``?isSelfProfile=false``. That exact marker is the only
-    # query accepted; any other query still fails closed.
-    if (
-        parsed is None
-        or parsed.query not in _PROFILE_ACCEPTED_QUERIES
-        or not _PROFILE_PATH_RE.fullmatch(parsed.path)
-    ):
+    """Canonical ``/in/<slug>/`` of a profile page URL, or None (fail closed).
+
+    MiViA fork: the rule lives in ``scraping/mivia_urls.py`` -- benign query
+    keys by allowlist (2026-09-30 ``?isSelfProfile=false`` redirect), no
+    fragment, percent-decoded slug, optional locale segment.
+    """
+    slug = mivia_urls.profile_slug_from_url(value)
+    if slug is None:
         return None
     try:
-        username = normalize_person_identifier(parsed._replace(query="").geturl())
+        username = normalize_person_identifier(slug)
     except LinkedInScraperException:
         return None
-    canonical_path = urlparse(person_profile_url(username, "/")).path
-    return parsed.path if parsed.path == canonical_path else None
+    if mivia_urls.profile_key(username) != mivia_urls.profile_key(slug):
+        return None
+    return mivia_urls.canonical_profile_path(username)
 
 
 def _profile_urn_from_compose_url(value: str, *, base: str | None = None) -> str | None:
@@ -1308,7 +1320,11 @@ class MessageSender:
         target: _ProfileMessageTarget,
     ) -> dict[str, str | bool]:
         return {
-            "profilePath": target.profile_path,
+            # The in-page scripts compare decoded, lower-cased slugs.
+            "profilePath": mivia_urls.identity_path(
+                unquote(target.profile_path[len("/in/") : -1])
+            )
+            or target.profile_path,
             "profileUrn": target.profile_urn,
         }
 

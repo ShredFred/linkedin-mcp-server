@@ -171,7 +171,7 @@
       "call": "send_message",
       "kind": "wait_for_function",
       "operation": "message_composer_ready",
-      "program_digest": "8656a24230d0",
+      "program_digest": "8af33582e134",
       "section": "message",
       "timeout_ms": null
     },
@@ -183,7 +183,7 @@
       "call": "send_message",
       "kind": "evaluate",
       "operation": "message_composer_state",
-      "program_digest": "cf6190c0bce0",
+      "program_digest": "75800d8aae0e",
       "section": "message"
     },
     {
@@ -194,7 +194,7 @@
       "call": "send_message",
       "kind": "evaluate",
       "operation": "message_composer_state",
-      "program_digest": "cf6190c0bce0",
+      "program_digest": "75800d8aae0e",
       "section": "message"
     },
     {
@@ -208,7 +208,7 @@
       "call": "send_message",
       "kind": "evaluate_handle",
       "operation": "message_composer_owner",
-      "program_digest": "c03eace20b1d",
+      "program_digest": "30036810e6f4",
       "section": "message"
     },
     {
@@ -228,7 +228,7 @@
       "handle": "handle-1",
       "kind": "handle.evaluate",
       "operation": "message_composer_write",
-      "program_digest": "040e0d35fd2b",
+      "program_digest": "5825add55118",
       "section": "message"
     },
     {
@@ -241,7 +241,7 @@
       "handle": "handle-1",
       "kind": "handle.evaluate",
       "operation": "message_submit_ready",
-      "program_digest": "1070f9d38c03",
+      "program_digest": "e2f9008d6935",
       "section": "message"
     },
     {
@@ -256,7 +256,7 @@
       "call": "send_message",
       "kind": "evaluate",
       "operation": "message_confirmation_prepare",
-      "program_digest": "0585c12c4269",
+      "program_digest": "4f245ab1cbfb",
       "section": "message"
     },
     {
@@ -269,7 +269,7 @@
       "handle": "handle-1",
       "kind": "handle.evaluate",
       "operation": "message_submit",
-      "program_digest": "1038b5c5c7c8",
+      "program_digest": "e1e6a885ad0a",
       "section": "message"
     },
     {
@@ -285,7 +285,7 @@
       "call": "send_message",
       "kind": "wait_for_function",
       "operation": "message_confirmation_ready",
-      "program_digest": "99f0b8e8254c",
+      "program_digest": "ba5f7a1ec0ba",
       "section": "message",
       "timeout_ms": null
     },

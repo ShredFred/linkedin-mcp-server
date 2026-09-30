@@ -90,6 +90,22 @@ class ActionSignals:
     finds no top-card root on incoming profiles (they have no Message
     button) and would otherwise mis-anchor on sidebar cards."""
 
+    # MiViA fork (2026-09-30): LinkedIn's 2026 top card moved Connect and the
+    # Pending state into the More menu for many profiles. Both carry a
+    # locale-independent ``componentkey`` of the form
+    # ``ConnectButtonstate:invitation:urn:li:member:<id>_pending`` or
+    # ``..._conn...``. Measured live on four German-locale profiles; three of
+    # the eight connect_unavailable results of 2026-09-29 were in fact pending.
+    has_pending_invitation_key: bool = False
+    """A ``ConnectButtonstate:invitation:*_pending`` element exists in the
+    top card or in an open More menu."""
+
+    has_connect_invitation_key: bool = False
+    """A ``ConnectButtonstate:invitation:*_conn*`` element exists in the top
+    card or in an open More menu. Informational only: the write gate stays
+    ``has_invite_anchor``."""
+
+
 
 def detect_connection_state(signals: ActionSignals) -> ConnectionState:
     """Determine the relationship state for a profile from structural signals.
@@ -119,6 +135,10 @@ def detect_connection_state(signals: ActionSignals) -> ConnectionState:
     """
     if signals.has_edit_intro_anchor:
         return "self_profile"
+    # MiViA fork: a pending invitation is the stronger fact. Checked before
+    # the invite anchor so a stale Connect never produces a second invite.
+    if signals.has_pending_invitation_key:
+        return "pending"
     if signals.has_invite_anchor:
         return "connectable"
     if signals.has_incoming_action_row:

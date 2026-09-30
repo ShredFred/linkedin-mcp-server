@@ -400,7 +400,8 @@ class TestConnectWithPerson:
         ):
             result = await actions.connect_with_person("testuser")
 
-        assert result["status"] == "connect_unavailable"
+        # MiViA fork: follow-only is now its own status.
+        assert result["status"] == "follow_only"
         assert result.get("note_sent") is False or "note_sent" not in result
         mock_open_more.assert_awaited_once()
         # Critical: deeplink must NOT fire and dialog must NOT be submitted.
@@ -729,7 +730,8 @@ class TestConnectWithPerson:
                 "https://de.linkedin.com/in/williamhgates"
             )
 
-        assert seen == ["williamhgates"]
+        # MiViA fork: an unavailable card now also re-reads after More.
+        assert seen and set(seen) == {"williamhgates"}
         read.assert_awaited_once_with("williamhgates")
 
 

@@ -89,7 +89,8 @@ class TestMessageTargetUrls:
             ("https://www.linkedin.com:444/in/testuser/", None),
             ("https://www.linkedin.com/in/testuser/edit/intro/", None),
             ("https://www.linkedin.com/in/testuser%2Fedit/", None),
-            ("https://www.linkedin.com/in/testuser/?trk=profile", None),
+            # MiViA fork: trk is allowlisted as benign; unknown keys still fail.
+            ("https://www.linkedin.com/in/testuser/?miniProfileUrn=x", None),
             ("https://www.linkedin.com/in/testuser/#details", None),
         ],
     )

@@ -25,6 +25,13 @@ BEHAVIOUR_CHANGES = [
     "`send_message` accepts multi-line text: LF becomes a paragraph via "
     "`insertParagraph`, never an Enter key, so no half message can be sent. "
     "CR, tab and other control characters are still refused.",
+    "Profile URLs are normalised in one place (`scraping/mivia_urls.py`): "
+    "benign query keys by allowlist (`isSelfProfile=false`, `trk`, ...), no "
+    "fragment, percent-decoded slug (umlauts), optional locale segment; the "
+    "recipient stays pinned by its profile URN and anything else fails closed.",
+    "`connect_with_person` reads the 2026 More menu: `pending` when the "
+    "invitation is only shown there, Connect from the menu (`connect_via: "
+    "more_menu`), and a distinct `follow_only` next to `connect_unavailable`.",
 ]
 
 

@@ -15,12 +15,13 @@ from linkedin_mcp_server.scraping import message_sender as ms
         ("https://www.linkedin.com/in/frederikstadler/?isSelfProfile=false", "/in/frederikstadler/"),
         ("https://www.linkedin.com/in/frederikstadler/", "/in/frederikstadler/"),
         ("https://www.linkedin.com/in/frederikstadler/?isSelfProfile=true", None),
-        ("https://www.linkedin.com/in/frederikstadler/?isSelfProfile=false&trk=x", None),
-        ("https://www.linkedin.com/in/frederikstadler/?trk=profile", None),
+        ("https://www.linkedin.com/in/frederikstadler/?isSelfProfile=false&trk=x", "/in/frederikstadler/"),
+        ("https://www.linkedin.com/in/frederikstadler/?trk=profile", "/in/frederikstadler/"),
+        ("https://www.linkedin.com/in/frederikstadler/?miniProfileUrn=x", None),
         ("https://www.linkedin.com/in/frederikstadler/edit/?isSelfProfile=false", None),
     ],
 )
-def test_profile_path_accepts_only_the_redirect_marker(url, expected):
+def test_profile_path_accepts_the_redirect_marker_and_benign_tracking(url, expected):
     assert ms._profile_path_from_url(url) == expected
 
 

@@ -596,6 +596,7 @@ def register_mivia_tools(
                 "accepted": "sent",
                 "pending": "skipped",
                 "already_connected": "skipped",
+                "follow_only": "not_sent",
                 "send_failed": "unknown",
             }.get(raw, "not_sent")
             ledger.append({"attempt": attempt, "status": status, "detail": raw})
@@ -629,6 +630,43 @@ def register_mivia_tools(
             messages_per_day=messages_per_day,
             invites_per_day=invites_per_day,
             canary=outreach.DEFAULT_CANARY,
+        )
+
+    @mcp.tool(
+        timeout=tool_timeout,
+        title="Outreach Self-Test",
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+        tags={TAG, "messaging", "network"},
+    )
+    async def outreach_selftest(
+        ctx: Context,
+        connect_probe_username: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Read-only check that the Message and Connect actions still resolve, run
+        before a batch so a LinkedIn UI change is caught before the first send.
+        Loads the canary profile (frederikstadler), resolves its Message action
+        and profile URN and its connection state; optionally classifies one
+        not-connected profile (may open its More menu, never clicks an item).
+        Sends nothing, invites nobody. ok=false lists the problems.
+        """
+        pages = 2 if connect_probe_username else 1
+        refusal = _pace("page_read", pages, tool="outreach_selftest")
+        if refusal:
+            return refusal
+        from linkedin_mcp_server.scraping.mivia_selftest import (
+            outreach_selftest as run_selftest,
+        )
+
+        return await _run(
+            ctx,
+            "outreach_selftest",
+            lambda ex: run_selftest(
+                ex._mivia_session,
+                ex._mivia_navigator,
+                canary=outreach.DEFAULT_CANARY,
+                connect_probe=connect_probe_username,
+            ),
         )
 
     from linkedin_mcp_server.tools.mivia_stage2 import register_mivia_stage2_tools

@@ -189,10 +189,37 @@ ACTION_SIGNALS_JS = (
   if (!main) return null;
 
   const safe = CSS.escape(username);
-  const inviteSel = `a[href*="/preload/custom-invite/?vanityName=${safe}"]`;
   const editSel = `a[href*="/in/${safe}/edit/intro/"]`;
 
-  const hasInvite = !!document.querySelector(inviteSel);
+  // MiViA fork: parse vanityName instead of a substring selector. LinkedIn
+  // percent-encodes umlaut slugs and may put other parameters first; the
+  // old selector matched neither and reported connect_unavailable.
+  const fold = value => {
+    try { return decodeURIComponent(value).toLowerCase(); } catch { return null; }
+  };
+  const wanted = fold(username);
+  const hasInvite = Array.from(
+    document.querySelectorAll('a[href*="/preload/custom-invite/"]')
+  ).some(anchor => {
+    try {
+      // The base only resolves relative hrefs; host and path are irrelevant
+      // here because only vanityName is read.
+      const url = new URL(anchor.getAttribute('href') || '', 'https://www.linkedin.com/');
+      const values = url.searchParams.getAll('vanityName');
+      return values.length === 1 && wanted !== null &&
+        values[0].toLowerCase() === wanted;
+    } catch {
+      return false;
+    }
+  });
+  const topScope = main.querySelector('section') || main.firstElementChild || main;
+  const invitationKeys = [topScope, ...document.querySelectorAll('[role="menu"]')]
+    .flatMap(scope => Array.from(
+      scope.querySelectorAll('[componentkey^="ConnectButtonstate:invitation:"]')
+    ))
+    .map(element => element.getAttribute('componentkey') || '');
+  const hasPendingInvitationKey = invitationKeys.some(key => /_pending$/.test(key));
+  const hasConnectInvitationKey = invitationKeys.some(key => /_conn[a-z]*$/.test(key));
   const hasEditIntro = !!main.querySelector(editSel);
 
   const actionRoot = findActionRoot(main);
@@ -224,6 +251,8 @@ ACTION_SIGNALS_JS = (
     hasLabeledActionButton,
     hasLabeledActionAnchor,
     hasIncomingActionRow: !!findIncomingActionRow(main),
+    hasPendingInvitationKey,
+    hasConnectInvitationKey,
   };
 })
 """
@@ -244,8 +273,15 @@ OPEN_MORE_BUTTON_JS = (
   const main = document.querySelector('main');
   if (!main) return false;
   const actionRoot = findActionRoot(main);
-  if (!actionRoot) return false;
-  const moreBtn = actionRoot.querySelector('button[aria-expanded]');
+  // MiViA fork: a profile whose top card has no Message (Connect-only or
+  // Follow-only, 2026 layout) has no compose anchor to walk up from. Fall
+  // back to the first unlabeled menu opener of the top card; the sticky
+  // header's copy carries an aria-label and is skipped.
+  let moreBtn = actionRoot ? actionRoot.querySelector('button[aria-expanded]') : null;
+  if (!moreBtn) {
+    const scope = main.querySelector('section') || main.firstElementChild || main;
+    moreBtn = scope.querySelector('button[aria-expanded]:not([aria-label])');
+  }
   if (!moreBtn) return false;
   moreBtn.click();
   return true;
@@ -490,6 +526,8 @@ class ConnectionActions:
             has_labeled_action_button=bool(data.get("hasLabeledActionButton")),
             has_labeled_action_anchor=bool(data.get("hasLabeledActionAnchor")),
             has_incoming_action_row=bool(data.get("hasIncomingActionRow")),
+            has_pending_invitation_key=bool(data.get("hasPendingInvitationKey")),
+            has_connect_invitation_key=bool(data.get("hasConnectInvitationKey")),
         )
 
     async def _submit_invite_dialog(
@@ -821,11 +859,15 @@ class ConnectionActions:
         # Follow-only profiles may have Connect hidden under the More menu
         # (high-follower / creator-mode profiles). Try opening it and
         # re-reading signals; if the vanityName invite anchor surfaces in
-        # the menu, we can proceed with the deeplink. (The
-        # has_invite_anchor=False guard is implicit: detect_connection_state
-        # only returns "follow_only" after the has_invite_anchor branch
-        # has already failed, so reaching this branch already implies it.)
-        if state == "follow_only":
+        # the menu, we can proceed with the deeplink.
+        #
+        # MiViA fork (2026-09-30): the 2026 top card also hides Pending and
+        # Connect under More on ordinary profiles, and a Connect-only card
+        # has no Message anchor, so the state reads "unavailable". Both
+        # states now open the menu, and the re-read decides between pending,
+        # connect in the menu, follow only and truly unavailable.
+        connect_via = "top_card"
+        if state in ("follow_only", "unavailable"):
             opened = await self._open_more_menu()
             if opened:
                 signals = await self._read_action_signals(username)
@@ -836,6 +878,23 @@ class ConnectionActions:
                 except Exception:
                     logger.debug("Escape after More-menu reread failed", exc_info=True)
                 logger.info("Post-More signals for %s: signals=%s", username, signals)
+                menu_state = connection.detect_connection_state(signals)
+                if menu_state == "pending":
+                    return _connection_result(
+                        url,
+                        "pending",
+                        "A connection request is already pending for this "
+                        "profile (shown in the More menu).",
+                        profile=page_text,
+                    )
+                if signals.has_invite_anchor:
+                    connect_via = "more_menu"
+                elif menu_state == "follow_only" or state == "follow_only":
+                    state = "follow_only"
+            else:
+                # The menu did not open, so what it holds is unknown: never
+                # report follow_only on an unread menu.
+                state = "unavailable"
 
         invite_url = (
             "https://www.linkedin.com/preload/custom-invite/"
@@ -864,6 +923,14 @@ class ConnectionActions:
                         note_sent=False,
                         profile=page_text,
                     )
+            if state == "follow_only":
+                return _connection_result(
+                    url,
+                    "follow_only",
+                    "This profile offers Follow but no Connect action, in the "
+                    "top card or the More menu.",
+                    profile=page_text,
+                )
             return _connection_result(
                 url,
                 "connect_unavailable",
@@ -920,10 +987,12 @@ class ConnectionActions:
                 profile=verified_text or page_text,
             )
 
-        return _connection_result(
+        result = _connection_result(
             url,
             "connected",
             f"Connection request sent. State after send: {verified_state}.",
             note_sent=note_sent,
             profile=verified_text or page_text,
         )
+        result["connect_via"] = connect_via
+        return result

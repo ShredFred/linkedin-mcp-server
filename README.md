@@ -27,6 +27,7 @@
 > - `list_groups` — The account's LinkedIn groups with id, name and member count.
 > - `list_sent_invitations` — List pending sent connection invitations.
 > - `outreach_quota` — Today's and this week's sends and invites from the local outreach ledger.
+> - `outreach_selftest` — Read-only check that the Message and Connect actions still resolve, run before a batch so a LinkedIn UI change is caught before the first send.
 > - `pace_status` — The pacer (Taktgeber): per action kind today's and the last seven days' use against its budget, and the daily total of visible actions.
 > - `search_events` — One LinkedIn event search (/search/results/events/?keywords=...).
 > - `send_campaign_batch` — Send the same text to many recipients safely, one small batch per call.
@@ -37,6 +38,8 @@
 > **Changed behaviour**
 >
 > - `send_message` accepts multi-line text: LF becomes a paragraph via `insertParagraph`, never an Enter key, so no half message can be sent. CR, tab and other control characters are still refused.
+> - Profile URLs are normalised in one place (`scraping/mivia_urls.py`): benign query keys by allowlist (`isSelfProfile=false`, `trk`, ...), no fragment, percent-decoded slug (umlauts), optional locale segment; the recipient stays pinned by its profile URN and anything else fails closed.
+> - `connect_with_person` reads the 2026 More menu: `pending` when the invitation is only shown there, Connect from the menu (`connect_via: more_menu`), and a distinct `follow_only` next to `connect_unavailable`.
 >
 > Install from this fork, not PyPI: `uv tool install "mcp-server-linkedin @ git+https://github.com/ShredFred/linkedin-mcp-server@main"`.
 
