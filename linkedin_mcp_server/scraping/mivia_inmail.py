@@ -202,6 +202,66 @@ _REPLACE_EDITOR_JS = r"""(el, text) => {
   return ok;
 }"""
 
+# Ordered fallback chains. Every entry is evaluated inside a scope already
+# bound to our own message bubble, the open edit form or the InMail dialog, so
+# a fallback can never reach a button belonging to somebody else's message.
+# An entry is a CSS selector or ``(css, text_regex)``.
+_OPTIONS_TRIGGER: tuple[Any, ...] = (
+    "button.msg-s-event-listitem__options-trigger",
+    'button[aria-label*="Optionen"]',
+    'button[aria-label*="options" i]',
+)
+_EDIT_MENU_ITEM: tuple[Any, ...] = (
+    '.artdeco-dropdown__content :text-is("Bearbeiten")',
+    '.artdeco-dropdown__content :text-is("Edit")',
+    ('[role="menuitem"]', r"^\s*(Bearbeiten|Edit)\s*$"),
+)
+_EDIT_CANCEL: tuple[Any, ...] = (
+    "button.msg-edit-form__dismiss-button",
+    'button[aria-label^="Abbrechen"]',
+    'button[aria-label^="Cancel"]',
+    ('button, [role="button"]', r"^\s*(Abbrechen|Cancel)\s*$"),
+)
+_EDIT_SAVE: tuple[Any, ...] = (
+    "button.msg-edit-form__save-button",
+    'button[aria-label^="Speichern"]',
+    'button[aria-label^="Save"]',
+    ('button, [role="button"]', r"^\s*(Speichern|Save)\s*$"),
+)
+_SN_SUBJECT: tuple[Any, ...] = (
+    'input[aria-label^="Betreff"]',
+    'input[aria-label^="Subject"]',
+    'input[placeholder^="Betreff"]',
+    'input[placeholder^="Subject"]',
+    'input[name="subject"]',
+)
+_SN_SEND: tuple[Any, ...] = (
+    ("button", r"^\s*(Senden|Send)\s*$"),
+    'button[aria-label^="Senden"]',
+    'button[aria-label^="Send "]',
+    ('[role="button"]', r"^\s*(Senden|Send)\s*$"),
+)
+
+
+async def first_match(scope: Any, chain: tuple[Any, ...], *, last: bool = False) -> Any:
+    """Locator of the first chain entry with a hit in ``scope``; else None.
+
+    None instead of a dangling locator lets the caller answer with a status
+    rather than run into a click timeout.
+    """
+    for entry in chain:
+        if isinstance(entry, tuple):
+            css, pattern = entry
+            loc = scope.locator(css).filter(has_text=re.compile(pattern))
+        else:
+            loc = scope.locator(entry)
+        try:
+            if await loc.count():
+                return loc.last if last else loc.first
+        except Exception:
+            logger.debug("selector %r failed", entry, exc_info=True)
+    return None
+
 
 class MiviaInmail(MiviaActions):
     """InMail send and message edit. Every write sits behind ``confirm``."""
@@ -235,7 +295,9 @@ class MiviaInmail(MiviaActions):
         await self._wait(1.0, 1.8)
         items = await self._page.evaluate(_MENU_JS)
         await self._page.keyboard.press("Escape")
-        sn = next((i["h"] for i in items if i.get("h") and "/sales/people/" in i["h"]), None)
+        sn = next(
+            (i["h"] for i in items if i.get("h") and "/sales/people/" in i["h"]), None
+        )
         result["menu"] = [i["t"] for i in items if i.get("t")]
         if not sn:
             return {**result, "status": "no_sales_navigator_route"}
@@ -259,7 +321,9 @@ class MiviaInmail(MiviaActions):
         )
         if await button.count() == 0:
             return {"status": "inmail_not_allowed", "sent": False}
-        lead_text = await self._page.evaluate("() => document.body.innerText.slice(0, 2500)")
+        lead_text = await self._page.evaluate(
+            "() => document.body.innerText.slice(0, 2500)"
+        )
         if parse_degree(lead_text) == 1:
             return {"status": "first_degree", "sent": False}
         await button.click()
@@ -274,9 +338,7 @@ class MiviaInmail(MiviaActions):
         # post saying "for free" must not read as an Open Profile.
         header = re.split(r"Empfängerinformationen|Recipient information", text)[0]
         credits = parse_credits(header)
-        subject_field = dialog.locator(
-            'input[aria-label^="Betreff"], input[aria-label^="Subject"], input[placeholder^="Betreff"]'
-        ).first
+        subject_field = await first_match(dialog, _SN_SUBJECT)
         body_field = dialog.locator('textarea[name="message"]').first
         base = {"credits": credits, "composer": "sales_navigator"}
 
@@ -292,7 +354,7 @@ class MiviaInmail(MiviaActions):
             # No credit line: an existing conversation or a connection. Never
             # send something whose kind we cannot name.
             return await discard("not_an_inmail_composer")
-        if await subject_field.count() == 0 or await body_field.count() == 0:
+        if subject_field is None or await body_field.count() == 0:
             return await discard("composer_fields_missing")
         await subject_field.fill(subject)
         await body_field.fill(body)
@@ -303,12 +365,8 @@ class MiviaInmail(MiviaActions):
             await subject_field.fill("")
             await body_field.fill("")
             return await discard("composer_mismatch")
-        send = (
-            dialog.locator("button")
-            .filter(has_text=re.compile(r"^\s*(Senden|Send)\s*$"))
-            .last
-        )
-        if await send.count() == 0 or await send.is_disabled():
+        send = await first_match(dialog, _SN_SEND, last=True)
+        if send is None or await send.is_disabled():
             await subject_field.fill("")
             await body_field.fill("")
             return await discard("send_button_unavailable")
@@ -344,9 +402,9 @@ class MiviaInmail(MiviaActions):
             if await close.count():
                 await close.first.click()
                 await self._wait(0.8, 1.4)
-                discard = self._page.locator('[role="alertdialog"] button:visible, [role="dialog"] button:visible').filter(
-                    has_text=re.compile(r"^\s*(Verwerfen|Discard)\s*$")
-                )
+                discard = self._page.locator(
+                    '[role="alertdialog"] button:visible, [role="dialog"] button:visible'
+                ).filter(has_text=re.compile(r"^\s*(Verwerfen|Discard)\s*$"))
                 if await discard.count():
                     await discard.first.click()
         except Exception:
@@ -381,8 +439,8 @@ class MiviaInmail(MiviaActions):
         await bubble.scroll_into_view_if_needed()
         await bubble.hover()
         await self._wait(0.8, 1.4)
-        trigger = bubble.locator("button.msg-s-event-listitem__options-trigger").first
-        if await trigger.count() == 0:
+        trigger = await first_match(bubble, _OPTIONS_TRIGGER)
+        if trigger is None:
             return []
         await trigger.click()
         await self._wait(0.8, 1.4)
@@ -391,13 +449,27 @@ class MiviaInmail(MiviaActions):
     async def edit(
         self, url: str, message: dict[str, Any], new_text: str, *, confirm: bool
     ) -> dict[str, Any]:
+        if message.get("own") is False:
+            return {"status": "not_own_message", "edited": False}
         menu = await self._open_menu(message["index"])
+        if not menu:
+            await self._page.keyboard.press("Escape")
+            return {
+                "status": "editor_mismatch",
+                "edited": False,
+                "reason": "no_options_trigger",
+            }
         if not any(m in ("Bearbeiten", "Edit") for m in menu):
             await self._page.keyboard.press("Escape")
             return {"status": "edit_window_closed", "edited": False, "menu": menu}
-        item = self._page.locator(
-            '.artdeco-dropdown__content :text-is("Bearbeiten"), .artdeco-dropdown__content :text-is("Edit")'
-        ).first
+        item = await first_match(self._page, _EDIT_MENU_ITEM)
+        if item is None:
+            await self._page.keyboard.press("Escape")
+            return {
+                "status": "editor_mismatch",
+                "edited": False,
+                "reason": "no_edit_menu_item",
+            }
         await item.click()
         form = self._page.locator(_EDIT_FORM).first
         try:
@@ -405,8 +477,16 @@ class MiviaInmail(MiviaActions):
         except Exception:
             return {"status": "edit_form_not_opened", "edited": False}
         editor = form.locator('[contenteditable="true"]').first
-        cancel = form.locator("button.msg-edit-form__dismiss-button").first
-        save = form.locator("button.msg-edit-form__save-button").first
+        cancel = await first_match(form, _EDIT_CANCEL)
+        save = await first_match(form, _EDIT_SAVE)
+        if cancel is None or await editor.count() == 0:
+            # Without a way back the editor must not be touched at all.
+            await self._page.keyboard.press("Escape")
+            return {
+                "status": "edit_form_mismatch",
+                "edited": False,
+                "reason": "no_cancel_or_editor",
+            }
         prefilled = canon(await editor.inner_text())
         if prefilled != canon(message["text"]):
             await cancel.click()
@@ -421,7 +501,7 @@ class MiviaInmail(MiviaActions):
         if not inserted or typed != canon(new_text):
             await cancel.click()
             return {"status": "editor_mismatch", "edited": False, "typed": typed[:200]}
-        if await save.count() == 0 or await save.is_disabled():
+        if save is None or await save.is_disabled():
             await cancel.click()
             return {"status": "save_button_unavailable", "edited": False}
         if not confirm:

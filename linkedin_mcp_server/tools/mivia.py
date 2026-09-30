@@ -109,6 +109,7 @@ def _ledger_guard(fn: Any) -> Any:
         except outreach.LedgerCorrupt as exc:
             return ledger_corrupt_status(exc)
 
+    guarded._mivia_ledger_guarded = True  # type: ignore[attr-defined]
     return guarded
 
 

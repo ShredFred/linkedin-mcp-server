@@ -432,3 +432,37 @@ def test_invite_note_limit_default_200_configurable(monkeypatch, env, length, ok
         assert out is None or out["status"] != "note_too_long"
     else:
         assert out["status"] == "note_too_long"
+
+
+# -- 2026-09-30 round 3: every registered mivia tool sits behind the guard ----
+
+
+def _registered_tools():
+    import linkedin_mcp_server.tools.mivia as m
+
+    mcp = FastMCP("t")
+    m.register_mivia_tools(mcp)
+    return {t.name: t for t in asyncio.run(mcp.list_tools())}
+
+
+_TOOLS = _registered_tools()
+
+
+def test_registry_is_not_empty():
+    assert len(_TOOLS) >= 25
+
+
+@pytest.mark.parametrize("name", sorted(_TOOLS))
+def test_every_tool_maps_ledger_corrupt_to_status(name):
+    import linkedin_mcp_server.tools.mivia as m
+
+    fn = _TOOLS[name].fn
+    assert getattr(fn, "_mivia_ledger_guarded", False), (
+        f"{name} not behind _ledger_guard"
+    )
+
+    async def boom(*a, **k):
+        raise outreach.LedgerCorrupt(outreach.Ledger.default().path, 7)
+
+    out = asyncio.run(m._ledger_guard(boom)())
+    assert out["status"] == "ledger_corrupt" and out["line"] == 7
