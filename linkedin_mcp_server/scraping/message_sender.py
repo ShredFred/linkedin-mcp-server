@@ -1603,6 +1603,18 @@ class MessageSender:
                 "action.",
             )
 
+        # MiViA fork: the landed page must be the requested person. The URL
+        # normaliser accepts benign query keys; a redirect to another slug
+        # must not carry the send to someone else.
+        if mivia_urls.profile_key(
+            unquote(target.profile_path[len("/in/") : -1])
+        ) != mivia_urls.profile_key(linkedin_username):
+            return contracts.message_action_result(
+                profile_url,
+                "recipient_resolution_failed",
+                "The loaded profile is not the requested one (redirect?).",
+            )
+
         supplied_urn = _normalize_profile_urn(profile_urn) if profile_urn else None
         if profile_urn is not None and supplied_urn != target.profile_urn:
             return contracts.message_action_result(

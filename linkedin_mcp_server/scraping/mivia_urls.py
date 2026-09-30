@@ -17,8 +17,9 @@ without loosening identity:
   hold ``dieter-könig-...``; a raw string compare made every umlaut slug a
   mismatch, and the vanityName selector in the connect path silently never
   matched them (two of the eight connect_unavailable results of 2026-09-29).
-* An optional two-letter locale segment (``/in/<slug>/de/``) is the same
-  profile in another UI language and is folded away.
+* Any further path segment fails closed, a two-letter "locale" one
+  included: the logged-in UI switches language by the ``locale`` query key,
+  and a folded segment would be a guess about what the page is.
 
 Identity itself is never proven by the URL: the sender still pins the
 recipient by its profile URN, and this module only decides whether a page
@@ -31,7 +32,7 @@ import re
 from urllib.parse import parse_qsl, quote, unquote, urlparse
 
 _HOST_RE = re.compile(r"^(?:[a-z0-9-]+\.)*linkedin\.com$")
-_PROFILE_RE = re.compile(r"^/in/([^/]+)(?:/([a-z]{2}))?/?$")
+_PROFILE_RE = re.compile(r"^/in/([^/]+)/?$")
 
 #: Query keys that carry no identity. ``None`` allows any single value;
 #: a set restricts the value. Everything else fails closed.

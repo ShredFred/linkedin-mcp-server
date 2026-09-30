@@ -124,9 +124,10 @@ async def outreach_selftest(
 
     actions = ConnectionActions(session, navigator, _unread)
     canary_connect = await _connect_state(actions, session, canary)
-    if canary_connect["state"] != "already_connected":
+    canary_state = canary_connect.get("state_after_more_menu", canary_connect["state"])
+    if canary_state != "already_connected":
         problems.append(
-            f"canary classified as {canary_connect['state']}, expected already_connected"
+            f"canary classified as {canary_state}, expected already_connected"
         )
 
     result: dict[str, Any] = {

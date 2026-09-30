@@ -112,6 +112,10 @@ def detect_connection_state(signals: ActionSignals) -> ConnectionState:
 
     Resolution order:
 
+    MiViA fork: ``pending`` by ``componentkey`` (top card or open More
+    menu) now comes right after ``self_profile``, unless the incoming-request
+    row is present.
+
     1. ``self_profile`` — edit-intro anchor (URL).
     2. ``connectable`` — vanityName invite anchor (URL).
     3. ``incoming_request`` — structural action-row fingerprint. Must
@@ -136,8 +140,9 @@ def detect_connection_state(signals: ActionSignals) -> ConnectionState:
     if signals.has_edit_intro_anchor:
         return "self_profile"
     # MiViA fork: a pending invitation is the stronger fact. Checked before
-    # the invite anchor so a stale Connect never produces a second invite.
-    if signals.has_pending_invitation_key:
+    # the invite anchor so a stale Connect never produces a second invite,
+    # but never on an incoming-request row, which must stay acceptable.
+    if signals.has_pending_invitation_key and not signals.has_incoming_action_row:
         return "pending"
     if signals.has_invite_anchor:
         return "connectable"

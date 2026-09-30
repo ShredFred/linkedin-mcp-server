@@ -205,14 +205,29 @@ ACTION_SIGNALS_JS = (
       // The base only resolves relative hrefs; host and path are irrelevant
       // here because only vanityName is read.
       const url = new URL(anchor.getAttribute('href') || '', 'https://www.linkedin.com/');
+      const host = url.hostname.toLowerCase().replace(/\.$/, '');
+      if (
+        url.protocol !== 'https:' ||
+        !/(^|\.)linkedin\.com$/.test(host) ||
+        url.pathname !== '/preload/custom-invite/'
+      ) {
+        return false;
+      }
       const values = url.searchParams.getAll('vanityName');
+      // searchParams already decoded once; fold again only for case.
       return values.length === 1 && wanted !== null &&
         values[0].toLowerCase() === wanted;
     } catch {
       return false;
     }
   });
-  const topScope = main.querySelector('section') || main.firstElementChild || main;
+  // The top card is the first section that wraps no other section, outside
+  // any aside (same rule as the message target). The outer wrapper section
+  // also holds posts and "people you may know" cards whose Connect/Pending
+  // keys belong to other members (measured 2026-09-30).
+  const topScope = Array.from(main.querySelectorAll('section')).find(
+    element => !element.closest('aside') && !element.querySelector('section')
+  ) || main.firstElementChild || main;
   const invitationKeys = [topScope, ...document.querySelectorAll('[role="menu"]')]
     .flatMap(scope => Array.from(
       scope.querySelectorAll('[componentkey^="ConnectButtonstate:invitation:"]')
@@ -279,8 +294,15 @@ OPEN_MORE_BUTTON_JS = (
   // header's copy carries an aria-label and is skipped.
   let moreBtn = actionRoot ? actionRoot.querySelector('button[aria-expanded]') : null;
   if (!moreBtn) {
-    const scope = main.querySelector('section') || main.firstElementChild || main;
-    moreBtn = scope.querySelector('button[aria-expanded]:not([aria-label])');
+    // Only inside the top card itself (the first section that wraps no
+    // other section): the outer wrapper also holds post and "people you
+    // may know" controls.
+    const scope = Array.from(main.querySelectorAll('section')).find(
+      element => !element.closest('aside') && !element.querySelector('section')
+    );
+    moreBtn = scope
+      ? scope.querySelector('button[aria-expanded]:not([aria-label])')
+      : null;
   }
   if (!moreBtn) return false;
   moreBtn.click();
@@ -288,6 +310,16 @@ OPEN_MORE_BUTTON_JS = (
 })
 """
 )
+
+# MiViA fork: is a Pending invitation shown in an open More menu? The
+# componentkey is locale-independent (measured 2026-09-30).
+MENU_PENDING_JS = r"""
+(() => Array.from(
+  document.querySelectorAll(
+    '[role="menu"] [componentkey^="ConnectButtonstate:invitation:"]'
+  )
+).some(element => /_pending$/.test(element.getAttribute('componentkey') || '')))
+"""
 
 # Click Accept on an incoming-request profile. Accept is the FIRST labeled
 # button in the fingerprinted row — primary actions render first in
@@ -477,6 +509,26 @@ class ConnectionActions:
         except PlaywrightTimeoutError:
             logger.debug("More menu did not appear after click")
             return False
+
+    async def _more_menu_shows_pending(self) -> bool:
+        """MiViA fork: open More, look only for this card's Pending key, close.
+
+        Only a literal ``true`` from the page counts, so an unreadable menu is
+        "not shown" and the upstream write gate (the vanityName anchor)
+        decides as before.
+        """
+        if not await self._open_more_menu():
+            return False
+        try:
+            shown = await self._session.page.evaluate(MENU_PENDING_JS)
+        except Exception:
+            logger.debug("Pending peek in the More menu failed", exc_info=True)
+            shown = False
+        try:
+            await self._session.page.keyboard.press("Escape")
+        except Exception:
+            logger.debug("Escape after the pending peek failed", exc_info=True)
+        return shown is True
 
     async def _click_incoming_accept(self) -> bool:
         """Click Accept on an incoming-request profile, locale-independently.
@@ -867,6 +919,16 @@ class ConnectionActions:
         # states now open the menu, and the re-read decides between pending,
         # connect in the menu, follow only and truly unavailable.
         connect_via = "top_card"
+        if state == "connectable" and await self._more_menu_shows_pending():
+            # A stale top-card Connect next to a Pending that is only shown
+            # in the menu must not produce a second invite.
+            return _connection_result(
+                url,
+                "pending",
+                "A connection request is already pending for this profile "
+                "(shown in the More menu).",
+                profile=page_text,
+            )
         if state in ("follow_only", "unavailable"):
             opened = await self._open_more_menu()
             if opened:

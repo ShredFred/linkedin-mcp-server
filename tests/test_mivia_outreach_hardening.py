@@ -54,7 +54,7 @@ PROFILE = f"https://www.linkedin.com/in/{USER_HREF}/?isSelfProfile=false"
             "https://www.linkedin.com/in/jane/?isSelfProfile=false&trk=x&lipi=y",
             "/in/jane/",
         ),
-        ("https://www.linkedin.com/in/jane/de/", "/in/jane/"),
+        ("https://www.linkedin.com/in/jane/de/", None),
         ("https://www.linkedin.com/in/jane", "/in/jane/"),
         ("https://de.linkedin.com/in/jane/?originalSubdomain=de", "/in/jane/"),
         # Fail closed:
@@ -174,6 +174,17 @@ CASES = {
     # Another member's pending card elsewhere on the page is not ours.
     "sidebar_pending_is_not_ours": (
         _page(_top(_COMPOSE, _SALES_NAV, _MORE) + _OTHER_CONNECT),
+        "follow_only",
+    ),
+    # 2026 layout: an outer wrapper section holds the top card and a later
+    # section with another member's Pending card.
+    "wrapper_section_other_pending": (
+        _page(
+            "<section>"
+            + _top(_COMPOSE, _SALES_NAV, _MORE)
+            + '<section><a componentkey="ConnectButtonstate:invitation:'
+            'urn:li:member:9_pending">x</a></section></section>'
+        ),
         "follow_only",
     ),
 }
@@ -441,3 +452,88 @@ async def test_selftest_flags_a_lost_message_action(mock_page) -> None:
     )
     assert result["ok"] is False
     assert len(result["problems"]) == 2
+
+
+# --------------------------------------------------------------------------
+# Review findings (mco/cursor, 2026-09-30)
+# --------------------------------------------------------------------------
+
+
+async def test_stale_connect_with_pending_in_menu_sends_nothing(mock_page) -> None:
+    """P0: a top-card Connect next to a Pending shown only in More."""
+    actions = _flow_actions(mock_page, ["text"])
+    with (
+        patch.object(
+            actions,
+            "_read_action_signals",
+            new_callable=AsyncMock,
+            return_value=_sig(has_invite_anchor=True),
+        ),
+        patch.object(
+            actions,
+            "_more_menu_shows_pending",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch.object(PageNavigator, "_navigate_to_page", new_callable=AsyncMock) as nav,
+    ):
+        result = await actions.connect_with_person(USER)
+    assert result["status"] == "pending"
+    nav.assert_not_awaited()
+
+
+@pytest.mark.browser_dom
+@pytest.mark.xdist_group("browser_runtime")
+async def test_menu_pending_peek_reads_only_the_menu(dom_page) -> None:
+    from linkedin_mcp_server.scraping.connection_actions import MENU_PENDING_JS
+
+    await dom_page.set_content(_page(_top(_COMPOSE, _MORE) + _OTHER_CONNECT))
+    assert await dom_page.evaluate(MENU_PENDING_JS) is False
+    await dom_page.set_content(_page(_top(_COMPOSE, _MORE), _menu(_MENU_PENDING)))
+    assert await dom_page.evaluate(MENU_PENDING_JS) is True
+
+
+@pytest.mark.browser_dom
+@pytest.mark.xdist_group("browser_runtime")
+@pytest.mark.parametrize(
+    "href",
+    [
+        f"https://evil.example/preload/custom-invite/?vanityName={USER_HREF}",
+        f"/preload/custom-invite/extra/?vanityName={USER_HREF}",
+        f"/preload/custom-invite/?vanityName={USER_HREF}&vanityName=x",
+    ],
+)
+async def test_invite_gate_requires_linkedins_own_route(dom_page, href: str) -> None:
+    await dom_page.set_content(
+        _page(_top(f'<a href="{href}" aria-label="x">Vernetzen</a>', _SALES_NAV, _MORE))
+    )
+    signals = await _dom_actions(dom_page)._read_action_signals(USER)
+    assert signals.has_invite_anchor is False
+
+
+async def test_send_refuses_a_redirect_to_another_slug(mock_page) -> None:
+    """P0: the landed page must be the requested person."""
+    other = ms._ProfileMessageTargetResolution(
+        "resolved",
+        ms._ProfileMessageTarget(
+            "/in/someone-else/",
+            "ACoAAx",
+            "https://www.linkedin.com/messaging/compose/?recipient=ACoAAx",
+            "S",
+        ),
+    )
+    session = ScrapingSession(mock_page)
+    sender = ms.MessageSender(session, PageNavigator(session))
+    with (
+        patch.object(PageNavigator, "_navigate_to_page", new_callable=AsyncMock),
+        patch.object(
+            ms.MessageSender,
+            "_read_profile_message_target",
+            new_callable=AsyncMock,
+            return_value=other,
+        ),
+    ):
+        result = await sender.send_message(
+            "frederikstadler", "Hallo", confirm_send=True
+        )
+    assert result["status"] == "recipient_resolution_failed"
