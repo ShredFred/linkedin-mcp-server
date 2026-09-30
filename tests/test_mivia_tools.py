@@ -382,3 +382,16 @@ def test_own_rsvp_from_page_probe():
     assert own_rsvp_from({"networking_tab": False, "attend_button": {"text": "Teilnehmen", "disabled": False}}) is False
     assert own_rsvp_from({"networking_tab": True, "attend_button": {"text": "Teilnehmen", "disabled": True}}) is False
     assert own_rsvp_from({}) is None
+
+
+def test_event_page_flags_gone_and_cancelled():
+    from linkedin_mcp_server.scraping.mivia_network import event_page_flags
+
+    eid = "7286622235937701888"
+    assert event_page_flags(eid, f"/events/{eid}/", "HK 2025\n98 Teilnehmer") == {"gone": False, "cancelled": False}
+    assert event_page_flags(eid, "/feed/", "Startseite")["gone"] is True
+    assert event_page_flags(eid, f"/events/{eid}/", "Diese Seite existiert nicht")["gone"] is True
+    assert event_page_flags(eid, f"/events/{eid}/", "Titel\nDieses Event wurde abgesagt\n")["cancelled"] is True
+    # "abgesagt" inside a sentence of the description is not the banner
+    assert event_page_flags(eid, f"/events/{eid}/", "Der Vortrag wurde abgesagt und verschoben")["cancelled"] is False
+    assert event_page_flags(eid, None, None) == {"gone": False, "cancelled": False}

@@ -302,7 +302,9 @@ def register_mivia_tools(
             event_id, attendee_count, own_rsvp (true = "Networking" tab shown,
             false = "Teilnehmen"/"Attend" button shown, null = unknown),
             attend_button {text, disabled} or null, networking_tab, and
-            acting_as (text of a page-actor switch if the page offers one).
+            acting_as (text of a page-actor switch if the page offers one),
+            gone (page missing or redirected away from /events/) and
+            cancelled (LinkedIn's cancelled banner as its own line).
         """
         event_id = event_id.strip().strip("/").rsplit("/", 1)[-1]
         refusal = _pace("page_read", tool="get_event_status")

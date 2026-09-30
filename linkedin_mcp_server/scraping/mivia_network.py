@@ -66,8 +66,32 @@ EVENT_STATUS_JS = r"""() => {
       disabled: !!(attend.disabled || attend.getAttribute('aria-disabled') === 'true')} : null,
     networking_tab: !!networking,
     acting_as: actor ? clean(actor[0]).slice(0, 80) : null,
+    path: location.pathname,
+    head: txt.slice(0, 2000),
   };
 }"""
+
+_GONE_RE = re.compile(
+    r"(Diese Seite existiert nicht|Seite nicht gefunden|Diese Veranstaltung ist nicht (?:mehr )?verfügbar|"
+    r"This page doesn.t exist|Page not found|This event is (?:no longer )?(?:un)?available|"
+    r"Event nicht verfügbar)",
+    re.I,
+)
+_CANCELLED_RE = re.compile(
+    r"^\s*(?:Dieses Event wurde abgesagt|Event abgesagt|Veranstaltung abgesagt|Abgesagt|"
+    r"This event (?:has been|was) cancell?ed|Event cancell?ed|Cancell?ed)\s*$",
+    re.I | re.M,
+)
+
+
+def event_page_flags(event_id: str, path: str | None, head: str | None) -> dict[str, bool]:
+    """gone: the event page is missing (404 text, or redirected away from /events/);
+    cancelled: LinkedIn shows the cancelled banner as a line of its own. Text only, no clicks."""
+    path = path or ""
+    head = head or ""
+    redirected = bool(path) and "/events/" not in path
+    return {"gone": bool(_GONE_RE.search(head)) or redirected,
+            "cancelled": bool(_CANCELLED_RE.search(head))}
 
 
 def own_rsvp_from(status: dict[str, Any] | None) -> bool | None:
@@ -531,6 +555,7 @@ class MiviaNetworkReader:
         count = await read_event_count(self._page, self._session)
         status = await self._page.evaluate(EVENT_STATUS_JS) or {}
         status["own_rsvp"] = own_rsvp_from(status)
+        status.update(event_page_flags(event_id, status.pop("path", None), status.pop("head", None)))
         return {"event_id": event_id, "attendee_count": count, **status}
 
     async def event_attendee_count(self, event_id: str) -> dict[str, Any]:
