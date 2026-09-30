@@ -44,6 +44,41 @@ EVENT_COUNT_JS = r"""() => {
   return m ? parseInt(m[1].replace(/[.,]/g, ''), 10) : null;
 }"""
 
+# Own RSVP state of the open event page, read only (nothing is clicked).
+# Measured 30.09.2026: an event the account has joined shows a "Networking"
+# tab instead of the "Teilnehmen"/"Attend" button; past events without an RSVP
+# still show an active "Teilnehmen" button. "acting_as" only reports whether
+# the page offers a page-actor switch ("Als ... handeln", "Acting as").
+EVENT_STATUS_JS = r"""() => {
+  const main = document.querySelector('main') || document.body;
+  const clean = s => (s || '').replace(/\s+/g, ' ').trim();
+  const btns = [...main.querySelectorAll('button, a[role="button"], [role="tab"], a')];
+  const attend = btns.find(b => /^(Teilnehmen|Attend|Beitreten|Join)$/i.test(clean(b.innerText)));
+  const networking = btns.find(b => /^Networking$/i.test(clean(b.innerText)));
+  const txt = main.innerText || '';
+  const actor = /(Als\s.{1,60}?\s(?:handeln|agieren|kommentieren)|Acting as|Interact(?:ing)? as|Switch to page)/i.exec(txt);
+  let rsvp = null;
+  if (networking && !attend) rsvp = true;
+  else if (attend) rsvp = false;
+  return {
+    own_rsvp: rsvp,
+    attend_button: attend ? {text: clean(attend.innerText),
+      disabled: !!(attend.disabled || attend.getAttribute('aria-disabled') === 'true')} : null,
+    networking_tab: !!networking,
+    acting_as: actor ? clean(actor[0]).slice(0, 80) : null,
+  };
+}"""
+
+
+def own_rsvp_from(status: dict[str, Any] | None) -> bool | None:
+    """True/False/None from the page probe; a disabled attend button is no RSVP either."""
+    status = status or {}
+    if status.get("networking_tab") and not status.get("attend_button"):
+        return True
+    if status.get("attend_button"):
+        return False
+    return None
+
 # Human pace. Reading is not what LinkedIn restricts, but a burst of page loads
 # is what a detector sees first.
 # LinkedIn's commercial use limit for people searches (monthly, resets on the
@@ -486,6 +521,17 @@ class MiviaNetworkReader:
                 break
             await self._session.delay(0.5)
         return state
+
+    async def event_status(self, event_id: str) -> dict[str, Any]:
+        """Attendee total plus the account's own RSVP state -- one page view, read-only."""
+        if not _EVENT_ID_RE.match(event_id):
+            raise ValueError("event_id must be the numeric LinkedIn event id")
+        await self._navigator._navigate_to_page(f"https://www.linkedin.com/events/{event_id}/")
+        await self._session.check_rate_limit()
+        count = await read_event_count(self._page, self._session)
+        status = await self._page.evaluate(EVENT_STATUS_JS) or {}
+        status["own_rsvp"] = own_rsvp_from(status)
+        return {"event_id": event_id, "attendee_count": count, **status}
 
     async def event_attendee_count(self, event_id: str) -> dict[str, Any]:
         """Read the attendee total from the event page itself (read-only)."""

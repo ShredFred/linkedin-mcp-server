@@ -16,6 +16,7 @@
 > - `get_company_events` — Events tab of one organiser page (/company/<slug>/events/).
 > - `get_event_attendee_count` — Read the attendee total of a LinkedIn event from its event page -- one page view, no people search, no profile.
 > - `get_event_attendees` — List the attendees of a LinkedIn event via people search with eventAttending, 10 per page, at human pace (3-6 s between pages).
+> - `get_event_status` — One event page view (page_read budget, no people search): attendee total and whether the account itself has RSVP'd.
 > - `get_group_members` — Members of a group the account belongs to (name, slug, degree, headline), in LinkedIn's rendered order.
 > - `get_page_followers` — Newest followers of a company page the account administers (numeric page id, e.g.
 > - `get_post_analytics` — Impressions, members reached, reactions, comments, reposts, saves, sends, profile views and followers gained for the account's own posts.

@@ -289,6 +289,33 @@ def register_mivia_tools(
 
     @mcp.tool(
         timeout=tool_timeout,
+        title="Get Event Status",
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+        tags={TAG, "network", "scraping"},
+    )
+    async def get_event_status(event_id: str, ctx: Context) -> dict[str, Any]:
+        """
+        One event page view (page_read budget, no people search): attendee
+        total and whether the account itself has RSVP'd. Nothing is clicked.
+
+        Returns:
+            event_id, attendee_count, own_rsvp (true = "Networking" tab shown,
+            false = "Teilnehmen"/"Attend" button shown, null = unknown),
+            attend_button {text, disabled} or null, networking_tab, and
+            acting_as (text of a page-actor switch if the page offers one).
+        """
+        event_id = event_id.strip().strip("/").rsplit("/", 1)[-1]
+        refusal = _pace("page_read", tool="get_event_status")
+        if refusal:
+            return refusal
+        return await _run(
+            ctx,
+            "get_event_status",
+            lambda ex: _network(ex).event_status(event_id),
+        )
+
+    @mcp.tool(
+        timeout=tool_timeout,
         title="List Sent Invitations",
         annotations={"readOnlyHint": True, "openWorldHint": True},
         tags={TAG, "network", "scraping"},

@@ -219,6 +219,7 @@ def test_fork_tools_are_registered_and_tagged():
         "list_connections",
         "get_event_attendees",
         "get_event_attendee_count",
+        "get_event_status",
         "list_sent_invitations",
         "create_post",
         "send_message_verified",
@@ -360,3 +361,24 @@ def test_event_attendee_count_waits_for_the_late_attendee_line():
 
     out = asyncio.run(MiviaNetworkReader(Session(), Nav()).event_attendee_count("7457346711301214208"))
     assert out == {"event_id": "7457346711301214208", "attendee_count": 310}
+
+
+def test_event_status_tool_charges_one_page_read(monkeypatch):
+    import linkedin_mcp_server.tools.mivia as m
+
+    taken = []
+    monkeypatch.setattr(m, "_pace", lambda action, count=1, *, tool: taken.append((action, count, tool)) or {"status": "stop"})
+    mcp = FastMCP("t")
+    register_mivia_tools(mcp)
+    res = asyncio.run(mcp.call_tool("get_event_status", {"event_id": "7449450258214014977"}))
+    assert taken == [("page_read", 1, "get_event_status")]
+    assert "stop" in str(res)
+
+
+def test_own_rsvp_from_page_probe():
+    from linkedin_mcp_server.scraping.mivia_network import own_rsvp_from
+
+    assert own_rsvp_from({"networking_tab": True, "attend_button": None}) is True
+    assert own_rsvp_from({"networking_tab": False, "attend_button": {"text": "Teilnehmen", "disabled": False}}) is False
+    assert own_rsvp_from({"networking_tab": True, "attend_button": {"text": "Teilnehmen", "disabled": True}}) is False
+    assert own_rsvp_from({}) is None
