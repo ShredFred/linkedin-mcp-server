@@ -207,7 +207,8 @@ def register_mivia_inmail_tools(
         own message; an ambiguous match is refused. Dry run unless confirm:
         opens the edit form, verifies old and new text, cancels.
 
-        LinkedIn offers "Bearbeiten" only for a while after sending; when the
+        LinkedIn offers "Bearbeiten" for about 60 minutes after sending
+        (measured 2026-09-30); when the
         menu item is missing the status is edit_window_closed. Other codes:
         dry_run, verified, unverified, no_own_message, message_not_found,
         ambiguous_match, unchanged, content_check_failed, edit_form_mismatch,

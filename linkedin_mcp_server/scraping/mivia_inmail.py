@@ -24,8 +24,12 @@ Edit
   ``.msg-s-event-listitem``; the other side's carry ``--other``.
 * Hovering the bubble reveals ``button.msg-s-event-listitem__options-trigger``;
   its dropdown lists "Weiterleiten", "Per E-Mail teilen" and, for an own
-  message still inside the edit window, "Löschen" and "Bearbeiten". A message
-  from the previous day showed neither -- the window is closed then.
+  message still inside the edit window, "Löschen" and "Bearbeiten".
+* **Edit window: about 60 minutes**, for editing and deleting alike. Measured
+  on a test message sent 16:09: both items present at 16:19 … 17:00 and the
+  edit itself at 16:17, both gone at 17:10. The tool does not compute the
+  window; it reads the menu, so a change by LinkedIn surfaces as
+  ``edit_window_closed`` rather than a wrong click.
 * "Bearbeiten" swaps the thread composer for ``form.msg-edit-form__base-form``
   ("Nachricht bearbeiten"), prefilled with the old text in
   ``.msg-form__contenteditable``, with ``button.msg-edit-form__dismiss-button``
