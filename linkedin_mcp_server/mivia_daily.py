@@ -43,7 +43,6 @@ from linkedin_mcp_server.scraping.mivia_engagement import (
 from linkedin_mcp_server.scraping.mivia_actions import MiviaActions
 from linkedin_mcp_server.scraping.mivia_events import MiviaEventFinder
 from linkedin_mcp_server.scraping.mivia_network import (
-    EVENT_COUNT_JS as _EVENT_COUNT_JS,
     read_event_count,
     SearchLimitReached,
 )
@@ -72,6 +71,7 @@ _URNS_JS = r"""(max) => {
   }
   return out;
 }"""
+
 
 class Busy(Exception):
     pass
@@ -189,7 +189,11 @@ class Collector:
             # limit sets the pacer lock, not only the harvest.
             self.pacer.record_limit_hit("search", tool=f"mivia_daily:{name}")
             self.errors.append(
-                {"part": name, "error": "monthly_search_limit", "detail": str(exc)[:200]}
+                {
+                    "part": name,
+                    "error": "monthly_search_limit",
+                    "detail": str(exc)[:200],
+                }
             )
         except Exception as exc:  # one part must not stop the others
             name_ = type(exc).__name__
@@ -564,7 +568,11 @@ class Collector:
         search = self.pacer.state("search")
         left = search["left"] - int(spec.get("search_reserve", 8))
         cap = min(int(spec.get("max_pages", 15)), max(0, left))
-        why = "monthly_search_limit" if search.get("month_limit_hit") else "search_budget_spent"
+        why = (
+            "monthly_search_limit"
+            if search.get("month_limit_hit")
+            else "search_budget_spent"
+        )
         results: list[dict[str, Any]] = []
         for order in orders:
             if cap <= 0:

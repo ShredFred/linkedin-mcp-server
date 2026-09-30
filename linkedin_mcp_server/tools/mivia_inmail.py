@@ -67,7 +67,15 @@ def precheck_inmail(username: str, subject: str, body: str) -> dict[str, Any] | 
 def register_mivia_inmail_tools(
     mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
 ) -> None:
-    from linkedin_mcp_server.tools.mivia import _pace, _peek, _recipient, _run
+    from linkedin_mcp_server.tools.mivia import (
+        _GuardedMcp,
+        _pace,
+        _peek,
+        _recipient,
+        _run,
+    )
+
+    mcp = _GuardedMcp(mcp)  # type: ignore[assignment]
 
     @mcp.tool(
         timeout=max(tool_timeout, 180.0),

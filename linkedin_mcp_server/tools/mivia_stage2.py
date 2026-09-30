@@ -32,6 +32,7 @@ from linkedin_mcp_server.scraping.mivia_engagement import (
 from linkedin_mcp_server.tools.mivia import (
     BATCH_TIMEOUT_SECONDS,
     TAG,
+    _GuardedMcp,
     _pace,
     _recipient,
     _run,
@@ -49,6 +50,8 @@ def _actions(extractor: Any) -> MiviaActions:
 def register_mivia_stage2_tools(
     mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
 ) -> None:
+    mcp = _GuardedMcp(mcp)  # type: ignore[assignment]
+
     @mcp.tool(
         timeout=tool_timeout,
         title="Get Post Engagers",
@@ -451,7 +454,8 @@ def register_mivia_stage2_tools(
                 if not state.get("found"):
                     last = outreach.last_block_sender(text)
                     state = {"found": False, "replied": None, "last_sender": last}
-                sent_at = datetime.fromisoformat(row.get("started_at") or row["at"])
+                sent_at = outreach.row_time(row)
+                assert sent_at is not None  # sent_messages drops undated rows
                 age = (now - sent_at).days
                 entries.append(
                     {
@@ -468,6 +472,7 @@ def register_mivia_stage2_tools(
                 "follow_up_days": follow_up_days,
                 "threads_read": len(entries),
                 "recipients_in_ledger": len(latest),
+                "skipped_undated": outreach.undated_messages(ledger),
                 "replied": [e for e in entries if e.get("replied")],
                 "due": [e for e in entries if e.get("due")],
                 "entries": entries,

@@ -156,7 +156,7 @@ class Ledger:
                 continue
             if row.get("recipient") in skip:
                 continue
-            started = datetime.fromisoformat(row.get("started_at") or row["at"])
+            started = counted_time(row)
             if started >= since:
                 total += 1
         return total
@@ -311,7 +311,7 @@ class Pacer:
                 events.append(
                     (
                         row.get("action"),
-                        datetime.fromisoformat(row["at"]),
+                        counted_time(row),
                         int(row.get("count", 1)),
                     )
                 )
@@ -319,7 +319,7 @@ class Pacer:
                 events.append(
                     (
                         f"{row.get('action')}_limit_hit",
-                        datetime.fromisoformat(row["at"]),
+                        counted_time(row),
                         1,
                     )
                 )
@@ -331,8 +331,7 @@ class Pacer:
                 continue
             if kind == "message" and row.get("recipient") == canary:
                 continue
-            started = datetime.fromisoformat(row.get("started_at") or row["at"])
-            events.append((kind, started, 1))
+            events.append((kind, counted_time(row), 1))
         return events
 
     @staticmethod
@@ -571,8 +570,45 @@ def sent_messages(
     ]
     if not include_canary:
         rows = [r for r in rows if r.get("recipient") != recipient_key(DEFAULT_CANARY)]
-    rows.sort(key=lambda r: r.get("started_at") or r.get("at"), reverse=True)
+    # A row without a readable timestamp cannot be aged or ordered; it is
+    # skipped here (and counted by skipped_undated) instead of crashing the list.
+    rows = [r for r in rows if row_time(r) is not None]
+    rows.sort(key=lambda r: row_time(r), reverse=True)  # type: ignore[arg-type,return-value]
     return rows
+
+
+def counted_time(row: dict[str, Any]) -> datetime:
+    """row_time for budget counting: an undated row counts as now.
+
+    Skipping it would under-count a send that may have left; dating it now
+    over-counts for at most one window, which is the safe side for a pacer.
+    """
+    return row_time(row) or datetime.now().astimezone()
+
+
+def row_time(row: dict[str, Any]) -> datetime | None:
+    """started_at or at as an aware datetime; None when missing or unreadable."""
+    for key in ("started_at", "at"):
+        value = row.get(key)
+        if not isinstance(value, str) or not value:
+            continue
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.astimezone()
+        return parsed
+    return None
+
+
+def undated_messages(ledger: Ledger) -> int:
+    """Message attempts sent_messages() had to skip for want of a timestamp."""
+    return sum(
+        1
+        for r in ledger.latest_by_attempt().values()
+        if r.get("kind") == "message" and row_time(r) is None
+    )
 
 
 def text_head(message: str) -> str:

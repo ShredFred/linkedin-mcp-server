@@ -13,7 +13,9 @@ this module, which keeps upstream merges free of fixture conflicts.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
+import os
 import random
 import re
 import uuid
@@ -72,7 +74,56 @@ def _recipient(value: str | None) -> tuple[str | None, dict[str, Any] | None]:
         return None, {"status": "invalid_recipient", "detail": str(bad), "input": value}
 
 
-INVITE_NOTE_MAX = 300
+# LinkedIn allows 300 characters with Premium and 200 without. 200 is the safe
+# default: a longer note on a free account fails in the dialog, after the
+# invite budget was booked. Raise it via MIVIA_INVITE_NOTE_MAX (max 300).
+INVITE_NOTE_MAX_PREMIUM = 300
+INVITE_NOTE_MAX_DEFAULT = 200
+INVITE_NOTE_MAX_ENV = "MIVIA_INVITE_NOTE_MAX"
+
+
+def invite_note_max() -> int:
+    raw = os.environ.get(INVITE_NOTE_MAX_ENV, "").strip()
+    try:
+        value = int(raw) if raw else INVITE_NOTE_MAX_DEFAULT
+    except ValueError:
+        return INVITE_NOTE_MAX_DEFAULT
+    return max(1, min(value, INVITE_NOTE_MAX_PREMIUM))
+
+
+def ledger_corrupt_status(exc: "outreach.LedgerCorrupt") -> dict[str, Any]:
+    """One status for a corrupt outreach ledger in every mivia tool."""
+    return {
+        "status": "ledger_corrupt",
+        "line": exc.line,
+        "ledger": str(exc.path),
+        "detail": "repair or move the ledger row; nothing was sent or booked",
+    }
+
+
+def _ledger_guard(fn: Any) -> Any:
+    @functools.wraps(fn)
+    async def guarded(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return await fn(*args, **kwargs)
+        except outreach.LedgerCorrupt as exc:
+            return ledger_corrupt_status(exc)
+
+    return guarded
+
+
+class _GuardedMcp:
+    """FastMCP proxy whose tool decorator maps LedgerCorrupt to a status."""
+
+    def __init__(self, mcp: FastMCP):
+        self._mcp = mcp
+
+    def tool(self, *args: Any, **kwargs: Any) -> Any:
+        register = self._mcp.tool(*args, **kwargs)
+        return lambda fn: register(_ledger_guard(fn))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._mcp, name)
 
 
 def check_invite_note(note: str | None) -> dict[str, Any] | None:
@@ -89,8 +140,9 @@ def check_invite_note(note: str | None) -> dict[str, Any] | None:
             "status": "invalid_note",
             "detail": "no control characters or line breaks",
         }
-    if len(note) > INVITE_NOTE_MAX:
-        return {"status": "note_too_long", "max": INVITE_NOTE_MAX}
+    limit = invite_note_max()
+    if len(note) > limit:
+        return {"status": "note_too_long", "max": limit}
     findings = [
         f for f in check_message(note, None) if f["code"] != "salutation_unverifiable"
     ]
@@ -116,7 +168,7 @@ async def _run(ctx: Context, name: str, body: Any) -> dict[str, Any]:
     try:
         extractor = await get_ready_extractor(ctx, tool_name=name)
         return await body(extractor)
-    except ToolError:
+    except (ToolError, outreach.LedgerCorrupt):
         raise
     except AuthenticationError as e:
         try:
@@ -219,6 +271,9 @@ async def _send_and_verify(
 def register_mivia_tools(
     mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
 ) -> None:
+    raw_mcp = mcp
+    mcp = _GuardedMcp(mcp)  # type: ignore[assignment]
+
     @mcp.tool(
         timeout=tool_timeout,
         title="List Connections",
@@ -652,7 +707,11 @@ def register_mivia_tools(
         """
         connect_with_person behind the ledger: refuses once today's invite cap
         (default 20, max 25) or the rolling 7-day cap (100) is reached, and never
-        invites the same person twice. Records every attempt.
+        invites the same person twice. Records every attempt. The invite budget
+        is booked before the browser opens, on purpose: an attempt that dies
+        mid-dialog may still have sent, so it must count. The note is limited
+        to 200 characters (free account) unless MIVIA_INVITE_NOTE_MAX raises it
+        to at most 300 (Premium).
         """
         username, bad = _recipient(linkedin_username)
         if bad:
@@ -775,8 +834,8 @@ def register_mivia_tools(
 
     from linkedin_mcp_server.tools.mivia_stage2 import register_mivia_stage2_tools
 
-    register_mivia_stage2_tools(mcp, tool_timeout=tool_timeout)
+    register_mivia_stage2_tools(raw_mcp, tool_timeout=tool_timeout)
 
     from linkedin_mcp_server.tools.mivia_inmail import register_mivia_inmail_tools
 
-    register_mivia_inmail_tools(mcp, tool_timeout=tool_timeout)
+    register_mivia_inmail_tools(raw_mcp, tool_timeout=tool_timeout)

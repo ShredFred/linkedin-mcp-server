@@ -297,3 +297,138 @@ def test_corrupt_middle_ledger_line_refuses():
     )
     with pytest.raises(outreach.LedgerCorrupt):
         ledger.rows()
+
+
+# -- 2026-09-30 round 2: ledger_corrupt status, undated rows, invite order ----
+
+
+def _corrupt_ledger():
+    ledger = outreach.Ledger.default()
+    ledger.path.parent.mkdir(parents=True, exist_ok=True)
+    ledger.path.write_text('garbage\n{"kind": "pace"}\n', encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "name,args",
+    [
+        ("outreach_quota", {}),
+        ("pace_status", {}),
+        ("connect_guarded", {"linkedin_username": "dieter", "confirm_send": False}),
+        (
+            "send_message_verified",
+            {"linkedin_username": "dieter", "message": "Hallo", "confirm_send": False},
+        ),
+        ("follow_up_list", {}),
+    ],
+)
+def test_corrupt_ledger_is_a_status_in_every_tool(name, args):
+    _corrupt_ledger()
+    out = _call(name, args)
+    assert out["status"] == "ledger_corrupt"
+    assert out["line"] == 1
+
+
+def test_corrupt_ledger_inside_run_is_a_status(monkeypatch):
+    import linkedin_mcp_server.tools.mivia as m
+
+    async def fake_ready(ctx, tool_name):
+        raise outreach.LedgerCorrupt(outreach.Ledger.default().path, 1)
+
+    monkeypatch.setattr(m, "get_ready_extractor", fake_ready)
+    out = _call("list_sent_invitations", {})
+    assert out["status"] == "ledger_corrupt"
+
+
+class _Conv:
+    def __init__(self):
+        self.calls = 0
+
+    async def get_conversation(self, **kw):
+        self.calls += 1
+        return {"sections": {"conversation": ""}}
+
+
+def test_follow_up_list_skips_undated_rows(monkeypatch):
+    import json
+
+    ledger = outreach.Ledger.default()
+    ledger.path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {"attempt": "a", "kind": "message", "recipient": "ohne", "status": "sent"},
+        {
+            "at": "kaputt",
+            "attempt": "b",
+            "kind": "message",
+            "recipient": "kaputt",
+            "status": "sent",
+        },
+        {
+            "at": "2026-09-01T10:00:00+02:00",
+            "attempt": "c",
+            "kind": "message",
+            "recipient": "gut",
+            "status": "sent",
+        },
+    ]
+    ledger.path.write_text(
+        "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8"
+    )
+    import linkedin_mcp_server.tools.mivia_stage2 as s2
+
+    conv = _Conv()
+
+    async def fake_run(ctx, tool, body):
+        return await body(conv)
+
+    monkeypatch.setattr(s2, "_run", fake_run)
+    out = _call("follow_up_list", {}, extractor=conv, monkeypatch=monkeypatch)
+    assert [e["recipient"] for e in out["entries"]] == ["gut"]
+    assert out["skipped_undated"] == 2
+    assert conv.calls == 1
+
+
+class _Invite:
+    def __init__(self):
+        self.budget_at_call = None
+
+    async def connect_with_person(self, username, note=None):
+        self.budget_at_call = _used("invite")
+        return {"status": "connected"}
+
+
+def test_invite_budget_booked_before_browser(monkeypatch):
+    ex = _Invite()
+    out = _call(
+        "connect_guarded",
+        {"linkedin_username": "dieter", "confirm_send": True},
+        extractor=ex,
+        monkeypatch=monkeypatch,
+    )
+    assert out["result"]["status"] == "connected"
+    # deliberate: an attempt that dies mid-dialog may have sent and must count
+    assert ex.budget_at_call == 1
+
+
+@pytest.mark.parametrize(
+    "env,length,ok",
+    [
+        (None, 200, True),
+        (None, 201, False),
+        ("300", 300, True),
+        ("300", 301, False),
+        ("999", 301, False),
+        ("abc", 201, False),
+    ],
+)
+def test_invite_note_limit_default_200_configurable(monkeypatch, env, length, ok):
+    import linkedin_mcp_server.tools.mivia as m
+
+    if env is None:
+        monkeypatch.delenv(m.INVITE_NOTE_MAX_ENV, raising=False)
+    else:
+        monkeypatch.setenv(m.INVITE_NOTE_MAX_ENV, env)
+    out = m.check_invite_note("x" * length)
+    if ok:
+        assert out is None or out["status"] != "note_too_long"
+    else:
+        assert out["status"] == "note_too_long"
