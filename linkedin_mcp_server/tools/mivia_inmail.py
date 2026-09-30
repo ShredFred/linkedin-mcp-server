@@ -18,7 +18,6 @@ from linkedin_mcp_server import mivia_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.mivia_message_checks import check_message
 from linkedin_mcp_server.scraping.contracts import refuse_an_invalid_message
-from linkedin_mcp_server.scraping.identifiers import normalize_person_identifier
 from linkedin_mcp_server.scraping.mivia_inmail import (
     MiviaInmail,
     canon,
@@ -39,9 +38,7 @@ def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
-def precheck_inmail(
-    username: str, subject: str, body: str
-) -> dict[str, Any] | None:
+def precheck_inmail(username: str, subject: str, body: str) -> dict[str, Any] | None:
     """Browser-free refusals for an InMail; None when it may proceed."""
     refusal = refuse_an_invalid_message(username, body)
     if refusal is not None:
@@ -49,7 +46,10 @@ def precheck_inmail(
     if not subject or not subject.strip():
         return {"status": "subject_required"}
     if any(ord(c) < 32 or ord(c) == 127 for c in subject):
-        return {"status": "invalid_subject", "detail": "no control characters or line breaks"}
+        return {
+            "status": "invalid_subject",
+            "detail": "no control characters or line breaks",
+        }
     if len(subject) > SUBJECT_MAX:
         return {"status": "subject_too_long", "max": SUBJECT_MAX}
     if len(body) > INMAIL_BODY_MAX:
@@ -67,7 +67,7 @@ def precheck_inmail(
 def register_mivia_inmail_tools(
     mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
 ) -> None:
-    from linkedin_mcp_server.tools.mivia import _pace, _run
+    from linkedin_mcp_server.tools.mivia import _pace, _peek, _recipient, _run
 
     @mcp.tool(
         timeout=max(tool_timeout, 180.0),
@@ -102,7 +102,9 @@ def register_mivia_inmail_tools(
         ident = linkedin_username or profile_url
         if not ident:
             return {"status": "recipient_required"}
-        username = normalize_person_identifier(ident)
+        username, bad = _recipient(ident)
+        if bad:
+            return bad
         refusal = precheck_inmail(username, subject, body)
         if refusal:
             return {"recipient": username, **refusal}
@@ -111,7 +113,10 @@ def register_mivia_inmail_tools(
         if previous and not allow_repeat:
             return {"recipient": username, "status": "duplicate", "previous": previous}
         if confirm:
-            spent = _pace("inmail", tool="send_inmail")
+            # Peek only: the browser step below may still end without sending
+            # (first_degree, open_profile, no credits), and that must not use
+            # up one of five InMails a day. Booked with the attempt row.
+            spent = _peek("inmail")
             if spent:
                 return {"recipient": username, **spent}
 
@@ -150,22 +155,32 @@ def register_mivia_inmail_tools(
                 return {"recipient": username, "target": target, **result}
             attempt = uuid.uuid4().hex
             sha = outreach.text_sha(subject + "\n" + body)
-            ledger.append(
-                {
-                    "attempt": attempt,
-                    "kind": "inmail",
-                    "recipient": outreach.recipient_key(username),
-                    "text_sha": sha,
-                    "text_head": outreach.text_head(subject),
-                    "status": "attempted",
-                    "started_at": _now(),
+            row = {
+                "attempt": attempt,
+                "kind": "inmail",
+                "recipient": outreach.recipient_key(username),
+                "text_sha": sha,
+                "text_head": outreach.text_head(subject),
+                "status": "attempted",
+                "started_at": _now(),
+            }
+            try:
+                outreach.Pacer(ledger).take("inmail", tool="send_inmail", row=row)
+            except outreach.PaceExceeded as over:
+                return {
+                    "recipient": username,
+                    "status": "pace_budget_spent",
+                    "pace": over.state,
                 }
-            )
             try:
                 result = await reader.inmail(target, subject, body, confirm=True)
             except BaseException:
                 ledger.append(
-                    {"attempt": attempt, "status": "unknown", "detail": "exception during send"}
+                    {
+                        "attempt": attempt,
+                        "status": "unknown",
+                        "detail": "exception during send",
+                    }
                 )
                 raise
             status = result["status"] if result.get("sent") else "not_sent"
@@ -175,11 +190,18 @@ def register_mivia_inmail_tools(
                     "status": status,
                     "detail": result["status"],
                     "credits_before": (result.get("credits") or {}).get("remaining"),
-                    "credits_after": (result.get("credits_after") or {}).get("remaining"),
+                    "credits_after": (result.get("credits_after") or {}).get(
+                        "remaining"
+                    ),
                     "url": result.get("url"),
                 }
             )
-            return {"recipient": username, "target": target, "attempt": attempt, **result}
+            return {
+                "recipient": username,
+                "target": target,
+                "attempt": attempt,
+                **result,
+            }
 
         return await _run(ctx, "send_inmail", body_fn)
 
@@ -194,7 +216,9 @@ def register_mivia_inmail_tools(
         spent = _pace("page_read", tool="inmail_credits")
         if spent:
             return spent
-        return await _run(ctx, "inmail_credits", lambda ex: _reader(ex).inmail_credits())
+        return await _run(
+            ctx, "inmail_credits", lambda ex: _reader(ex).inmail_credits()
+        )
 
     @mcp.tool(
         timeout=max(tool_timeout, 120.0),
@@ -230,12 +254,14 @@ def register_mivia_inmail_tools(
         if refusal is not None:
             return {"status": "invalid_message", "detail": refusal}
         blocking = [
-            f for f in check_message(new_text, None) if f["code"] != "salutation_unverifiable"
+            f
+            for f in check_message(new_text, None)
+            if f["code"] != "salutation_unverifiable"
         ]
         if blocking:
             return {"status": "content_check_failed", "findings": blocking}
         if confirm:
-            spent = _pace("message_edit", tool="edit_sent_message")
+            spent = _peek("message_edit")
             if spent:
                 return spent
         ledger = outreach.Ledger.default()
@@ -255,7 +281,11 @@ def register_mivia_inmail_tools(
             warnings = check_message(new_text, listed.get("partner"))
             salutation = [f for f in warnings if f["code"] == "salutation_mismatch"]
             if salutation:
-                return {"thread": url, "status": "content_check_failed", "findings": salutation}
+                return {
+                    "thread": url,
+                    "status": "content_check_failed",
+                    "findings": salutation,
+                }
             old_sha = outreach.text_sha(message["text"])
             new_sha = outreach.text_sha(new_text)
             base = {
@@ -264,34 +294,46 @@ def register_mivia_inmail_tools(
                 "old_text_head": outreach.text_head(message["text"]),
                 "old_sha": old_sha,
                 "new_sha": new_sha,
-                "warnings": [f for f in warnings if f["code"] == "salutation_unverifiable"],
+                "warnings": [
+                    f for f in warnings if f["code"] == "salutation_unverifiable"
+                ],
             }
             if not confirm:
                 result = await reader.edit(url, message, new_text, confirm=False)
                 return {**base, **result}
             attempt = uuid.uuid4().hex
-            ledger.append(
-                {
-                    "attempt": attempt,
-                    "kind": "message_edit",
-                    "recipient": outreach.recipient_key(listed.get("partner") or "unknown"),
-                    "thread": url,
-                    "old_sha": old_sha,
-                    "text_sha": new_sha,
-                    "text_head": outreach.text_head(new_text),
-                    "status": "attempted",
-                    "started_at": _now(),
-                }
-            )
+            row = {
+                "attempt": attempt,
+                "kind": "message_edit",
+                "recipient": outreach.recipient_key(listed.get("partner") or "unknown"),
+                "thread": url,
+                "old_sha": old_sha,
+                "text_sha": new_sha,
+                "text_head": outreach.text_head(new_text),
+                "status": "attempted",
+                "started_at": _now(),
+            }
+            try:
+                outreach.Pacer(ledger).take(
+                    "message_edit", tool="edit_sent_message", row=row
+                )
+            except outreach.PaceExceeded as over:
+                return {**base, "status": "pace_budget_spent", "pace": over.state}
             try:
                 result = await reader.edit(url, message, new_text, confirm=True)
             except BaseException:
                 ledger.append(
-                    {"attempt": attempt, "status": "unknown", "detail": "exception during edit"}
+                    {
+                        "attempt": attempt,
+                        "status": "unknown",
+                        "detail": "exception during edit",
+                    }
                 )
                 raise
             status = result["status"] if result.get("edited") else "not_sent"
-            ledger.append({"attempt": attempt, "status": status, "detail": result["status"]})
+            ledger.append(
+                {"attempt": attempt, "status": status, "detail": result["status"]}
+            )
             return {**base, "attempt": attempt, **result}
 
         return await _run(ctx, "edit_sent_message", body_fn)

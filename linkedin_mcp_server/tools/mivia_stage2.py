@@ -21,7 +21,6 @@ from pydantic import Field
 
 from linkedin_mcp_server import mivia_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
-from linkedin_mcp_server.scraping.identifiers import normalize_person_identifier
 from linkedin_mcp_server.scraping.mivia_actions import MiviaActions, parse_group_id
 from linkedin_mcp_server.scraping.mivia_events import MiviaEventFinder, event_summary
 from linkedin_mcp_server.scraping.mivia_engagement import (
@@ -30,7 +29,13 @@ from linkedin_mcp_server.scraping.mivia_engagement import (
     engager_key,
     parse_activity_id,
 )
-from linkedin_mcp_server.tools.mivia import BATCH_TIMEOUT_SECONDS, TAG, _pace, _run
+from linkedin_mcp_server.tools.mivia import (
+    BATCH_TIMEOUT_SECONDS,
+    TAG,
+    _pace,
+    _recipient,
+    _run,
+)
 
 
 def _engagement(extractor: Any) -> MiviaEngagementReader:
@@ -215,7 +220,12 @@ def register_mivia_stage2_tools(
         returns status dialog_not_measured instead of clicking blind.
         """
         event_id = event_id.strip().strip("/").rsplit("/", 1)[-1]
-        targets = [normalize_person_identifier(u) for u in usernames]
+        targets = []
+        for raw in usernames:
+            username, bad = _recipient(raw)
+            if bad:
+                return {"event_id": event_id, **bad}
+            targets.append(username)
         state = outreach.Pacer(outreach.Ledger.default()).state("event_invite")
         if state["left"] < len(targets):
             return {
@@ -277,10 +287,21 @@ def register_mivia_stage2_tools(
         the day (30). Note LinkedIn blocks re-inviting a withdrawn person for
         about three weeks.
         """
+        chosen = set()
+        for raw in usernames or []:
+            username, bad = _recipient(raw)
+            if bad:
+                return bad
+            chosen.add(username)
+        if confirm_withdraw and not chosen:
+            # Checked before the page read: without names nothing can be picked.
+            return {
+                "status": "nothing_selected",
+                "message": "confirm_withdraw needs usernames from the dry-run candidates.",
+            }
         refusal = _pace("page_read", tool="withdraw_invitations")
         if refusal:
             return refusal
-        chosen = {normalize_person_identifier(u) for u in usernames or []}
 
         async def body(ex: Any) -> dict[str, Any]:
             actions = _actions(ex)
@@ -471,11 +492,33 @@ def register_mivia_stage2_tools(
         shown by follow_up_list. Never leaves the machine. Professional context
         only -- no private-sphere details.
         """
-        username = normalize_person_identifier(linkedin_username)
-        entry = outreach.ContactNotes().set(
-            username, tags=tags, note=note, replace=replace
-        )
-        return {"recipient": username, "entry": entry}
+        username, bad = _recipient(linkedin_username)
+        if bad:
+            return bad
+        if note is not None and len(note) > NOTE_MAX:
+            return {"recipient": username, "status": "note_too_long", "max": NOTE_MAX}
+        if note is not None and any(
+            (ord(c) < 32 and c != "\n") or ord(c) == 127 for c in note
+        ):
+            return {
+                "recipient": username,
+                "status": "invalid_note",
+                "detail": "no control characters except LF",
+            }
+        if tags is not None and any(len(t) > TAG_MAX for t in tags):
+            return {"recipient": username, "status": "tag_too_long", "max": TAG_MAX}
+        try:
+            entry = outreach.ContactNotes().set(
+                username, tags=tags, note=note, replace=replace
+            )
+        except (ValueError, OSError) as broken:
+            # A corrupt notes file is reported, never overwritten with {}.
+            return {
+                "recipient": username,
+                "status": "notes_unreadable",
+                "detail": str(broken)[:200],
+            }
+        return {"recipient": username, "status": "saved", "entry": entry}
 
     # -- 5. profile viewers ----------------------------------------------------
 
@@ -890,6 +933,10 @@ def register_mivia_stage2_tools(
             ).page_followers(page_id.strip(), known=set(), limit=limit),
         )
 
+
+# set_contact_note: a note is a keyword aid, not a dossier.
+NOTE_MAX = 1000
+TAG_MAX = 60
 
 DEFAULT_JOB_SEARCHES = [
     {"keywords": keywords, "location": location}

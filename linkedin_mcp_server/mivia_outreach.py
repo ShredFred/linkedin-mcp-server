@@ -63,6 +63,15 @@ def recipient_key(username: str) -> str:
     return unicodedata.normalize("NFC", username).strip().strip("/").lower()
 
 
+class LedgerCorrupt(ValueError):
+    """The outreach ledger has an unreadable row before its last line."""
+
+    def __init__(self, path: Path, line: int):
+        super().__init__(f"outreach ledger {path} is unreadable at line {line}")
+        self.path = path
+        self.line = line
+
+
 @dataclass
 class Ledger:
     path: Path
@@ -76,10 +85,21 @@ class Ledger:
             return []
         rows = []
         with self.path.open(encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if line:
-                    rows.append(json.loads(line))
+            lines = handle.readlines()
+        for number, raw in enumerate(lines, 1):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as bad:
+                # A torn final line without its newline is a write that never
+                # finished: append() writes the row before the action, so the
+                # action behind it did not start. Anything else is corruption,
+                # and a pacer that skipped it would under-count -- refuse.
+                if number == len(lines) and not raw.endswith("\n"):
+                    continue
+                raise LedgerCorrupt(self.path, number) from bad
         return rows
 
     def append(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -225,7 +245,14 @@ PACE_BUDGETS: dict[str, dict[str, int]] = {
 }
 # Everything that is visible to another member counts against one total.
 PACE_WRITE_KINDS = {
-    "like", "comment", "invite", "event_invite", "message", "withdraw", "inmail", "message_edit",
+    "like",
+    "comment",
+    "invite",
+    "event_invite",
+    "message",
+    "withdraw",
+    "inmail",
+    "message_edit",
 }
 PACE_WRITE_TOTAL_PER_DAY = 150
 # LinkedIn's own event-invitation ceiling per organiser account and week.
@@ -290,7 +317,11 @@ class Pacer:
                 )
             elif row.get("kind") == "limit_hit":
                 events.append(
-                    (f"{row.get('action')}_limit_hit", datetime.fromisoformat(row["at"]), 1)
+                    (
+                        f"{row.get('action')}_limit_hit",
+                        datetime.fromisoformat(row["at"]),
+                        1,
+                    )
                 )
             elif row.get("attempt"):
                 latest[row["attempt"]] = {**latest.get(row["attempt"], {}), **row}
@@ -342,7 +373,9 @@ class Pacer:
             # the reset, instead of hammering a wall that is logged per account.
             left = 0
             first = min(hits)
-            reset = month.replace(month=month.month % 12 + 1, year=month.year + (month.month == 12))
+            reset = month.replace(
+                month=month.month % 12 + 1, year=month.year + (month.month == 12)
+            )
             extra = {
                 "month_limit_hit": first.isoformat(timespec="seconds"),
                 # The measured limit of this account: what was used when it hit.
@@ -361,12 +394,32 @@ class Pacer:
             **extra,
         }
 
-    def record_limit_hit(self, action: str = "search", *, tool: str | None = None) -> None:
+    def record_limit_hit(
+        self, action: str = "search", *, tool: str | None = None
+    ) -> None:
         """LinkedIn showed its monthly limit notice: remember it until the reset."""
         self.ledger.append({"kind": "limit_hit", "action": action, "tool": tool})
 
+    def peek(self, action: str, count: int = 1) -> dict[str, Any]:
+        """Check *count* units without booking; raise :class:`PaceExceeded`.
+
+        For a gate in front of a browser step that may still abort without
+        acting (first_degree, open_profile, no credits): nothing is used yet,
+        so nothing may be booked. The booking happens in :meth:`take` at the
+        moment the action is really attempted.
+        """
+        state = self.state(action)
+        if state["left"] < count:
+            raise PaceExceeded({**state, "requested": count})
+        return state
+
     def take(
-        self, action: str, count: int = 1, *, tool: str | None = None
+        self,
+        action: str,
+        count: int = 1,
+        *,
+        tool: str | None = None,
+        row: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Reserve *count* units or raise :class:`PaceExceeded`.
 
@@ -380,7 +433,12 @@ class Pacer:
             state = self.state(action)
             if state["left"] < count:
                 raise PaceExceeded({**state, "requested": count})
-            if action not in _LEDGER_KINDS:
+            if row is not None:
+                # The attempt row is the booking for ledger kinds; writing it
+                # under the same lock closes the gap between check and book.
+                self.ledger.append(row)
+                state = self.state(action)
+            elif action not in _LEDGER_KINDS:
                 self.ledger.append(
                     {"kind": "pace", "action": action, "count": count, "tool": tool}
                 )
@@ -464,12 +522,21 @@ class ContactNotes:
     def load(self) -> dict[str, Any]:
         if not self.path.exists():
             return {}
-        return json.loads(self.path.read_text(encoding="utf-8"))
+        data = json.loads(self.path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"contact notes {self.path} are not a JSON object")
+        return data
 
     def get(self, username: str) -> dict[str, Any] | None:
         return self.load().get(recipient_key(username))
 
     def set(
+        self, username: str, *, tags: list[str] | None, note: str | None, replace: bool
+    ) -> dict[str, Any]:
+        with _file_lock(self.path.with_suffix(".lock")):
+            return self._set_locked(username, tags=tags, note=note, replace=replace)
+
+    def _set_locked(
         self, username: str, *, tags: list[str] | None, note: str | None, replace: bool
     ) -> dict[str, Any]:
         data = self.load()
@@ -548,6 +615,9 @@ if __name__ == "__main__":  # pragma: no cover - thin CLI
     import sys
 
     if sys.argv[1:] != ["--pace-report"]:
-        print("usage: python -m linkedin_mcp_server.mivia_outreach --pace-report", file=sys.stderr)
+        print(
+            "usage: python -m linkedin_mcp_server.mivia_outreach --pace-report",
+            file=sys.stderr,
+        )
         raise SystemExit(2)
     print(json.dumps(pace_report(), ensure_ascii=True))

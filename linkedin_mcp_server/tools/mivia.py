@@ -26,7 +26,11 @@ from pydantic import Field
 
 from linkedin_mcp_server import mivia_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
-from linkedin_mcp_server.core.exceptions import AuthenticationError
+from linkedin_mcp_server.core.exceptions import (
+    AuthenticationError,
+    InvalidReferenceError,
+)
+from linkedin_mcp_server.mivia_message_checks import check_message
 from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_error
 from linkedin_mcp_server.error_handler import raise_tool_error
 from linkedin_mcp_server.scraping.contracts import refuse_an_invalid_message
@@ -55,6 +59,50 @@ def _pace(action: str, count: int = 1, *, tool: str) -> dict[str, Any] | None:
     """Ask the pacer; return a refusal dict when the budget is spent."""
     try:
         outreach.Pacer(outreach.Ledger.default()).take(action, count, tool=tool)
+    except outreach.PaceExceeded as spent:
+        return {"status": "pace_budget_spent", "pace": spent.state}
+    return None
+
+
+def _recipient(value: str | None) -> tuple[str | None, dict[str, Any] | None]:
+    """Normalise a person identifier; (None, refusal) instead of raising."""
+    try:
+        return normalize_person_identifier(value or ""), None
+    except InvalidReferenceError as bad:
+        return None, {"status": "invalid_recipient", "detail": str(bad), "input": value}
+
+
+INVITE_NOTE_MAX = 300
+
+
+def check_invite_note(note: str | None) -> dict[str, Any] | None:
+    """Browser-free refusal for a connection note; None when it may go."""
+    if note is None:
+        return None
+    if not note.strip():
+        return {
+            "status": "invalid_note",
+            "detail": "note is empty; pass null for no note",
+        }
+    if any(ord(c) < 32 or ord(c) == 127 for c in note):
+        return {
+            "status": "invalid_note",
+            "detail": "no control characters or line breaks",
+        }
+    if len(note) > INVITE_NOTE_MAX:
+        return {"status": "note_too_long", "max": INVITE_NOTE_MAX}
+    findings = [
+        f for f in check_message(note, None) if f["code"] != "salutation_unverifiable"
+    ]
+    if findings:
+        return {"status": "content_check_failed", "findings": findings}
+    return None
+
+
+def _peek(action: str, count: int = 1) -> dict[str, Any] | None:
+    """Check the pacer without booking; refusal dict when the budget is spent."""
+    try:
+        outreach.Pacer(outreach.Ledger.default()).peek(action, count)
     except outreach.PaceExceeded as spent:
         return {"status": "pace_budget_spent", "pace": spent.state}
     return None
@@ -251,11 +299,14 @@ def register_mivia_tools(
             from linkedin_mcp_server.scraping.mivia_network import SearchLimitReached
 
             try:
-                raw = await _network(ex).get_event_attendees(event_id, start_page, max_pages)
+                raw = await _network(ex).get_event_attendees(
+                    event_id, start_page, max_pages
+                )
             except SearchLimitReached as exc:
                 # Same lock as the collector: manual calls stop hitting the wall too.
                 outreach.Pacer(outreach.Ledger.default()).record_limit_hit(
-                    "search", tool="get_event_attendees")
+                    "search", tool="get_event_attendees"
+                )
                 return {"status": "monthly_search_limit", "detail": str(exc)}
             return project_attendees(raw, limit, fields)
 
@@ -422,10 +473,12 @@ def register_mivia_tools(
 
         Returns status verified / unverified / not_sent / unknown / duplicate.
         """
-        refusal = refuse_an_invalid_message(linkedin_username, message)
+        username, bad = _recipient(linkedin_username)
+        if bad:
+            return bad
+        refusal = refuse_an_invalid_message(username, message)
         if refusal is not None:
             return refusal
-        username = normalize_person_identifier(linkedin_username)
         ledger = outreach.Ledger.default()
         previous = ledger.already_contacted(
             "message", username, outreach.text_sha(message)
@@ -478,18 +531,35 @@ def register_mivia_tools(
         Call repeatedly (spread over the day) until remaining is empty. With
         confirm_send=false it only reports the plan.
         """
-        refusal = refuse_an_invalid_message(canary, message)
+        canary_key, bad = _recipient(canary)
+        if bad:
+            return {**bad, "field": "canary"}
+        refusal = refuse_an_invalid_message(canary_key, message)
         if refusal is not None:
             return refusal
+        if not campaign or not campaign.strip():
+            return {"status": "campaign_required"}
+        invalid = []
+        normalized = []
+        for raw in recipients:
+            username, bad = _recipient(raw)
+            (invalid.append(bad) if bad else normalized.append(username))
+        if invalid:
+            # A typo is refused as a whole, not dropped: a silently shorter
+            # list is a recipient nobody notices was never written to.
+            return {"status": "invalid_recipients", "invalid": invalid}
         ledger = outreach.Ledger.default()
         sha = outreach.text_sha(message)
-        canary_key = normalize_person_identifier(canary)
         targets = []
         skipped = []
-        for raw in recipients:
-            username = normalize_person_identifier(raw)
-            if outreach.recipient_key(username) == outreach.recipient_key(canary_key):
+        seen: set[str] = set()
+        for username in normalized:
+            key = outreach.recipient_key(username)
+            # "Dieter" and ".../in/dieter/" twice in one list: the ledger check
+            # below runs before any send, so it would pass both into one batch.
+            if key == outreach.recipient_key(canary_key) or key in seen:
                 continue
+            seen.add(key)
             (
                 skipped
                 if ledger.already_contacted("message", username, sha)
@@ -584,7 +654,12 @@ def register_mivia_tools(
         (default 20, max 25) or the rolling 7-day cap (100) is reached, and never
         invites the same person twice. Records every attempt.
         """
-        username = normalize_person_identifier(linkedin_username)
+        username, bad = _recipient(linkedin_username)
+        if bad:
+            return bad
+        refusal = check_invite_note(note)
+        if refusal:
+            return {"recipient": username, **refusal}
         ledger = outreach.Ledger.default()
         previous = ledger.already_contacted("invite", username, None)
         if previous:
