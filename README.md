@@ -412,7 +412,10 @@ codex plugin marketplace add stickerdaniel/linkedin-mcp-server
 codex plugin add linkedin-mcp-server@linkedin-mcp-server
 ```
 
-The plugin runs a fixed server release through `uvx`. Each release updates that version, and Codex installs it the next time it starts. On the first tool call that needs authentication, the server reuses a LinkedIn session from a signed-in local browser if it finds one, and otherwise opens a LinkedIn login browser window.
+The plugin runs a fixed server release through `uvx`. Each release updates that version, and Codex installs it the next time it starts. On startup, the server prepares the shared Patchright Chromium browser cache in the background. On the first tool call that needs authentication, the server reuses a LinkedIn session from a signed-in local browser if it finds one, and otherwise opens a LinkedIn login browser window.
+
+> [!NOTE]
+> Early tool calls may return a setup/authentication-in-progress error until browser setup or login finishes. Retry the tool call once the browser download or sign-in completes.
 
 <br/>
 <br/>
@@ -945,6 +948,14 @@ uv run -m linkedin_mcp_server --transport streamable-http --host 127.0.0.1 --por
 >
 > **What if my agents execute too many actions?**
 > Tool calls run sequentially through a queue. You are responsible for the volume of automation you run; use it sparingly and prompt your agents responsibly.
+
+## Contributors
+
+Thanks to everyone who has contributed code, bug reports and fixes.
+
+<a href="https://github.com/stickerdaniel/linkedin-mcp-server/graphs/contributors">
+  <img alt="Contributors to linkedin-mcp-server" src="https://contrib.rocks/image?repo=stickerdaniel/linkedin-mcp-server" />
+</a>
 
 ## Acknowledgements
 
