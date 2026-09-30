@@ -263,6 +263,32 @@ def register_mivia_tools(
 
     @mcp.tool(
         timeout=tool_timeout,
+        title="Get Event Attendee Count",
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+        tags={TAG, "network", "scraping"},
+    )
+    async def get_event_attendee_count(event_id: str, ctx: Context) -> dict[str, Any]:
+        """
+        Read the attendee total of a LinkedIn event from its event page -- one
+        page view, no people search, no profile. Cheap check before harvesting:
+        call get_event_attendees only when the total grew.
+
+        Returns:
+            Dict with event_id and attendee_count (null when the page shows no
+            total, e.g. the event is gone or the layout changed).
+        """
+        event_id = event_id.strip().strip("/").rsplit("/", 1)[-1]
+        refusal = _pace("page_read", tool="get_event_attendee_count")
+        if refusal:
+            return refusal
+        return await _run(
+            ctx,
+            "get_event_attendee_count",
+            lambda ex: _network(ex).event_attendee_count(event_id),
+        )
+
+    @mcp.tool(
+        timeout=tool_timeout,
         title="List Sent Invitations",
         annotations={"readOnlyHint": True, "openWorldHint": True},
         tags={TAG, "network", "scraping"},

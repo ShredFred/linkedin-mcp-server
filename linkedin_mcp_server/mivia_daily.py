@@ -42,7 +42,10 @@ from linkedin_mcp_server.scraping.mivia_engagement import (
 )
 from linkedin_mcp_server.scraping.mivia_actions import MiviaActions
 from linkedin_mcp_server.scraping.mivia_events import MiviaEventFinder
-from linkedin_mcp_server.scraping.mivia_network import SearchLimitReached
+from linkedin_mcp_server.scraping.mivia_network import (
+    EVENT_COUNT_JS as _EVENT_COUNT_JS,
+    SearchLimitReached,
+)
 
 logger = logging.getLogger("mivia_daily")
 
@@ -68,17 +71,6 @@ _URNS_JS = r"""(max) => {
   }
   return out;
 }"""
-
-_EVENT_COUNT_JS = r"""() => {
-  const t = (document.querySelector('main') || document.body).innerText || '';
-  let m = /und\s+([\d.]+)\s+weitere\s+Person/i.exec(t);
-  if (m) return parseInt(m[1].replace(/\./g, ''), 10) + 1;
-  m = /and\s+([\d,]+)\s+other/i.exec(t);
-  if (m) return parseInt(m[1].replace(/,/g, ''), 10) + 1;
-  m = /([\d.,]+)\s+(Personen nehmen teil|attendees)/i.exec(t);
-  return m ? parseInt(m[1].replace(/[.,]/g, ''), 10) : null;
-}"""
-
 
 class Busy(Exception):
     pass

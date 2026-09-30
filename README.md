@@ -14,6 +14,7 @@
 > - `find_events` — Find LinkedIn events by keyword (event search, upcoming only) and by organiser page (company slug; its "Events" tab, upcoming and with include_past also past ones).
 > - `follow_up_list` — Who answered which ledger message, and who is due for a follow-up.
 > - `get_company_events` — Events tab of one organiser page (/company/<slug>/events/).
+> - `get_event_attendee_count` — Read the attendee total of a LinkedIn event from its event page -- one page view, no people search, no profile.
 > - `get_event_attendees` — List the attendees of a LinkedIn event via people search with eventAttending, 10 per page, at human pace (3-6 s between pages).
 > - `get_group_members` — Members of a group the account belongs to (name, slug, degree, headline), in LinkedIn's rendered order.
 > - `get_page_followers` — Newest followers of a company page the account administers (numeric page id, e.g.

@@ -218,6 +218,7 @@ def test_fork_tools_are_registered_and_tagged():
     assert names == {
         "list_connections",
         "get_event_attendees",
+        "get_event_attendee_count",
         "list_sent_invitations",
         "create_post",
         "send_message_verified",
@@ -314,4 +315,16 @@ def test_event_attendees_tool_caps_pages_by_limit(monkeypatch):
     register_mivia_tools(mcp)
     res = asyncio.run(mcp.call_tool("get_event_attendees", {"event_id": "7449450258214014977", "limit": 25}))
     assert taken == [3]
+    assert "stop" in str(res)
+
+
+def test_event_attendee_count_tool_charges_one_page_read(monkeypatch):
+    import linkedin_mcp_server.tools.mivia as m
+
+    taken = []
+    monkeypatch.setattr(m, "_pace", lambda action, count=1, *, tool: taken.append((action, count)) or {"status": "stop"})
+    mcp = FastMCP("t")
+    register_mivia_tools(mcp)
+    res = asyncio.run(mcp.call_tool("get_event_attendee_count", {"event_id": "https://www.linkedin.com/events/7449450258214014977/"}))
+    assert taken == [("page_read", 1)]
     assert "stop" in str(res)

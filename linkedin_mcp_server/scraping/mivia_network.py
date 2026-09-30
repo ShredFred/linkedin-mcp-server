@@ -31,6 +31,19 @@ SENT_INVITATIONS_URL = "https://www.linkedin.com/mynetwork/invitation-manager/se
 
 _EVENT_ID_RE = re.compile(r"^\d{10,25}$")
 
+# Attendee total as the event page renders it ("X und 41 weitere Personen",
+# "42 Personen nehmen teil"). One page view, no search; the harvest compares it
+# with the last read before spending search pages.
+EVENT_COUNT_JS = r"""() => {
+  const t = (document.querySelector('main') || document.body).innerText || '';
+  let m = /und\s+([\d.]+)\s+weitere\s+Person/i.exec(t);
+  if (m) return parseInt(m[1].replace(/\./g, ''), 10) + 1;
+  m = /and\s+([\d,]+)\s+other/i.exec(t);
+  if (m) return parseInt(m[1].replace(/,/g, ''), 10) + 1;
+  m = /([\d.,]+)\s+(Personen nehmen teil|attendees)/i.exec(t);
+  return m ? parseInt(m[1].replace(/[.,]/g, ''), 10) : null;
+}"""
+
 # Human pace. Reading is not what LinkedIn restricts, but a burst of page loads
 # is what a detector sees first.
 # LinkedIn's commercial use limit for people searches (monthly, resets on the
@@ -453,6 +466,15 @@ class MiviaNetworkReader:
                 break
             await self._session.delay(0.5)
         return state
+
+    async def event_attendee_count(self, event_id: str) -> dict[str, Any]:
+        """Read the attendee total from the event page itself (read-only)."""
+        if not _EVENT_ID_RE.match(event_id):
+            raise ValueError("event_id must be the numeric LinkedIn event id")
+        await self._navigator._navigate_to_page(f"https://www.linkedin.com/events/{event_id}/")
+        await self._session.check_rate_limit()
+        count = await self._page.evaluate(EVENT_COUNT_JS)
+        return {"event_id": event_id, "attendee_count": count}
 
     async def get_event_attendees(
         self, event_id: str, start_page: int, max_pages: int
