@@ -11,6 +11,7 @@
 > - `comment_on_post` — Comment on a post.
 > - `connect_guarded` — connect_with_person behind the ledger: refuses once today's invite cap (default 20, max 25) or the rolling 7-day cap (100) is reached, and never invites the same person twice.
 > - `create_post` — Compose a post on the signed-in member's personal profile.
+> - `edit_sent_message` — Edit one of your own sent messages in a thread (URL or thread id).
 > - `find_events` — Find LinkedIn events by keyword (event search, upcoming only) and by organiser page (company slug; its "Events" tab, upcoming and with include_past also past ones).
 > - `follow_up_list` — Who answered which ledger message, and who is due for a follow-up.
 > - `get_company_events` — Events tab of one organiser page (/company/<slug>/events/).
@@ -22,6 +23,7 @@
 > - `get_post_analytics` — Impressions, members reached, reactions, comments, reposts, saves, sends, profile views and followers gained for the account's own posts.
 > - `get_post_engagers` — Who reacted to a post (with reaction kind) and who commented.
 > - `get_profile_viewers` — Who viewed the account's profile (last 90 days, newest first; full list with Premium / Sales Navigator).
+> - `inmail_credits` — Remaining Sales Navigator InMail credits (one page read).
 > - `invite_to_event` — Invite 1st-degree connections to a LinkedIn event.
 > - `job_watch` — Weekly job watch: saved searches (default Metallograf, Werkstoffprüfer, Wärmebehandlung in Germany, Austria and Switzerland) plus the jobs of a company list, past week only, one results page each.
 > - `list_connections` — List the account's 1st-degree connections, newest first ("Neu hinzugefügt"), with the date each connection was made.
@@ -32,6 +34,7 @@
 > - `pace_status` — The pacer (Taktgeber): per action kind today's and the last seven days' use against its budget, and the daily total of visible actions.
 > - `search_events` — One LinkedIn event search (/search/results/events/?keywords=...).
 > - `send_campaign_batch` — Send the same text to many recipients safely, one small batch per call.
+> - `send_inmail` — Send one InMail through Sales Navigator (spends one credit) to a 2nd/3rd-degree member.
 > - `send_message_verified` — Send one message (multi-line allowed via LF) and read the conversation back to confirm the whole text arrived.
 > - `set_contact_note` — Local keywords and a short note per contact (~/.linkedin-mcp/mivia-contact-notes.json), shown by follow_up_list.
 > - `withdraw_invitations` — Withdraw pending connection invitations older than older_than_days (default 21).

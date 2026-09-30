@@ -219,14 +219,19 @@ PACE_BUDGETS: dict[str, dict[str, int]] = {
     "message": {"day": MESSAGES_PER_DAY_MAX, "week": MESSAGES_PER_WEEK_MAX},
     "search": {"day": 80, "week": 400},
     "page_read": {"day": 300, "week": 1500},
+    # InMail spends a paid credit and reaches a stranger (2026-09-30): low caps.
+    "inmail": {"day": 5, "week": 20},
+    "message_edit": {"day": 10, "week": 40},
 }
 # Everything that is visible to another member counts against one total.
-PACE_WRITE_KINDS = {"like", "comment", "invite", "event_invite", "message", "withdraw"}
+PACE_WRITE_KINDS = {
+    "like", "comment", "invite", "event_invite", "message", "withdraw", "inmail", "message_edit",
+}
 PACE_WRITE_TOTAL_PER_DAY = 150
 # LinkedIn's own event-invitation ceiling per organiser account and week.
 EVENT_INVITES_PLATFORM_PER_WEEK = 1000
 
-_LEDGER_KINDS = {"message", "invite"}
+_LEDGER_KINDS = {"message", "invite", "inmail", "message_edit"}
 
 
 @contextmanager
