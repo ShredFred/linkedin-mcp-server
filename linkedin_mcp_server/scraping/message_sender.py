@@ -1126,12 +1126,22 @@ def _normalize_profile_urn(value: str | None) -> str | None:
     return candidate.removeprefix(_PROFILE_URN_PREFIX)
 
 
+_PROFILE_ACCEPTED_QUERIES = frozenset({"", "isSelfProfile=false"})
+
+
 def _profile_path_from_url(value: str) -> str | None:
     parsed = _safe_linkedin_url(value)
-    if parsed is None or parsed.query or not _PROFILE_PATH_RE.fullmatch(parsed.path):
+    # MiViA fork: since 2026-09-30 LinkedIn redirects a profile opened by
+    # someone else to ``?isSelfProfile=false``. That exact marker is the only
+    # query accepted; any other query still fails closed.
+    if (
+        parsed is None
+        or parsed.query not in _PROFILE_ACCEPTED_QUERIES
+        or not _PROFILE_PATH_RE.fullmatch(parsed.path)
+    ):
         return None
     try:
-        username = normalize_person_identifier(value)
+        username = normalize_person_identifier(parsed._replace(query="").geturl())
     except LinkedInScraperException:
         return None
     canonical_path = urlparse(person_profile_url(username, "/")).path
