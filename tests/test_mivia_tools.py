@@ -328,3 +328,34 @@ def test_event_attendee_count_tool_charges_one_page_read(monkeypatch):
     res = asyncio.run(mcp.call_tool("get_event_attendee_count", {"event_id": "https://www.linkedin.com/events/7449450258214014977/"}))
     assert taken == [("page_read", 1)]
     assert "stop" in str(res)
+
+
+def test_event_attendee_count_waits_for_the_late_attendee_line():
+    from linkedin_mcp_server.scraping.mivia_network import EVENT_COUNT_JS, MiviaNetworkReader
+
+    answers = [None, None, 310]
+    clock = [0.0]
+
+    class Page:
+        async def evaluate(self, js):
+            assert js is EVENT_COUNT_JS
+            return answers.pop(0)
+
+    class Session:
+        page = Page()
+
+        def monotonic(self):
+            return clock[0]
+
+        async def delay(self, s):
+            clock[0] += s
+
+        async def check_rate_limit(self):
+            pass
+
+    class Nav:
+        async def _navigate_to_page(self, url):
+            assert url == "https://www.linkedin.com/events/7457346711301214208/"
+
+    out = asyncio.run(MiviaNetworkReader(Session(), Nav()).event_attendee_count("7457346711301214208"))
+    assert out == {"event_id": "7457346711301214208", "attendee_count": 310}

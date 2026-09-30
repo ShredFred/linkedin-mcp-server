@@ -36,7 +36,7 @@ _EVENT_ID_RE = re.compile(r"^\d{10,25}$")
 # with the last read before spending search pages.
 EVENT_COUNT_JS = r"""() => {
   const t = (document.querySelector('main') || document.body).innerText || '';
-  let m = /und\s+([\d.]+)\s+weitere\s+Person/i.exec(t);
+  let m = /und\s+(\d[\d.]*)\s+weitere\s+(?:Person|Kontakt)/i.exec(t);
   if (m) return parseInt(m[1].replace(/\./g, ''), 10) + 1;
   m = /and\s+([\d,]+)\s+other/i.exec(t);
   if (m) return parseInt(m[1].replace(/,/g, ''), 10) + 1;
@@ -473,7 +473,15 @@ class MiviaNetworkReader:
             raise ValueError("event_id must be the numeric LinkedIn event id")
         await self._navigator._navigate_to_page(f"https://www.linkedin.com/events/{event_id}/")
         await self._session.check_rate_limit()
-        count = await self._page.evaluate(EVENT_COUNT_JS)
+        # The attendee line renders late: right after navigation it was missing on
+        # both events read on 30.09.2026 and present six seconds later.
+        count = None
+        deadline = self._session.monotonic() + 12.0
+        while True:
+            count = await self._page.evaluate(EVENT_COUNT_JS)
+            if count is not None or self._session.monotonic() >= deadline:
+                break
+            await self._session.delay(1.0)
         return {"event_id": event_id, "attendee_count": count}
 
     async def get_event_attendees(
