@@ -92,6 +92,41 @@ _RESULTS_RE = re.compile(
 )
 
 
+# Place text -> online flag and ISO-2 country. Only explicit evidence counts:
+# a trailing two-letter code (LinkedIn renders "Ort, Stadt, DE") or a country
+# name as the last comma segment. A city alone is never mapped -- no guessing.
+_ONLINE_RE = re.compile(
+    r"^(?:online(?:[- ]?(?:event|veranstaltung))?|virtuell|virtual)$", re.I
+)
+_COUNTRY_NAMES = {
+    "deutschland": "DE", "germany": "DE", "österreich": "AT", "austria": "AT",
+    "schweiz": "CH", "switzerland": "CH", "suisse": "CH", "frankreich": "FR",
+    "france": "FR", "italien": "IT", "italy": "IT", "italia": "IT",
+    "spanien": "ES", "spain": "ES", "españa": "ES", "niederlande": "NL",
+    "netherlands": "NL", "belgien": "BE", "belgium": "BE", "polen": "PL",
+    "poland": "PL", "tschechien": "CZ", "czechia": "CZ", "czech republic": "CZ",
+    "schweden": "SE", "sweden": "SE", "dänemark": "DK", "denmark": "DK",
+    "vereinigtes königreich": "GB", "united kingdom": "GB", "großbritannien": "GB",
+    "usa": "US", "vereinigte staaten": "US", "united states": "US",
+}  # fmt: skip
+_ISO2_RE = re.compile(r"^[A-Z]{2}$")
+
+
+def place_facts(place: str | None) -> dict[str, Any]:
+    """``is_online`` and ``country`` (ISO-2) from a raw place text; unknown -> None."""
+    if not place or not place.strip():
+        return {"is_online": None, "country": None}
+    p = place.strip()
+    if _ONLINE_RE.match(p):
+        return {"is_online": True, "country": None}
+    last = p.rsplit(",", 1)[-1].strip()
+    if "," in p and _ISO2_RE.match(last):
+        country = "GB" if last == "UK" else last
+    else:
+        country = _COUNTRY_NAMES.get(last.lower())
+    return {"is_online": False, "country": country}
+
+
 def parse_event_card(lines: list[str]) -> dict[str, Any]:
     """Title, date, place, organiser, description and attendees from card lines."""
     # A card walk can swallow the section heading above the first card.
@@ -107,6 +142,9 @@ def parse_event_card(lines: list[str]) -> dict[str, Any]:
             organiser = m.group(1).strip()
             place = ln[: m.start()].rstrip(" •") or None
             break
+    if place is None:
+        # Organiser pages may render the place alone ("Online").
+        place = next((ln for ln in lines[1:6] if _ONLINE_RE.match(ln)), None)
     skip = {title, date_line}
     desc = next(
         (
@@ -123,6 +161,7 @@ def parse_event_card(lines: list[str]) -> dict[str, Any]:
         "title": title,
         "date_text": date_line,
         "place": place,
+        **place_facts(place),
         "organiser": organiser,
         "description": (desc or "")[:300] or None,
         "attendees": attendee_count(lines),
@@ -405,7 +444,10 @@ class MiviaEventFinder:
 
 
 def event_summary(ev: dict[str, Any]) -> dict[str, Any]:
-    """Event master data only: id, url, title, date text, organiser, attendees.
+    """Event master data: id, url, title, date, place facts, organiser, attendees.
+
+    ``place`` is the raw card text, ``is_online``/``country`` come from
+    ``place_facts`` and stay None when the card does not say.
 
     The attendee line may start with a person name ("X und 307 weitere ...");
     only the count leaves the finder, never the line itself.
@@ -416,6 +458,9 @@ def event_summary(ev: dict[str, Any]) -> dict[str, Any]:
         "url": ev.get("url"),
         "title": ev.get("title"),
         "date_text": ev.get("date_text"),
+        "place": ev.get("place"),
+        "is_online": ev.get("is_online"),
+        "country": ev.get("country"),
         "organiser": ev.get("organiser"),
         "attendees": n,
         "attendees_text": None if n is None else f"{n} Teilnehmende",

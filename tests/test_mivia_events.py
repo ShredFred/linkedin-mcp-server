@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from linkedin_mcp_server.scraping.mivia_events import (
+    _DATE_RE,
     attendee_count,
     event_id,
     keyword_url,
@@ -170,6 +171,9 @@ def test_event_summary_drops_person_names_and_extra_fields():
         "url",
         "title",
         "date_text",
+        "place",
+        "is_online",
+        "country",
         "organiser",
         "attendees",
         "attendees_text",
@@ -183,3 +187,50 @@ def test_parse_event_card_skips_result_counter():
     )
     assert card["title"] == "HK 2026"
     assert card["date_text"].startswith("Di.")
+
+
+def test_place_facts_from_cards():
+    from linkedin_mcp_server.scraping.mivia_events import event_summary, place_facts
+
+    card = parse_event_card(
+        [
+            "Der Werkstoff Stahl",
+            "Di., 22. Sep., 08:30 (Ihre Ortszeit)",
+            "Dr. Summer Material Technology GmbH, Hellenthalstraße 2, Issum, DE • Von Dr. Sommer",
+        ]
+    )
+    assert card["country"] == "DE" and card["is_online"] is False
+    s = event_summary({**card, "event_id": "1"})
+    assert s["place"].endswith("Issum, DE") and s["country"] == "DE"
+    online = parse_event_card(["Webinar Härten", "Mi., 4. Nov.", "Online • Von AWT"])
+    assert online["place"] == "Online" and online["is_online"] is True
+    assert online["country"] is None
+    alone = parse_event_card(["Webinar", "Mi., 4. Nov.", "Online-Event"])
+    assert alone["is_online"] is True
+    # A city alone is not mapped; no place stays unknown.
+    assert place_facts("Köln") == {"is_online": False, "country": None}
+    assert place_facts("Messe Wien, Österreich")["country"] == "AT"
+    assert place_facts(None) == {"is_online": None, "country": None}
+    none = parse_event_card(["HK 2026", "Matthias und 3 weitere Personen nehmen teil"])
+    assert none["place"] is None and none["is_online"] is None
+
+
+def _card_fixtures():
+    import json
+    from pathlib import Path
+
+    p = Path(__file__).parent / "fixtures" / "scraping" / "mivia_event_cards.json"
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("fx", _card_fixtures())
+def test_place_from_stored_cards(fx):
+    lines = fx["lines"]
+    card = parse_event_card(lines)
+    if _DATE_RE.match(card["title"] or ""):  # organiser-page order, as by_organiser
+        card = parse_event_card(lines[1:])
+    assert (card["place"], card["is_online"], card["country"]) == (
+        fx["place"],
+        fx["is_online"],
+        fx["country"],
+    )
