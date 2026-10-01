@@ -25,6 +25,7 @@ import logging
 import os
 import random
 import re
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -179,7 +180,15 @@ def parse_activity_id(post: str) -> str:
     return found.pop()
 
 
+def _texts(items: Any) -> list[str]:
+    """Non-strings become "" so positions survive (line 0 is the name)."""
+    if not isinstance(items, (list, tuple)):
+        return []
+    return [x if isinstance(x, str) else "" for x in items]
+
+
 def reaction_kind(icons: list[str], lines: list[str]) -> str:
+    icons, lines = _texts(icons), _texts(lines)
     for icon in icons:
         token = icon.lower()
         for prefix, kind in REACTION_ICONS.items():
@@ -224,9 +233,10 @@ def parse_person_ref(href: str) -> dict[str, Any]:
 
 def split_engager_lines(lines: list[str]) -> dict[str, Any]:
     """Name, degree and headline from '<Name>', '· 1.', '<Headline>', '<Reaction>'."""
+    lines = _texts(lines)
     if not lines:
         return {"name": None, "degree": None, "headline": None}
-    name = lines[0].split("•")[0].split("·")[0].strip()
+    name = lines[0].split("•")[0].split("·")[0].strip() or None
     degree = None
     rest = lines[1:]
     if rest and re.match(r"^[·•]\s*\d", rest[0]):
@@ -236,7 +246,7 @@ def split_engager_lines(lines: list[str]) -> dict[str, Any]:
         (
             line
             for line in rest
-            if "reagiert" not in line.lower() and "react" not in line.lower()
+            if line and "reagiert" not in line.lower() and "react" not in line.lower()
         ),
         None,
     )
@@ -367,8 +377,25 @@ def engager_key(
     kind: str, ident: str | None, extra: str = "", *, name: str | None = None
 ) -> str:
     """Memory key. Without an id the name stands in, so id-less engagers are
-    not all collapsed into one '?' entry."""
-    who = ident or f"name={(name or '?').strip().lower()}"
+    not all collapsed into one entry.
+
+    Without id *and* name there is nothing to recognise the engager by. The
+    old 'name=?' key gave all of them one key, so the first one remembered hid
+    every later one. None would be the honest answer, but callers outside this
+    module (tools/mivia_stage2.py, mivia_daily.viewers) put the key straight
+    into SeenStore.remember, whose sorted() fails on None. So each such entry
+    gets a fresh unique key instead: it never matches memory, i.e. it is
+    always reported as new and can never hide another engager. mivia_daily
+    filters these out before remembering and counts them separately.
+    """
+    ident = ident if isinstance(ident, str) and ident.strip() else None
+    clean = name.strip().lower() if isinstance(name, str) else ""
+    if ident:
+        who = ident
+    elif clean:
+        who = f"name={clean}"
+    else:
+        who = f"anon={uuid.uuid4().hex}"
     return f"{kind}:{who}:{extra}"
 
 

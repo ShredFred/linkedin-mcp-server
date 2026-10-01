@@ -71,8 +71,10 @@ _THREAD_ID_RE = re.compile(r"/messaging/thread/([A-Za-z0-9_=-]+)")
 
 
 def canon(text: str) -> str:
+    if not isinstance(text, str):
+        text = ""
     return re.sub(
-        r"\s+", " ", unicodedata.normalize("NFC", text or "").replace(" ", " ")
+        r"\s+", " ", unicodedata.normalize("NFC", text).replace(" ", " ")
     ).strip()
 
 
@@ -89,7 +91,7 @@ _EDIT_MARKER_RE = re.compile(
 
 def strip_edit_marker(text: str) -> tuple[str, bool]:
     """Text without a trailing "(bearbeitet)"/"Edited" marker, and whether one was there."""
-    raw = text or ""
+    raw = text if isinstance(text, str) else ""
     stripped = _EDIT_MARKER_RE.sub("", raw)
     return stripped, stripped != raw
 
@@ -100,7 +102,10 @@ def mark_edited(listed: dict[str, Any]) -> dict[str, Any]:
     The marker is LinkedIn's decoration, not message text: kept, it made the
     prefill check fail and "X (bearbeitet)" -> "X" look like a change.
     """
-    for message in listed.get("messages") or []:
+    messages = listed.get("messages")
+    for message in messages if isinstance(messages, list) else []:
+        if not isinstance(message, dict):
+            continue
         text, edited = strip_edit_marker(message.get("text", ""))
         message["text"] = text.strip()
         message["edited"] = edited
@@ -175,17 +180,25 @@ def pick_own_message(
     Returns {"status": "ok", "message": …} or a refusal status. Ambiguity is
     refused, never resolved to the first candidate.
     """
-    own = [m for m in messages if m.get("own")]
+    own = [m for m in messages or [] if isinstance(m, dict) and m.get("own") is True]
     if not own:
         return {"status": "no_own_message"}
     if not match:
+        if own[-1].get("index") is None:
+            # Without an index the edit cannot be bound to this message.
+            return {"status": "message_without_index"}
         return {"status": "ok", "message": own[-1]}
     want = canon(strip_edit_marker(match)[0])
     hits = [m for m in own if want in canon(strip_edit_marker(m.get("text", ""))[0])]
     if not hits:
         return {"status": "message_not_found", "own_count": len(own)}
     if len(hits) > 1:
-        return {"status": "ambiguous_match", "candidates": [h["index"] for h in hits]}
+        return {
+            "status": "ambiguous_match",
+            "candidates": [h.get("index") for h in hits],
+        }
+    if hits[0].get("index") is None:
+        return {"status": "message_without_index"}
     return {"status": "ok", "message": hits[0]}
 
 
@@ -199,8 +212,14 @@ def edit_landed(
     already contained it.
     """
     want = canon(new_text)
-    hit = next((m for m in messages if m.get("index") == target.get("index")), None)
-    if hit is None or not hit.get("own"):
+    index = target.get("index") if isinstance(target, dict) else None
+    if index is None:
+        return False
+    hit = next(
+        (m for m in messages or [] if isinstance(m, dict) and m.get("index") == index),
+        None,
+    )
+    if hit is None or hit.get("own") is not True:
         return False
     # LinkedIn may append an "(bearbeitet)"/"Edited" marker: only that marker
     # is removed, then the comparison is exact. The former prefix match let

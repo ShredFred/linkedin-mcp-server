@@ -288,6 +288,8 @@ _DEGREE_RE = re.compile(r"•\s*(\d)")
 
 def parse_connected_date(line: str) -> date | None:
     """Parse "Am 28. September 2026 vernetzt" / "Connected on September 28, 2026"."""
+    if not isinstance(line, str):
+        return None
     match = _CONNECTED_DE.match(line.strip())
     if match:
         day, month_name, year = match.groups()
@@ -306,7 +308,16 @@ def parse_connected_date(line: str) -> date | None:
 
 
 def classify_action(actions: list[dict[str, str]]) -> str:
-    """Return message/connect/pending/follow/unknown for one card's actions."""
+    """Return message/connect/pending/follow/unknown for one card's actions.
+
+    Page data may carry null fields or non-dict entries; those count as no
+    signal, never as an exception that would drop the whole page.
+    """
+    actions = [
+        {k: v if isinstance(v, str) else "" for k, v in a.items()}
+        for a in (actions if isinstance(actions, list) else [])
+        if isinstance(a, dict)
+    ]
     for action in actions:
         if action.get("key", "").endswith("_pending"):
             return "pending"
@@ -341,6 +352,12 @@ def split_person_lines(lines: list[str]) -> dict[str, Any]:
     LinkedIn renders the degree either on the name line ("Ben Kahle • 2.") or,
     for 1st-degree and self cards, as its own line ("• 1.", "• Sie").
     """
+    # A null or non-text line stays in place as "" so headline and location
+    # keep their positions; a missing name is None, not "".
+    lines = [
+        ln if isinstance(ln, str) else ""
+        for ln in (lines if isinstance(lines, list) else [])
+    ]
     if not lines:
         return {"name": None, "degree": None, "is_self": False, "rest": []}
     name_line, rest = lines[0], list(lines[1:])
@@ -349,7 +366,7 @@ def split_person_lines(lines: list[str]) -> dict[str, Any]:
         marker = rest.pop(0).lstrip("•").strip()
     degree = parse_degree("• " + marker) if marker else None
     return {
-        "name": _clean_name(name_line),
+        "name": _clean_name(name_line) or None,
         "degree": degree,
         "is_self": marker.lower() in _SELF_MARKERS,
         "rest": rest,
@@ -376,7 +393,27 @@ def project_attendees(
     is indistinguishable from that, so it is reported instead of read as "0".
     """
     keep = ATTENDEE_FIELDS_CARD if fields == "card" else ATTENDEE_FIELDS_MINIMAL
-    people = [a for a in result.get("attendees") or [] if a.get("action") != "self"]
+    raw = result.get("attendees")
+    raw = raw if isinstance(raw, list) else []
+    # A non-dict entry or one without a slug is no identified person: it is
+    # counted and reported, never handed on as a known attendee, and it makes
+    # the read incomplete. The rest of the list stays.
+    malformed = sum(1 for a in raw if not isinstance(a, dict))
+    unidentified = sum(
+        1
+        for a in raw
+        if isinstance(a, dict)
+        and a.get("action") != "self"
+        and not (isinstance(a.get("slug"), str) and a["slug"].strip())
+    )
+    people = [
+        a
+        for a in raw
+        if isinstance(a, dict)
+        and a.get("action") != "self"
+        and isinstance(a.get("slug"), str)
+        and a["slug"].strip()
+    ]
     cut = limit is not None and len(people) > limit
     resume_at = people[limit].get("page") if cut else None
     if limit is not None:
@@ -392,17 +429,31 @@ def project_attendees(
         # next_page would skip them for good.
         if resume_at is not None:
             out["next_page"] = resume_at
-    first_empty = result.get("start_page") == 1 and not result.get("attendees")
+    if out.get("complete") is not True:
+        out["complete"] = False
+    if malformed or unidentified:
+        out["complete"] = False
+        out["skipped"] = {"malformed": malformed, "without_slug": unidentified}
+    pages_read = result.get("pages_read")
+    if isinstance(pages_read, bool) or not isinstance(pages_read, int):
+        pages_read = 0
+    first_empty = result.get("start_page") == 1 and not raw
     out.update(
-        readable=not (first_empty and result.get("pages_read", 0) >= 1),
+        readable=not (first_empty and pages_read >= 1),
         fields=fields if fields == "card" else "minimal",
         count=len(people),
         attendees=[{k: a.get(k) for k in keep} for a in people],
     )
     if not out["readable"]:
         out["reason"] = "empty_first_page_rsvp_likely_required"
-    if result.get("warnings"):
-        out["warnings"] = result["warnings"]
+    warnings = result.get("warnings")
+    warnings = list(warnings) if isinstance(warnings, list) else []
+    if malformed or unidentified:
+        warnings.append(
+            f"{malformed + unidentified} attendee entr(y/ies) without a usable slug skipped"
+        )
+    if warnings:
+        out["warnings"] = warnings
     return out
 
 
@@ -457,8 +508,38 @@ class MiviaNetworkReader:
         await self._session.delay(random.uniform(*bounds))
 
     async def _cards(self) -> list[dict[str, Any]]:
+        """Cards with a text slug; lines and actions normalised to lists.
+
+        A card without a usable slug is no identified person and is dropped,
+        but counted in ``last_dropped_cards`` so a caller cannot mistake a
+        page with dropped cards for a complete one.
+        """
         cards = await self._page.evaluate(_CARDS_JS)
-        return [card for card in cards or [] if card.get("slug")]
+        out = []
+        dropped = 0
+        for card in cards if isinstance(cards, list) else []:
+            slug = card.get("slug") if isinstance(card, dict) else None
+            if not (isinstance(slug, str) and slug.strip()):
+                dropped += 1
+                continue
+            lines = card.get("lines")
+            actions = card.get("actions")
+            out.append(
+                {
+                    **card,
+                    "lines": [
+                        ln if isinstance(ln, str) else ""
+                        for ln in (lines if isinstance(lines, list) else [])
+                    ],
+                    "actions": [
+                        a
+                        for a in (actions if isinstance(actions, list) else [])
+                        if isinstance(a, dict)
+                    ],
+                }
+            )
+        self.last_dropped_cards = dropped
+        return out
 
     async def _wait_for_cards(self, timeout: float = 12.0) -> None:
         deadline = self._session.monotonic() + timeout
@@ -516,6 +597,7 @@ class MiviaNetworkReader:
             return False
 
         cards = await self._scroll_until(limit=limit, stop=older_than_since)
+        dropped = getattr(self, "last_dropped_cards", 0)
         connections = []
         undated = 0
         for card in cards:
@@ -549,8 +631,12 @@ class MiviaNetworkReader:
         # Complete means: nothing newer than *since* was left unread. A stop at
         # *limit* or at the scroll cap may have cut the list.
         end = getattr(self, "last_scroll_end", "end")
-        result["complete"] = len(connections) < limit and end in ("end", "stop")
+        result["complete"] = (
+            len(connections) < limit and end in ("end", "stop") and not dropped
+        )
         warnings = []
+        if dropped:
+            warnings.append(f"{dropped} card(s) without a usable slug skipped")
         if undated:
             warnings.append(f"{undated} card(s) without a parseable connection date")
         if end == "max_rounds":
@@ -647,6 +733,7 @@ class MiviaNetworkReader:
         ):
             raise ValueError("start_page must be an integer >= 1")
         _check_limit(max_pages, "max_pages", MAX_ATTENDEE_PAGES)
+        dropped = 0
         attendees: list[dict[str, Any]] = []
         seen: set[str] = set()
         warnings: list[str] = []
@@ -662,6 +749,7 @@ class MiviaNetworkReader:
             await self._wait_for_cards()
             await self._wait_for_actions()
             cards = await self._cards()
+            dropped += getattr(self, "last_dropped_cards", 0)
             pages_read += 1
             if not cards:
                 body = await self._page.evaluate(
@@ -713,12 +801,14 @@ class MiviaNetworkReader:
             if len(cards) < 10:
                 exhausted = True
                 break
+        if dropped:
+            warnings.append(f"{dropped} card(s) without a usable slug skipped")
         return {
             "event_id": event_id,
             "start_page": start_page,
             "pages_read": pages_read,
             "next_page": None if exhausted or repeated else page + 1,
-            "complete": exhausted,
+            "complete": exhausted and not dropped,
             "count": len(attendees),
             "attendees": attendees,
             **({"warnings": warnings} if warnings else {}),

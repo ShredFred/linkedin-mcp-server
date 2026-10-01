@@ -95,7 +95,7 @@ def parse_comment_ref(comment: str) -> tuple[str | None, str]:
 
 def slug_of(href: str | None) -> str | None:
     """Lower-cased, percent-decoded member slug of a profile link; None otherwise."""
-    ref = parse_person_ref(href or "")
+    ref = parse_person_ref(href if isinstance(href, str) else "")
     if ref.get("kind") != "member":
         return None
     return unquote(str(ref["id"])).strip().lower() or None
@@ -109,7 +109,7 @@ def same_member(href: str | None, own_slug: str | None) -> bool:
 
 def text_matches(read: str | None, expected: str) -> bool:
     """Exact comparison after whitespace canon and LinkedIn's edit marker."""
-    if read is None:
+    if not isinstance(read, str):
         return False
     return canon(strip_edit_marker(read)[0]) == canon(expected)
 
@@ -120,7 +120,7 @@ def prefill_matches(prefill: str, shown: str | None) -> bool:
     The card may truncate ("… mehr"); then the editor must start with the
     shown part. Without a shown text there is nothing to compare: refused.
     """
-    if not shown:
+    if not shown or not isinstance(shown, str):
         return False
     full = canon(strip_edit_marker(prefill)[0])
     seen = canon(strip_edit_marker(shown)[0])
@@ -328,15 +328,24 @@ def post_gone_evidence(
     the content is unavailable. Anything else (login wall, checkpoint, a feed
     quoting "nicht verfügbar") is not evidence.
     """
-    url = url or ""
+    url = url if isinstance(url, str) else ""
     if re.fullmatch(r"https://www\.linkedin\.com/feed/?(?:\?.*)?", url):
         return True
     if activity_id not in url:
         return False
-    state = state or {}
+    state = state if isinstance(state, dict) else {}
     text = state.get("text") or ""
+    cards = state.get("cards") or 0
+    # Only a readable zero card count is evidence; an unreadable count or a
+    # non-text page is not.
+    if (
+        not isinstance(text, str)
+        or isinstance(cards, bool)
+        or not isinstance(cards, int)
+    ):
+        return False
     return (
-        int(state.get("cards") or 0) == 0
+        cards == 0
         and len(text) <= _ERROR_PAGE_MAX_CHARS
         and bool(_GONE_RE.search(text))
     )

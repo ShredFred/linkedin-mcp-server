@@ -56,7 +56,7 @@ _AGE_PATTERNS = [
 
 def sent_age_days(text: str | None) -> int | None:
     """ "Vor 3 Wochen gesendet" -> 21, "Gestern gesendet" -> 1, unknown -> None."""
-    if not text:
+    if not text or not isinstance(text, str):
         return None
     low = text.lower()
     if "gestern" in low or "yesterday" in low:
@@ -78,7 +78,9 @@ _DEGREE_LABEL_RE = re.compile(
 def group_member_lines(lines: list[str]) -> list[str]:
     """Drop the spelled-out degree label and normalise '· 3.' to '• 3.'."""
     out = []
-    for line in lines:
+    for line in lines if isinstance(lines, list) else []:
+        if not isinstance(line, str):
+            continue
         line = line.replace(" ", " ").strip()
         if _DEGREE_LABEL_RE.match(line):
             continue
@@ -198,7 +200,7 @@ def _matching_comment_keys(comments: Any, probe: str) -> set[str]:
     counts as new.
     """
     keys: set[str] = set()
-    for c in comments or []:
+    for c in comments if isinstance(comments, list) else []:
         if not isinstance(c, dict):
             continue
         key = str(c.get("key") or "")

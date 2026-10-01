@@ -98,7 +98,9 @@ _BOILERPLATE = re.compile(
 
 def post_head(text: str) -> str:
     """First line of the post's own text, not of the card's labels."""
-    lines = [ln.strip() for ln in (text or "").split("\n") if ln.strip()]
+    if not isinstance(text, str):
+        text = ""
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
     for ln in lines:
         if len(ln) >= 25 and not _BOILERPLATE.search(ln):
             return ln[:80]
@@ -259,24 +261,49 @@ class Collector:
         if reactors:
             self._take("page_read")
             r = await self.engagement.read_reactors(aid, 300)
-            out["reactors_available"] = r["available"]
-            found_r = r["reactors"]
+            out["reactors_available"] = r.get("available")
+            found_r = r.get("reactors")
             await self.session.delay(random.uniform(2.0, 4.0))
         self._take("page_read")
         page = await self.engagement.read_post_page(aid)
-        out["reaction_count"] = page["reaction_count"]
-        comments = page["comments"]
+        out["reaction_count"] = page.get("reaction_count")
+        comments = page.get("comments")
+        # Page data may carry non-dict entries; they are counted, not raised,
+        # so one broken entry does not drop the whole post.
+        found_r = found_r if isinstance(found_r, list) else []
+        comments = comments if isinstance(comments, list) else []
+        broken = sum(1 for x in found_r + comments if not isinstance(x, dict))
+        found_r = [x for x in found_r if isinstance(x, dict)]
+        comments = [x for x in comments if isinstance(x, dict)]
+
+        def txt(v):
+            return v if isinstance(v, str) else None
+
+        def anonymous(x):
+            # Neither id nor name: every such engager would share one key
+            # ("name=?"), so the first one remembered would hide all later
+            # ones. They are always reported as new and never remembered.
+            return not txt(x.get("id")) and not (txt(x.get("name")) or "").strip()
 
         def rk(x):
-            return engager_key("reaction", x["id"], x["reaction"], name=x["name"])
+            return engager_key(
+                "reaction",
+                txt(x.get("id")),
+                txt(x.get("reaction")) or "",
+                name=txt(x.get("name")),
+            )
 
         def ck(x):
             # Without a comment id the text stands in; otherwise every later
             # comment of the same person would count as already seen.
-            extra = x["comment_id"] or "text=" + outreach.text_sha(x.get("text") or "")
-            return engager_key("comment", x["id"], extra, name=x["name"])
+            extra = txt(x.get("comment_id")) or "text=" + outreach.text_sha(
+                txt(x.get("text")) or ""
+            )
+            return engager_key(
+                "comment", txt(x.get("id")), extra, name=txt(x.get("name"))
+            )
 
-        out["new_reactors"] = [x for x in found_r if rk(x) not in known]
+        out["new_reactors"] = [x for x in found_r if anonymous(x) or rk(x) not in known]
 
         def legacy_known(x):
             # Until 2026-10-01 an id-less comment was stored as
@@ -284,18 +311,27 @@ class Collector:
             # reported comment, but only while the person has no text= key in
             # memory yet: after the first run with the new key it would hide
             # every later comment of the same person again.
-            if x["comment_id"]:
+            if txt(x.get("comment_id")):
                 return False
-            old = engager_key("comment", x["id"], "", name=x["name"])
+            old = engager_key("comment", txt(x.get("id")), "", name=txt(x.get("name")))
             return old in known and not any(k.startswith(old + "text=") for k in known)
 
         out["new_comments"] = [
-            x for x in comments if ck(x) not in known and not legacy_known(x)
+            x
+            for x in comments
+            if anonymous(x) or (ck(x) not in known and not legacy_known(x))
         ]
         out["reactor_total"] = len(found_r)
         out["comment_total"] = len(comments)
+        anon = sum(1 for x in found_r + comments if anonymous(x))
+        if broken or anon:
+            out["unidentified"] = {"broken": broken, "without_id_or_name": anon}
         out["first_run"] = not known
-        self.seen.remember(aid, {rk(x) for x in found_r} | {ck(x) for x in comments})
+        self.seen.remember(
+            aid,
+            {rk(x) for x in found_r if not anonymous(x)}
+            | {ck(x) for x in comments if not anonymous(x)},
+        )
         return out
 
     async def own_posts(self) -> list[dict[str, Any]]:
