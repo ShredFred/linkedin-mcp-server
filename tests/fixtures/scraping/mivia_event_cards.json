@@ -1,0 +1,7 @@
+[
+  {"lines": ["Mo., 12. Okt. 2026", "Werkstoffprüfung live", "Messe Stuttgart, Stuttgart, DE • Von Beispiel GmbH"], "place": "Messe Stuttgart, Stuttgart, DE", "is_online": false, "country": "DE"},
+  {"lines": ["Fachtag Härten", "Do., 5. Nov. 2026", "Wels, Österreich • Von Beispielverband"], "place": "Wels, Österreich", "is_online": false, "country": "AT"},
+  {"lines": ["Webinar Gefügeanalyse", "Mi., 4. Nov., 10:00", "Online • Von Beispiel AG", "12 Teilnehmer:innen"], "place": "Online", "is_online": true, "country": null},
+  {"lines": ["Kongress", "Di., 13. Okt.", "Köln • Von AWT"], "place": "Köln", "is_online": false, "country": null},
+  {"lines": ["HK 2026", "Matthias Beispiel und 307 weitere Personen nehmen teil"], "place": null, "is_online": null, "country": null}
+]
