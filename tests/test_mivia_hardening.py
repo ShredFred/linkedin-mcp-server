@@ -148,7 +148,8 @@ def test_peek_does_not_book():
         ("connect_guarded", {"linkedin_username": "  ", "confirm_send": False}),
         ("set_contact_note", {"linkedin_username": COMPANY_URL, "note": "x"}),
         ("withdraw_invitations", {"usernames": [COMPANY_URL]}),
-        ("invite_to_event", {"event_id": "1", "usernames": [""]}),
+        # A valid event id, so the recipient check is what refuses.
+        ("invite_to_event", {"event_id": "7351234567890123456", "usernames": [""]}),
     ],
 )
 def test_invalid_recipient_is_a_status(name, args):

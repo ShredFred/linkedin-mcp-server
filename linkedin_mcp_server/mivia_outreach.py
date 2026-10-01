@@ -380,7 +380,14 @@ def _file_lock(path: Path, timeout: float = 15.0, stale_after: float = 60.0):
     waiter cannot delete a lock another one has just created.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    token = f"{os.getpid()}-{time.monotonic_ns()}-{id(path)}".encode()
+    # Token: "pid:creation-time:unique". A takeover asks whether that process
+    # still runs; the age is only the fallback for an unreadable owner. A
+    # slow live holder (virus scanner, fsync > stale_after) is never taken
+    # over -- two holders would interleave rows in the ledger.
+    token = (
+        f"{os.getpid()}:{_process_created(os.getpid()) or 0}:"
+        f"{time.monotonic_ns()}-{id(path)}"
+    ).encode()
     deadline = time.monotonic() + timeout
     while True:
         try:
@@ -391,7 +398,9 @@ def _file_lock(path: Path, timeout: float = 15.0, stale_after: float = 60.0):
             # PermissionError: Windows refuses O_EXCL on a file that is being
             # deleted -- the lock is still taken, wait like for an existing one.
             try:
-                if time.time() - path.stat().st_mtime > stale_after:
+                if time.time() - path.stat().st_mtime > stale_after and (
+                    _lock_holder_alive(path) is not True
+                ):
                     _take_over_stale(path, stale_after)
                     continue
             except FileNotFoundError:
@@ -418,6 +427,74 @@ def _file_lock(path: Path, timeout: float = 15.0, stale_after: float = 60.0):
                 break
             except PermissionError:
                 time.sleep(0.05)
+
+
+def _process_created(pid: int) -> int | None:
+    """Creation time of *pid* (opaque int), None if unknown or not running.
+
+    Guards against PID reuse: a recycled PID has a different creation time.
+    """
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFO
+        if not handle:
+            return None
+        try:
+            code = wintypes.DWORD()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(code)) and (
+                code.value != 259  # STILL_ACTIVE
+            ):
+                return None
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if not kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+                return None
+            created = times[0]
+            return (created.dwHighDateTime << 32) | created.dwLowDateTime
+        finally:
+            kernel32.CloseHandle(handle)
+    stat = Path(f"/proc/{pid}/stat")
+    try:
+        # Field 22 (starttime) after the parenthesised comm.
+        return int(stat.read_text().rsplit(")", 1)[1].split()[19])
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def _pid_running(pid: int) -> bool:
+    if os.name == "nt":
+        return _process_created(pid) is not None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _lock_holder_alive(path: Path) -> bool | None:
+    """True: the owner process still runs; False: it is gone; None: unknown
+    (unreadable or foreign token) -- then the age alone decides."""
+    try:
+        raw = path.read_bytes().decode("ascii")
+        pid_text, created_text, _ = raw.split(":", 2)
+        pid, created = int(pid_text), int(created_text)
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    if pid <= 0:
+        return None
+    if not _pid_running(pid):
+        return False
+    now_created = _process_created(pid)
+    if created and now_created is not None and now_created != created:
+        return False  # PID was reused by another process
+    return True
 
 
 def _take_over_stale(path: Path, stale_after: float) -> None:

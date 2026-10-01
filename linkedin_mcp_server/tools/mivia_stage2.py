@@ -23,6 +23,9 @@ from linkedin_mcp_server import mivia_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.linkedin.contracts import is_invisible_control
 from linkedin_mcp_server.linkedin.mivia_actions import MiviaActions, parse_group_id
+from linkedin_mcp_server.linkedin.mivia_network import (
+    _EVENT_ID_RE as _NETWORK_EVENT_ID_RE,
+)
 from linkedin_mcp_server.linkedin.mivia_events import MiviaEventFinder, event_summary
 from linkedin_mcp_server.linkedin.mivia_engagement import (
     MiviaEngagementReader,
@@ -259,7 +262,9 @@ def register_mivia_stage2_tools(
         returns status dialog_not_measured instead of clicking blind.
         """
         event_id = event_id.strip().split("?")[0].strip("/").rsplit("/", 1)[-1]
-        if not re.fullmatch(r"\d{1,25}", event_id):
+        # One rule with the network layer (10-25 digits): a shorter id was
+        # accepted here and only refused later inside the browser action.
+        if not _NETWORK_EVENT_ID_RE.match(event_id):
             return {
                 "status": "invalid_event_id",
                 "message": "event_id must be the numeric id or the event URL",
