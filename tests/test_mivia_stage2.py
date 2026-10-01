@@ -481,3 +481,73 @@ class TestReviewFixes:
         assert store.last_run() is None
         store.record({"1"})
         assert store.last_run() is not None and store.seen() == {"1"}
+
+
+class TestReplyAfterHardening:
+    """Regression tests: unknown sender, group chats, repeated salutation."""
+
+    def test_unknown_sender_is_unclear_not_reply(self):
+        text = (
+            "Hallo Herr X,\nwir bieten ...\n"
+            "Profil von Frederik Stadler anzeigen\nFrederik Stadler 12:00\n\nNachtrag\n"
+        )
+        state = outreach.reply_after(text, "Hallo Herr X,")
+        assert state["replied"] is None
+        assert state["unclear"] is True
+        assert state["reason"] == "sender_unknown"
+
+    def test_unknown_sender_without_later_block_is_no_reply(self):
+        state = outreach.reply_after("Hallo Herr X,\nwir bieten ...\n", "Hallo Herr X,")
+        assert state["replied"] is False
+
+    def test_group_chat_is_unclear(self):
+        text = (
+            THREAD
+            + "\nProfil von Anna A anzeigen\nAnna A 12:30\n\nInteressant\n"
+            + "\nProfil von Bert B anzeigen\nBert B 12:31\n\nMich auch\n"
+        )
+        state = outreach.reply_after(text, "Test 4/4 MCP-Fork (Calendly mit UTM)")
+        assert state["replied"] is None
+        assert state["unclear"] is True
+        assert state["reason"] == "group_chat"
+        assert state["others"] == ["Anna A", "Bert B"]
+
+    def test_repeated_salutation_does_not_hide_reply(self):
+        first = "Guten Tag Frau Muster,\nanbei unser Angebot zur Gefügeanalyse."
+        second = "Guten Tag Frau Muster,\nich wollte kurz nachhaken."
+        text = (
+            "Profil von Jessica Schneider anzeigen\nJessica Schneider 10:00\n\n"
+            + first
+            + "\n\nProfil von Eva Muster anzeigen\nEva Muster 11:00\n\nDanke, melde mich.\n"
+            + "\nProfil von Jessica Schneider anzeigen\nJessica Schneider 12:00\n\n"
+            + second
+            + "\n"
+        )
+        head = outreach.text_head(first)
+        # Old rows (head only) land on the later salutation and miss the reply.
+        assert outreach.reply_after(text, head)["replied"] is False
+        anchor = outreach.text_anchor(first)
+        state = outreach.reply_after(text, head, anchor=anchor)
+        assert state["replied"] is True
+        assert state["by"] == "Eva Muster"
+
+    def test_anchor_matches_across_whitespace_variants(self):
+        msg = "Guten Tag Frau Muster,\n\nanbei  unser Angebot."
+        text = (
+            "Profil von Jessica Schneider anzeigen\nJessica Schneider 10:00\n\n"
+            "Guten Tag Frau Muster,\nanbei unser Angebot.\n"
+        )
+        state = outreach.reply_after(text, msg, anchor=outreach.text_anchor(msg))
+        assert state["found"] is True and state["replied"] is False
+
+    def test_missing_anchor_falls_back_to_head(self):
+        state = outreach.reply_after(
+            THREAD,
+            "Test 4/4 MCP-Fork (Calendly mit UTM)",
+            anchor="voellig anderer langer Anker der nirgends im Thread steht " * 2,
+        )
+        assert state == {"found": True, "replied": False, "sender": "Jessica Schneider"}
+
+    def test_text_anchor_is_canonical_and_bounded(self):
+        assert outreach.text_anchor("a\n\n b") == "a b"
+        assert len(outreach.text_anchor("x" * 500)) == outreach.TEXT_ANCHOR_CHARS

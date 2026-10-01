@@ -1115,6 +1115,9 @@ def test_edit_updates_text_head_of_original_message_row(monkeypatch):
     assert row["status"] == "verified"
     sent = outreach.sent_messages(outreach.Ledger.default())
     assert sent[0]["text_head"] == "Hallo Dieter, neuer Text"
+    # The edit note carries the new anchor too, so the longer search key
+    # follows the edited text instead of pointing at text that is gone.
+    assert sent[0]["text_anchor"] == "Hallo Dieter, neuer Text"
 
 
 def test_inmail_lengths_in_utf16_units():
@@ -1249,3 +1252,51 @@ def test_legacy_comment_pace_row_not_counted_twice():
     ledger.append({"kind": "pace", "action": "like", "count": 1, "at": now})
     assert _used("comment") == 1
     assert _used("like") == 1
+
+
+def test_follow_up_list_reports_unclear_not_due(monkeypatch):
+    # A later block whose author is not determinable is neither a reply nor
+    # "no reply": the contact goes to unclear, never to due.
+    ledger = outreach.Ledger.default()
+    ledger.path.parent.mkdir(parents=True, exist_ok=True)
+    ledger.append(
+        {
+            "attempt": "u1",
+            "kind": "message",
+            "recipient": "anna",
+            "text_head": "Guten Tag Frau Anna,",
+            "status": "verified",
+            "started_at": "2026-09-01T10:00:00+02:00",
+        }
+    )
+
+    class _C:
+        async def get_conversation(self, **kw):
+            # No sender block before our text: the owner cannot be told.
+            text = (
+                "Guten Tag Frau Anna,\nkurze Frage.\n"
+                "Profil von Anna Muster anzeigen\nAnna Muster 12:00\n\nJa gern\n"
+            )
+            return {"sections": {"conversation": text}}
+
+    import linkedin_mcp_server.tools.mivia_stage2 as s2
+
+    async def fake_run(ctx, tool, body):
+        return await body(_C())
+
+    monkeypatch.setattr(s2, "_run", fake_run)
+    out = _call("follow_up_list", {}, extractor=_C(), monkeypatch=monkeypatch)
+    assert out["due"] == []
+    assert out["replied"] == []
+    assert [e["recipient"] for e in out["unclear"]] == ["anna"]
+    assert out["unclear"][0]["reason"] == "sender_unknown"
+
+
+def test_send_row_stores_text_anchor():
+    import inspect
+
+    import linkedin_mcp_server.tools.mivia as m
+    import linkedin_mcp_server.tools.mivia_inmail as mi
+
+    assert '"text_anchor": outreach.text_anchor(message)' in inspect.getsource(m)
+    assert '"text_anchor": outreach.text_anchor(body)' in inspect.getsource(mi)

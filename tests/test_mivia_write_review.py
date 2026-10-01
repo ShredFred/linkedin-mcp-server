@@ -73,9 +73,22 @@ def test_connect_refusal_before_send_does_not_block_retry(monkeypatch, raw):
 
     monkeypatch.setattr(m, "_pace", lambda *a, **k: None)
     args = {"linkedin_username": "dieter", "confirm_send": True}
-    _call("connect_guarded", args, extractor=_Ex(raw), monkeypatch=monkeypatch)
+    ex = _ExClick(raw, False)
+    _call("connect_guarded", args, extractor=ex, monkeypatch=monkeypatch)
     ledger = outreach.Ledger.default()
     assert not ledger.already_contacted("invite", "dieter", None)
+
+
+def test_note_upsell_after_a_send_click_still_blocks(monkeypatch):
+    # The upsell can follow the Enter fallback or a slowly closing dialog:
+    # an invitation may have left, so the person stays blocked.
+    import linkedin_mcp_server.tools.mivia as m
+
+    monkeypatch.setattr(m, "_pace", lambda *a, **k: None)
+    args = {"linkedin_username": "dieter", "confirm_send": True}
+    ex = _ExClick("custom_note_limit_reached", True)
+    _call("connect_guarded", args, extractor=ex, monkeypatch=monkeypatch)
+    assert outreach.Ledger.default().already_contacted("invite", "dieter", None)
 
 
 def test_connect_send_failed_still_blocks(monkeypatch):

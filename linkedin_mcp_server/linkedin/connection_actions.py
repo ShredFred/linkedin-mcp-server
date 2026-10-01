@@ -634,6 +634,9 @@ class ConnectionActions:
                 )
                 btn_count = await buttons.count()
                 if btn_count >= 2:
+                    # Meant to be "Add a note", but an unknown button layout
+                    # can misdirect it onto Send: count it as a send click.
+                    self.send_clicked = True
                     await buttons.nth(btn_count - 2).click()
                     textarea_appeared = True
                     try:

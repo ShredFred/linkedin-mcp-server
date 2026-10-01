@@ -205,6 +205,7 @@ def register_mivia_inmail_tools(
                 "recipient": outreach.recipient_key(username),
                 "text_sha": sha,
                 "text_head": outreach.text_head(subject),
+                "text_anchor": outreach.text_anchor(body),
                 "status": "attempted",
                 "started_at": _now(),
             }
@@ -362,6 +363,7 @@ def register_mivia_inmail_tools(
                 "old_sha": old_sha,
                 "text_sha": new_sha,
                 "text_head": outreach.text_head(new_text),
+                "text_anchor": outreach.text_anchor(new_text),
                 "status": "attempted",
                 "started_at": _now(),
             }
@@ -400,6 +402,9 @@ def register_mivia_inmail_tools(
                         {
                             "attempt": original["attempt"],
                             "text_head": outreach.text_head(new_text),
+                            # Replaces the old text's anchor; a row from
+                            # before anchors gains one here.
+                            "text_anchor": outreach.text_anchor(new_text),
                             "edited_by": attempt,
                             "edited_at": _now(),
                             # The edited text is now what this person got:

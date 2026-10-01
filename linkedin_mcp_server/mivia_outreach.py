@@ -584,31 +584,84 @@ def person_name(name: str) -> str:
     return re.sub(r"\s*\([^)]*\)$", "", name).strip()
 
 
-def reply_after(conversation_text: str, message: str) -> dict[str, Any]:
+def _find_own_message(
+    haystack: str, message: str, anchor: str | None
+) -> tuple[int, int]:
+    """(start, end) of our message's last occurrence in the raw thread text.
+
+    The longest available anchor wins: a stored text_anchor (first ~200
+    canonical characters) is unique where the first line -- usually a
+    salutation like "Guten Tag Frau X," -- repeats in a later message and
+    would hide every reply in between. Whitespace in the anchor matches any
+    whitespace run in the raw text. (-1, -1) when nothing matches.
+    """
+    head = text_head(message)
+    candidates = {a for a in (anchor, text_anchor(message)) if a}
+    for candidate in sorted(candidates, key=len, reverse=True):
+        if len(candidate) <= len(head):
+            continue  # not longer than the head: the head search is the same
+        pattern = re.compile(r"\s+".join(re.escape(w) for w in candidate.split(" ")))
+        last = None
+        for last in pattern.finditer(haystack):
+            pass
+        if last is not None:
+            return last.start(), last.end()
+    pos = haystack.rfind(head) if head else -1
+    if pos < 0:
+        return -1, -1
+    return pos, pos + len(head)
+
+
+def reply_after(
+    conversation_text: str, message: str, anchor: str | None = None
+) -> dict[str, Any]:
     """Did anyone other than the sender write after *message* in this thread?
 
     The thread pane renders each message block behind "Profil von <Name>
     anzeigen". The sender is whoever owns the block holding our text; any later
     block by another name is a reply. The inbox list above the thread repeats
     names too, so only text after our message counts.
+
+    Three outcomes, fail-safe for follow-ups: replied True, replied False, and
+    replied None with unclear=True when a later block exists but its author
+    cannot be told apart from ours (sender unknown) or more than one other
+    person wrote after us (group chat). "unclear" is never "no reply": a
+    follow-up on it may land on someone who already answered.
     """
     haystack = conversation_text or ""
-    # Search the first line in the raw text; the last occurrence is the thread
-    # pane, not the inbox preview above it. *message* may be the whole text or
-    # the stored head.
-    first_line = text_head(message)
-    pos = haystack.rfind(first_line)
-    if pos < 0:
+    start, end = _find_own_message(haystack, message, anchor)
+    if start < 0:
         return {"found": False, "replied": None}
-    before = list(_SENDER_RE.finditer(haystack[:pos]))
+    before = list(_SENDER_RE.finditer(haystack[:start]))
     sender = (
         person_name(next((g for g in before[-1].groups() if g), "")) if before else None
     )
-    after = haystack[pos + len(first_line) :]
-    for match in _SENDER_RE.finditer(after):
-        name = next(g for g in match.groups() if g)
-        name = person_name(name)
-        if sender is None or name != sender:
+    after = haystack[end:]
+    later = [
+        (m, person_name(next(g for g in m.groups() if g)))
+        for m in _SENDER_RE.finditer(after)
+    ]
+    if later and not sender:
+        return {
+            "found": True,
+            "replied": None,
+            "unclear": True,
+            "reason": "sender_unknown",
+            "sender": None,
+            "later_blocks": len(later),
+        }
+    others = sorted({name for _, name in later if name != sender})
+    if len(others) > 1:
+        return {
+            "found": True,
+            "replied": None,
+            "unclear": True,
+            "reason": "group_chat",
+            "sender": sender,
+            "others": others,
+        }
+    for match, name in later:
+        if name != sender:
             excerpt = after[match.end() :].strip().split("\n")
             body = [ln.strip() for ln in excerpt[1:6] if ln.strip()]
             return {
@@ -733,6 +786,15 @@ def undated_messages(ledger: Ledger) -> int:
 def text_head(message: str) -> str:
     """First line, at most 80 characters: enough to find the message in a thread."""
     return next((ln for ln in message.split("\n") if ln.strip()), message).strip()[:80]
+
+
+TEXT_ANCHOR_CHARS = 200
+
+
+def text_anchor(message: str) -> str:
+    """First TEXT_ANCHOR_CHARS of the canonical text: a longer, rarely repeated
+    search key than text_head, stored in new ledger rows as text_anchor."""
+    return canonical_text(message or "")[:TEXT_ANCHOR_CHARS].strip()
 
 
 def last_block_sender(conversation_text: str) -> str | None:

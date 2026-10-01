@@ -239,6 +239,7 @@ async def _send_and_verify(
         "recipient": outreach.recipient_key(username),
         "text_sha": sha,
         "text_head": outreach.text_head(message),
+        "text_anchor": outreach.text_anchor(message),
         "campaign": campaign,
         "status": "attempted",
         "started_at": started,
@@ -996,14 +997,17 @@ def register_mivia_tools(
                 # replaced the note editor. Booking these as unknown blocked
                 # the person for good although no invitation left.
                 "unavailable": "not_sent",
-                "custom_note_limit_reached": "not_sent",
                 "send_failed": "unknown",
-                # connect_unavailable comes both before the deeplink (nothing
-                # left) and after a failed dialog submit; the click marker
-                # decides, see below.
+                # connect_unavailable and custom_note_limit_reached both come
+                # before any send click and after one (the upsell can follow
+                # the Enter fallback or a dialog that closes slowly); the
+                # click marker decides, see below.
                 # Anything unrecognised may have sent: blocking, not retry-safe.
             }.get(raw, "unknown")
-            if raw == "connect_unavailable" and not clicked:
+            if (
+                raw in ("connect_unavailable", "custom_note_limit_reached")
+                and not clicked
+            ):
                 status = "not_sent"
             ledger.append({"attempt": attempt, "status": status, "detail": raw})
             return {

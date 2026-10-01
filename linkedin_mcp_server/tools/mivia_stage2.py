@@ -411,7 +411,9 @@ def register_mivia_stage2_tools(
         For every message in the outreach ledger (newest first, one per
         recipient, at most max_threads threads read at human pace) the thread
         is read back: replied=true when a block by someone other than the sender
-        follows our message. Recipients without a reply whose last message is at
+        follows our message; unclear=true (listed separately, never due) when a
+        later block's author cannot be determined or several others wrote
+        after us (group chat). Recipients without a reply whose last message is at
         least follow_up_days old are due. Local contact notes (set_contact_note)
         are attached.
         """
@@ -455,9 +457,15 @@ def register_mivia_stage2_tools(
                         }
                     )
                     continue
+                # Longest stored anchor first; rows from before text_anchor
+                # fall back to text_head.
                 state = (
-                    outreach.reply_after(text, row["text_head"])
-                    if row.get("text_head")
+                    outreach.reply_after(
+                        text,
+                        row.get("text_head") or row["text_anchor"],
+                        anchor=row.get("text_anchor"),
+                    )
+                    if row.get("text_head") or row.get("text_anchor")
                     else {"found": False, "replied": None}
                 )
                 if not state.get("found"):
@@ -484,6 +492,9 @@ def register_mivia_stage2_tools(
                 "skipped_undated": outreach.undated_messages(ledger),
                 "replied": [e for e in entries if e.get("replied")],
                 "due": [e for e in entries if e.get("due")],
+                # Author of a later block not determinable, or a group chat:
+                # neither replied nor due -- check by hand before following up.
+                "unclear": [e for e in entries if e.get("unclear")],
                 "entries": entries,
             }
 
