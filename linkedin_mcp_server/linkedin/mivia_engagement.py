@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 SEEN_ENV = "MIVIA_LINKEDIN_ENGAGERS_SEEN"
 
-_ACTIVITY_RE = re.compile(r"(?:activity[:-]|urn:li:activity:)(\d{16,22})")
+_ACTIVITY_RE = re.compile(r"(?:activity[:-]|urn:li:activity:)(\d+)")
 _SCROLL_PAUSE = (1.8, 3.2)
 
 # Icon token prefix -> reaction kind. Structural first; the text table below is
@@ -157,7 +157,15 @@ def parse_activity_id(post: str) -> str:
     post = post.strip()
     if re.fullmatch(r"\d{16,22}", post):
         return post
-    found = set(_ACTIVITY_RE.findall(post))
+    # The regex takes the whole digit run; a run outside 16..22 is refused
+    # instead of cut, because a cut id names another post.
+    runs = set(_ACTIVITY_RE.findall(post))
+    bad = sorted(r for r in runs if not 16 <= len(r) <= 22)
+    if bad:
+        raise ValueError(
+            "post_url activity id has an invalid length: " + ", ".join(bad)
+        )
+    found = runs
     if not found:
         raise ValueError(
             "post_url must contain an activity id (urn:li:activity:<id> or .../posts/...-activity-<id>-...)"

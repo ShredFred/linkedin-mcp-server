@@ -510,7 +510,12 @@ def landed_identity_mismatch(
     req = unquote(str(requested or ""))
     if req.isdigit() or (kind == "in" and re.match(r"^AC[a-zA-Z]", req)):
         return None
-    parts = [p for p in urlparse(landed_url).path.split("/") if p]
+    try:
+        path = urlparse(landed_url).path
+    except ValueError:
+        # An unparsable landed URL ("https://[broken/...") is no finding.
+        return None
+    parts = [p for p in path.split("/") if p]
     if len(parts) < 2 or parts[0] != kind:
         # A company slug that LinkedIn moves to a school or showcase page.
         if kind == "company" and len(parts) >= 2 and parts[0] in ("school", "showcase"):

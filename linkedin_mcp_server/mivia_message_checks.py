@@ -33,6 +33,17 @@ _URL_RE = re.compile(r"\b((?:https?://|www\.)[^\s<>()\"']+)", re.IGNORECASE)
 # substring: "t.co/" used to hit robot.co/x and "bit.ly" www.orbit.ly.
 _SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "lnkd.in")
 _CALENDLY_HOSTS = ("calendly.com", "www.calendly.com")
+# A shortener host wherever it stands, also glued to a word ("Siehexhttps://bit.ly/x",
+# "Siehe_bit.ly/x") where _URL_RE's  and _BARE_HOST's lookbehind miss it. The
+# host must start at a host boundary (no host character or "@" before it, or
+# right after "//") and be followed by "/": robot.co/x, orbit.ly and mail
+# addresses stay clean.
+_GLUED_SHORTENER_RE = re.compile(
+    r"(?:(?<![a-z0-9.@-])|(?<=//))(?:[a-z0-9-]+\.)*(?:"
+    + "|".join(re.escape(s) for s in _SHORTENERS)
+    + r")/[^\s<>()\"']*",
+    re.IGNORECASE,
+)
 # Hidden in a pasted text and reordering or hiding it; same rule as
 # tools/mivia.py:_hidden_format_char (ZWNJ/ZWJ and emoji tags allowed).
 _ALLOWED_CF = (0x200C, 0x200D)
@@ -72,7 +83,9 @@ def _fold(value: str) -> str:
 
 def utf16_len(text: str) -> int:
     """Length as the browser counts it: an emoji is two units, not one."""
-    return len((text or "").encode("utf-16-le")) // 2
+    # surrogatepass: a lone surrogate (a cut emoji from JSON) counts as one
+    # unit instead of raising; check_outgoing refuses it before counting.
+    return len((text or "").encode("utf-16-le", "surrogatepass")) // 2
 
 
 def hidden_format_char(character: str) -> bool:
@@ -149,6 +162,15 @@ def calendly_findings(text: str) -> list[dict[str, Any]]:
     return found
 
 
+def shortener_findings(text: str) -> list[dict[str, Any]]:
+    """Every shortener host at a host boundary, also glued to a word."""
+    found = []
+    for match in _GLUED_SHORTENER_RE.finditer(text or ""):
+        url = match.group(0).rstrip(".,;:!?")
+        found.append({"code": "link_shortener", "url": url})
+    return found
+
+
 def check_outgoing(text: str, *, max_utf16: int) -> dict[str, Any] | None:
     """Browser-free refusal shared by InMail body/subject and message edit:
     hidden format characters, length, links (bare ones too), placeholders.
@@ -158,12 +180,18 @@ def check_outgoing(text: str, *, max_utf16: int) -> dict[str, Any] | None:
             "status": "invalid_message",
             "detail": "invisible or direction-changing characters are refused",
         }
+    if any(0xD800 <= ord(c) <= 0xDFFF for c in text or ""):
+        return {
+            "status": "invalid_message",
+            "detail": "lone surrogate characters (a cut emoji) are refused",
+        }
     if utf16_len(text) > max_utf16:
         return {"status": "message_too_long", "max": max_utf16}
     probe = bare_links_as_https(text)
     findings = check_links(probe)
     seen = {f.get("url") for f in findings}
     findings += [f for f in calendly_findings(probe) if f["url"] not in seen]
+    findings += [f for f in shortener_findings(probe) if f["url"] not in seen]
     findings += check_placeholders(probe)
     if findings:
         return {"status": "content_check_failed", "findings": findings}
