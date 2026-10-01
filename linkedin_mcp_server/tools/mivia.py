@@ -170,6 +170,24 @@ def check_invite_note(note: str | None) -> dict[str, Any] | None:
     return None
 
 
+def check_message_content(message: str) -> dict[str, Any] | None:
+    """Browser-free content refusal for a direct message; None when it may go.
+
+    Same rules as the invite note and the InMail: an unfilled template
+    ({{vorname}}, [Name], <Firma>), a non-https link, a shortener or a foreign
+    Calendly account stops the send before anything is booked. The salutation
+    is not checked here: the recipient's display name is not known yet.
+    """
+    findings = [
+        f
+        for f in check_message(message, None)
+        if not f["code"].startswith("salutation")
+    ]
+    if findings:
+        return {"status": "content_check_failed", "findings": findings}
+    return None
+
+
 def _peek(action: str, count: int = 1) -> dict[str, Any] | None:
     """Check the pacer without booking; refusal dict when the budget is spent."""
     try:
@@ -718,6 +736,18 @@ def register_mivia_tools(
         refusal = refuse_an_invalid_message(username, message)
         if refusal is not None:
             return refusal
+        content = check_message_content(message)
+        if content:
+            return {"recipient": username, **content}
+        canary_key = outreach.recipient_key(outreach.DEFAULT_CANARY)
+        if allow_repeat and outreach.recipient_key(username) != canary_key:
+            # A repeat to a real person is a second copy of the same text in
+            # their inbox -- the retry after an "unknown" is exactly that case.
+            return {
+                "recipient": username,
+                "status": "repeat_not_allowed",
+                "detail": "allow_repeat is for the canary only",
+            }
         ledger = outreach.Ledger.default()
         previous = ledger.already_contacted(
             "message", username, outreach.text_sha(message)
@@ -778,6 +808,9 @@ def register_mivia_tools(
         refusal = refuse_an_invalid_message(canary_key, message)
         if refusal is not None:
             return refusal
+        content = check_message_content(message)
+        if content:
+            return content
         if not campaign or not campaign.strip():
             return {"status": "campaign_required"}
         invalid = []

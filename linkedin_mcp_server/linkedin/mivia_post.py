@@ -28,6 +28,26 @@ _POST_WORDS = ["posten", "post", "veröffentlichen", "publish"]
 _MEDIA_LABELS = ["medieninhalte", "medien", "add media", "media", "foto", "photo"]
 _NEXT_WORDS = ["weiter", "next", "fertig", "done"]
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+_CLOSE_LABELS = ["schließen", "dismiss", "close", "verwerfen", "discard"]
+_DISCARD_WORDS = ["verwerfen", "discard"]
+
+# Abandon the composer after an image step failed: close the visible dialog,
+# then confirm the discard prompt if LinkedIn shows one. Only buttons whose
+# aria-label / text is in the close or discard lists are ever clicked, never a
+# post button, so a failing cleanup can not publish anything.
+_DISCARD_JS = r"""(arg) => {
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const norm = v => String(v || '').trim().toLowerCase();
+  const buttons = () => [...document.querySelectorAll('[role="dialog"] button, dialog button')]
+    .filter(visible);
+  const steps = [];
+  const close = buttons().filter(b => arg.close.includes(norm(b.getAttribute('aria-label'))));
+  if (close.length) { close[close.length - 1].click(); steps.push('closed'); }
+  const discard = buttons().filter(b => arg.discard.includes(norm(b.innerText))
+    && !arg.post.includes(norm(b.innerText)));
+  if (discard.length === 1) { discard[0].click(); steps.push('discarded'); }
+  return steps.join('+') || 'nothing_to_close';
+}"""
 
 _CANON_JS = r"""
   const mcpCanon = value => String(value || '')
@@ -131,6 +151,23 @@ class MiviaPostComposer:
             "https://www.linkedin.com/feed/", wait_until="domcontentloaded"
         )
 
+    async def _discard(self, result: dict[str, Any]) -> None:
+        """Fail-safe cleanup: errors are recorded, never raised."""
+        try:
+            result["cleanup"] = await self._page.evaluate(
+                _DISCARD_JS,
+                {
+                    "close": _CLOSE_LABELS,
+                    "discard": _DISCARD_WORDS,
+                    "post": _POST_WORDS,
+                },
+            )
+            await self._page.goto(
+                "https://www.linkedin.com/feed/", wait_until="domcontentloaded"
+            )
+        except Exception as exc:  # noqa: BLE001 - cleanup must not raise
+            result["cleanup_error"] = f"{type(exc).__name__}: {exc}"[:200]
+
     async def create_post(
         self, text: str, *, image_path: str | None, confirm_post: bool
     ) -> dict[str, Any]:
@@ -177,7 +214,16 @@ class MiviaPostComposer:
         if image is not None:
             media = await self._button("media", [], _MEDIA_LABELS)
             if not media or media.get("count") != 1:
-                return {**result, "status": "media_button_unavailable"}
+                result["status"] = "media_button_unavailable"
+                await self._discard(result)
+                return result
+        if image is not None and not confirm_post:
+            # Dry run: an uploaded image can not be removed again and LinkedIn
+            # keeps it as a draft, so the dry run checks file and media button
+            # only and never uploads.
+            result["image"] = image.name
+            result["image_step"] = "not_uploaded_dry_run"
+        elif image is not None:
             async with self._page.expect_file_chooser(timeout=10_000) as chooser_info:
                 await self._page.click('[data-mivia-target="media"]')
             chooser = await chooser_info.value
@@ -196,7 +242,9 @@ class MiviaPostComposer:
             try:
                 await self._page.wait_for_selector(_EDITOR, timeout=15_000)
             except Exception:
-                return {**result, "status": "composer_lost_after_image"}
+                result["status"] = "composer_lost_after_image"
+                await self._discard(result)
+                return result
             result["image"] = image.name
 
         written = await self._page.evaluate(

@@ -921,7 +921,14 @@ def register_mivia_stage2_tools(
             finder = MiviaEventFinder(ex._mivia_session, ex._mivia_navigator)
             events = await finder.by_keyword(kw, max_pages=1 if limit <= 10 else 3)
             out = [event_summary(e) for e in events][:limit]
-            return {"keywords": kw, "count": len(out), "events": out}
+            truncated = len(events) > limit
+            return {
+                "keywords": kw,
+                "count": len(out),
+                "events": out,
+                "truncated": truncated,
+                "has_more": truncated or bool(getattr(finder, "last_has_more", False)),
+            }
 
         return await _run(ctx, "search_events", body)
 

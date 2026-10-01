@@ -149,3 +149,108 @@ async def test_older_post_with_same_first_line_does_not_verify() -> None:
     assert result["posted"] is True
     assert result["verified"] is False
     assert result["status"] == "posted_unverified"
+
+
+class ImagePage(FakePage):
+    """Tracks uploads and discard calls; configurable media button and editor."""
+
+    def __init__(
+        self,
+        *,
+        media_count: int = 1,
+        lose_editor: bool = False,
+        discard_raises: bool = False,
+    ) -> None:
+        super().__init__(urn=None)
+        self.media_count = media_count
+        self.lose_editor = lose_editor
+        self.discard_raises = discard_raises
+        self.uploads = 0
+        self.discards = 0
+        self.waits = 0
+
+    async def wait_for_selector(self, *_: Any, **__: Any) -> None:
+        self.waits += 1
+        if self.lose_editor and self.waits > 1:
+            raise TimeoutError("editor gone")
+
+    def expect_file_chooser(self, **_: Any) -> Any:
+        page = self
+
+        class _Chooser:
+            async def set_files(self, _path: str) -> None:
+                page.uploads += 1
+
+        async def _value() -> Any:
+            return _Chooser()
+
+        class _Ctx:
+            async def __aenter__(self) -> Any:
+                self.value = _value()
+                return self
+
+            async def __aexit__(self, *_: Any) -> None:
+                return None
+
+        return _Ctx()
+
+    async def evaluate(self, script: str, arg: Any = None) -> Any:
+        if script is mivia_post._DISCARD_JS:
+            self.discards += 1
+            assert "posten" in arg["post"]
+            if self.discard_raises:
+                raise RuntimeError("dialog gone")
+            return "closed+discarded"
+        if script is mivia_post._FIND_BUTTON_JS and arg["tag"] == "media":
+            return {"count": self.media_count, "disabled": False}
+        if script.startswith("(words) =>"):
+            return 1
+        return await super().evaluate(script, arg)
+
+
+@pytest.fixture
+def image_file(tmp_path: Any) -> str:
+    path = tmp_path / "bild.png"
+    path.write_bytes(b"\x89PNG")
+    return str(path)
+
+
+@pytest.mark.asyncio
+async def test_dry_run_with_image_never_uploads(image_file: str) -> None:
+    page = ImagePage()
+    result = await composer(page).create_post(
+        "Erste Zeile", image_path=image_file, confirm_post=False
+    )
+    assert result["status"] == "dry_run"
+    assert result["image_step"] == "not_uploaded_dry_run"
+    assert page.uploads == 0
+    assert '[data-mivia-target="media"]' not in page.clicked
+    assert result["posted"] is False
+
+
+@pytest.mark.asyncio
+async def test_media_button_unavailable_discards_editor(image_file: str) -> None:
+    page = ImagePage(media_count=0)
+    result = await composer(page).create_post(
+        "Erste Zeile", image_path=image_file, confirm_post=False
+    )
+    assert result["status"] == "media_button_unavailable"
+    assert page.discards == 1
+    assert result["cleanup"] == "closed+discarded"
+    assert not page.clicked
+
+
+@pytest.mark.asyncio
+async def test_composer_lost_after_image_discards_and_tolerates_cleanup_error(
+    image_file: str,
+) -> None:
+    page = ImagePage(lose_editor=True, discard_raises=True)
+    result = await composer(page).create_post(
+        "Erste Zeile", image_path=image_file, confirm_post=True
+    )
+    assert result["status"] == "composer_lost_after_image"
+    assert page.uploads == 1
+    assert page.discards == 1
+    assert "dialog gone" in result["cleanup_error"]
+    assert result["posted"] is False
+    assert '[data-mivia-target="post"]' not in page.clicked

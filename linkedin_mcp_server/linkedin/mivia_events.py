@@ -323,6 +323,11 @@ class MiviaEventFinder:
     async def by_keyword(
         self, keyword: str, max_pages: int = 1
     ) -> list[dict[str, Any]]:
+        # has_more: max_pages full pages were read and the loop stopped on the
+        # page limit, not on a short or empty page -- there may be more events.
+        # Kept as an attribute so the list return type stays unchanged for the
+        # existing callers; read it right after the call.
+        self.last_has_more = False
         events: list[dict[str, Any]] = []
         seen: set[str] = set()
         for page in range(1, max_pages + 1):
@@ -344,6 +349,9 @@ class MiviaEventFinder:
                     }
                 )
             if len(state["items"]) < 10:
+                break
+            if page == max_pages:
+                self.last_has_more = True
                 break
             await self._session.delay(random.uniform(3.0, 6.0))
         return events

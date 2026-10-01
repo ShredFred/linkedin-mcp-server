@@ -96,6 +96,46 @@ def test_by_keyword_dedupes_shifted_pages():
     finder._session = _S()
     events = asyncio.run(finder.by_keyword("x", max_pages=2))
     assert [e["event_id"] for e in events] == [str(i) for i in range(11)]
+    assert finder.last_has_more is False  # short last page: nothing more
+
+
+def test_by_keyword_flags_has_more_after_full_last_page():
+    finder = MiviaEventFinder.__new__(MiviaEventFinder)
+
+    async def read(_url):
+        return {"items": [{"id": str(i), "lines": [f"T{i}"]} for i in range(10)]}
+
+    class _S:
+        delay = staticmethod(_noop)
+
+    finder._read = read
+    finder._session = _S()
+    events = asyncio.run(finder.by_keyword("x", max_pages=1))
+    assert len(events) == 10
+    assert finder.last_has_more is True
+
+
+def test_legacy_idless_comment_key_is_still_known_once(tmp_path):
+    from linkedin_mcp_server.linkedin.mivia_engagement import engager_key
+
+    comments = [{"id": "u1", "comment_id": None, "name": "A", "text": "alt"}]
+
+    class _Eng:
+        async def read_post_page(self, _aid):
+            return {"reaction_count": 0, "comments": list(comments)}
+
+    col = mivia_daily.Collector.__new__(mivia_daily.Collector)
+    col.seen = SeenStore(tmp_path / "seen.json")
+    # Memory written before 2026-10-01: 'comment:<id>:' with empty extra.
+    col.seen.remember("1", {engager_key("comment", "u1", "", name="A")})
+    col.engagement = _Eng()
+    col._take = lambda *a, **k: None
+    first = asyncio.run(col._engagers("1", reactors=False, source="t"))
+    assert first["new_comments"] == []
+    # After migration a later comment of the same person is new again.
+    comments.append({**comments[0], "text": "neu"})
+    second = asyncio.run(col._engagers("1", reactors=False, source="t"))
+    assert [c["text"] for c in second["new_comments"]] == ["neu"]
 
 
 def test_second_idless_comment_of_same_person_is_new(tmp_path):

@@ -236,7 +236,21 @@ class Collector:
             return engager_key("comment", x["id"], extra, name=x["name"])
 
         out["new_reactors"] = [x for x in found_r if rk(x) not in known]
-        out["new_comments"] = [x for x in comments if ck(x) not in known]
+
+        def legacy_known(x):
+            # Until 2026-10-01 an id-less comment was stored as
+            # 'comment:<who>:' (empty extra). That key still marks an already
+            # reported comment, but only while the person has no text= key in
+            # memory yet: after the first run with the new key it would hide
+            # every later comment of the same person again.
+            if x["comment_id"]:
+                return False
+            old = engager_key("comment", x["id"], "", name=x["name"])
+            return old in known and not any(k.startswith(old + "text=") for k in known)
+
+        out["new_comments"] = [
+            x for x in comments if ck(x) not in known and not legacy_known(x)
+        ]
         out["reactor_total"] = len(found_r)
         out["comment_total"] = len(comments)
         out["first_run"] = not known

@@ -1300,3 +1300,80 @@ def test_send_row_stores_text_anchor():
 
     assert '"text_anchor": outreach.text_anchor(message)' in inspect.getsource(m)
     assert '"text_anchor": outreach.text_anchor(body)' in inspect.getsource(mi)
+
+
+# -- review 2026-10-01: content check and allow_repeat on the message path ------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Hallo {{vorname}}, kurze Frage",
+        "Hallo [Vorname], kurze Frage",
+        "Guten Tag <Name>, kurze Frage",
+        "Wie arbeitet [Firmenname] heute?",
+        "Hallo %vorname%, kurze Frage",
+        "Termin: http://calendly.com/mivia_jessica-schneider",
+    ],
+)
+def test_message_send_refuses_unfilled_template(monkeypatch, text):
+    class _Boom:
+        async def send_message(self, *a, **k):  # pragma: no cover - must not run
+            raise AssertionError("sent")
+
+    out = _call(
+        "send_message_verified",
+        {"linkedin_username": "dieter", "message": text, "confirm_send": True},
+        extractor=_Boom(),
+        monkeypatch=monkeypatch,
+    )
+    assert out["status"] == "content_check_failed"
+    assert outreach.Ledger.default().rows() == []
+    batch = _call(
+        "send_campaign_batch",
+        {
+            "message": text,
+            "recipients": ["dieter"],
+            "campaign": "c",
+            "confirm_send": True,
+        },
+        extractor=_Boom(),
+        monkeypatch=monkeypatch,
+    )
+    assert batch["status"] == "content_check_failed"
+    assert outreach.Ledger.default().rows() == []
+
+
+def test_message_send_filled_text_passes_content_check():
+    out = _call(
+        "send_message_verified",
+        {
+            "linkedin_username": "dieter",
+            "message": "Hallo Dieter, kurze Frage zu Ihrem Labor.",
+            "confirm_send": False,
+        },
+    )
+    assert out["status"] == "dry_run"
+
+
+def test_allow_repeat_only_for_the_canary():
+    out = _call(
+        "send_message_verified",
+        {
+            "linkedin_username": "dieter",
+            "message": "Text",
+            "confirm_send": False,
+            "allow_repeat": True,
+        },
+    )
+    assert out["status"] == "repeat_not_allowed"
+    ok = _call(
+        "send_message_verified",
+        {
+            "linkedin_username": outreach.DEFAULT_CANARY,
+            "message": "Text",
+            "confirm_send": False,
+            "allow_repeat": True,
+        },
+    )
+    assert ok["status"] == "dry_run"

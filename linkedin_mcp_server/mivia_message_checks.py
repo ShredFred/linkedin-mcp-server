@@ -28,8 +28,11 @@ CALENDLY_ACCOUNT = "calendly.com/mivia_jessica-schneider"
 _URL_RE = re.compile(r"\b((?:https?://|www\.)[^\s<>()\"']+)", re.IGNORECASE)
 _SHORTENERS = ("bit.ly", "tinyurl.com", "t.co/", "goo.gl", "ow.ly", "lnkd.in")
 _PLACEHOLDER_RE = re.compile(
-    r"\{[^{}\n]{1,40}\}|\[(?:vorname|nachname|name|firma|company|first ?name|last ?name)\]"
-    r"|<(?:vorname|nachname|name|firma|company)>|\bXXX+\b|\bTODO\b",
+    r"\{[^{}\n]{1,40}\}|\[(?:ihr |dein )?(?:vorname|nachname|name|firma|firmenname"
+    r"|unternehmen|anrede|position|titel|company|first ?name|last ?name)\]"
+    r"|<(?:vorname|nachname|name|firma|firmenname|unternehmen|anrede|company)>"
+    r"|%(?:vorname|nachname|name|firma|company|first_?name|last_?name)%"
+    r"|\bXXX+\b|\bTODO\b",
     re.IGNORECASE,
 )
 _SALUTATION_RE = re.compile(
