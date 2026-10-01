@@ -141,7 +141,14 @@ class Ledger:
         # rows can interleave, or one process seals the other's half-written
         # line as torn. Own lock file, because take() already holds the pacer
         # lock while it appends (the lock is not re-entrant).
-        with _file_lock(self.path.with_suffix(".append.lock")):
+        # The append lock is held for one write+fsync (milliseconds), so a
+        # crashed holder's file is stale after 10 s, and the wait outlasts
+        # that: with the pacer defaults (wait 15 s, stale 60 s) every append
+        # in the first minute after a crash failed -- including the row that
+        # books a message as sent, which then allowed a second send.
+        with _file_lock(
+            self.path.with_suffix(".append.lock"), timeout=30.0, stale_after=10.0
+        ):
             torn = _ends_torn(self.path)
             # A crash left a last line without its newline; without the
             # leading newline the new row would be glued onto the fragment.
