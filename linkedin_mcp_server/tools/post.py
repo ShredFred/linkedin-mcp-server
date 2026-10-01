@@ -73,6 +73,10 @@ def register_post_tools(
             headline/role, company, body, posted date, and reaction/comment
             counts.
         """
+        # MiViA fork: blank keywords navigate to an unfiltered page whose
+        # result reads as a search answer; refuse before any page load.
+        if not keywords or not keywords.strip():
+            raise ToolError("keywords must not be empty.")
         try:
             extractor = await get_ready_extractor(ctx, tool_name="search_posts")
             logger.info(

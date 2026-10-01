@@ -21,6 +21,7 @@ from linkedin_mcp_server.linkedin.contracts import (
 from linkedin_mcp_server.linkedin.fields import COMPANY_SECTIONS, _company_section_specs
 from linkedin_mcp_server.linkedin.identifiers import (
     company_page_url,
+    landed_identity_mismatch,
     normalize_company_identifier,
 )
 from linkedin_mcp_server.linkedin.link_metadata import Reference
@@ -58,6 +59,7 @@ class CompanyReader:
         references: dict[str, list[Reference]] = {}
         section_errors: dict[str, dict[str, Any]] = {}
         rate_limited = False
+        redirected_to: dict[str, str] | None = None
 
         requested_ordered = [
             spec
@@ -97,6 +99,13 @@ class CompanyReader:
                         rate_limited = True
                     elif extracted.error:
                         section_errors[section_name] = extracted.error
+                    # MiViA fork: notice a redirect to another company page.
+                    if section_name == "about" and sections.get("about"):
+                        redirected_to = landed_identity_mismatch(
+                            getattr(self._session.page, "url", None),
+                            "company",
+                            company_name,
+                        )
                 except LinkedInOperationError:
                     raise
                 except Exception as e:
@@ -127,6 +136,8 @@ class CompanyReader:
             "url": f"{base_url}/",
             "sections": sections,
         }
+        if redirected_to:
+            result["redirected_to"] = redirected_to
         if references:
             result["references"] = references
         if section_errors:

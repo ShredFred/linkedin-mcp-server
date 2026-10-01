@@ -490,3 +490,28 @@ def normalize_profile_urn(value: str) -> str:
             "result returned it, with no URL, path or query around it."
         )
     return value
+
+
+# MiViA fork: a profile or company URL that LinkedIn redirects to a different
+# slug was returned under the requested name without a word. A renamed vanity
+# URL is the harmless case; a merged or reassigned page is not, and a caller
+# keying records by the requested slug then stores another subject's text. The
+# landed slug is reported beside the result (not as a section error, so
+# existing consumers keep their success semantics) and the caller decides.
+def landed_identity_mismatch(
+    landed_url: object, kind: str, requested: str
+) -> dict[str, str] | None:
+    """Return a redirect note when ``landed_url`` names another /kind/ slug."""
+    if not isinstance(landed_url, str) or not landed_url:
+        return None
+    parts = [p for p in urlparse(landed_url).path.split("/") if p]
+    if len(parts) < 2 or parts[0] != kind:
+        # A company slug that LinkedIn moves to a school or showcase page.
+        if kind == "company" and parts and parts[0] in ("school", "showcase"):
+            landed = "/".join(parts[:2])
+            return {"requested": requested, "landed": landed, "landed_url": landed_url}
+        return None
+    landed = unquote(parts[1])
+    if landed.casefold() == unquote(requested).casefold():
+        return None
+    return {"requested": requested, "landed": landed, "landed_url": landed_url}
