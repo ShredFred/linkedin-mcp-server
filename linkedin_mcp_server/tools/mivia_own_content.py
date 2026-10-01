@@ -98,7 +98,7 @@ def _original_comment_row(
         for r in ledger.latest_by_attempt().values()
         if r.get("kind") == "comment"
         and r.get("activity") == activity
-        and r.get("text_sha") == sha
+        and sha in outreach.row_text_shas(r)
     ]
     rows.sort(key=lambda r: str(r.get("started_at") or ""))
     return rows[-1] if rows else None
@@ -198,7 +198,11 @@ async def _operate(
         extra: dict[str, Any] = {}
         if result.get("done") and comment is not None:
             # The comment_on_post row keeps its text_sha (it still blocks the
-            # same text, conservatively); it learns what became of it.
+            # same text, conservatively); it learns what became of it. An edit
+            # adds edited_text_sha(s), which comment_on_post blocks as well.
+            # A deletion (deleted_by) deliberately does NOT release the block:
+            # posting the same text again after taking it back is exactly the
+            # repeated-text pattern LinkedIn flags, and the row stays counted.
             original = _original_comment_row(ledger, activity, result.get("old_text"))
             if original is not None:
                 note: dict[str, Any] = {"attempt": original["attempt"]}
@@ -209,7 +213,7 @@ async def _operate(
                         {
                             "edited_by": attempt,
                             "edited_at": _now(),
-                            "edited_text_sha": new_sha,
+                            **outreach.edit_note_shas(original, new_sha),
                             "text_head": outreach.text_head(new_text),
                         }
                     )

@@ -20,7 +20,15 @@ from linkedin_mcp_server.linkedin.mivia_post import MiviaPostComposer
 
 
 class FakePage:
-    def __init__(self, *, leftover: int = 0, urn: str | None, body: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        leftover: int = 0,
+        urn: str | None,
+        body: str = "",
+        newest: bool = True,
+    ) -> None:
+        self.newest = newest
         self.leftover = leftover
         self.urn = urn
         self.body = body
@@ -41,7 +49,9 @@ class FakePage:
         if script is mivia_post._MEDIA_PRESENT_JS:
             return self.leftover
         if script is mivia_post._ACTIVITY_URN_JS:
-            return None if self.urn is None else {"urn": self.urn, "matched": True}
+            if self.urn is None:
+                return None
+            return {"urn": self.urn, "matched": True, "newest": self.newest}
         if script is mivia_post._WRITE_JS:
             self.text = arg["text"]
             return "written"
@@ -124,3 +134,18 @@ async def test_dry_run_publishes_nothing_and_clears_the_editor() -> None:
     assert result["posted"] is False
     assert page.text == ""
     assert not page.clicked
+
+
+@pytest.mark.asyncio
+async def test_older_post_with_same_first_line_does_not_verify() -> None:
+    # The activity page also lists last week's post that opened with the same
+    # line; the newest card does not carry it, so the publish is unverified.
+    page = FakePage(
+        urn="urn:li:activity:7000000000000000001", body="Erste Zeile", newest=False
+    )
+    result = await composer(page).create_post(
+        "Erste Zeile\n\nzweite", image_path=None, confirm_post=True
+    )
+    assert result["posted"] is True
+    assert result["verified"] is False
+    assert result["status"] == "posted_unverified"

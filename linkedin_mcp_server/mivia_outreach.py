@@ -154,7 +154,7 @@ class Ledger:
             if (
                 row.get("kind") == kind
                 and row.get("recipient") == key
-                and (sha is None or row.get("text_sha") == sha)
+                and (sha is None or sha in row_text_shas(row))
                 and row.get("status") in _BLOCKING
             ):
                 return row
@@ -184,6 +184,26 @@ class Ledger:
             if started >= since:
                 total += 1
         return total
+
+
+def row_text_shas(row: dict[str, Any]) -> set[str]:
+    """Every text this attempt has stood for: the sent one and each edit.
+
+    An edit (edit_sent_message, edit_own_comment) appends edited_text_sha(s)
+    to the original row; the edited text is then also 'already sent' to that
+    recipient/post, or the duplicate check would let it go out a second time.
+    """
+    shas = {row.get("text_sha"), row.get("edited_text_sha")}
+    shas.update(row.get("edited_text_shas") or ())
+    return {s for s in shas if isinstance(s, str) and s}
+
+
+def edit_note_shas(row: dict[str, Any], new_sha: str) -> dict[str, Any]:
+    """Fields an edit note adds to the original row; keeps earlier edits."""
+    earlier = [s for s in row.get("edited_text_shas") or () if s != new_sha]
+    if row.get("edited_text_sha") and row["edited_text_sha"] not in earlier:
+        earlier.append(row["edited_text_sha"])
+    return {"edited_text_sha": new_sha, "edited_text_shas": [*earlier, new_sha]}
 
 
 def day_start(now: datetime | None = None) -> datetime:
@@ -367,6 +387,11 @@ class Pacer:
         canary = recipient_key(DEFAULT_CANARY)
         for row in rows:
             if row.get("kind") == "pace":
+                # A kind whose attempt row is its booking counts that row only.
+                # Older ledgers (comment before 14b4d8d) also hold pace rows
+                # for it; counting both would book one action twice.
+                if row.get("action") in _LEDGER_KINDS:
+                    continue
                 events.append(
                     (
                         row.get("action"),

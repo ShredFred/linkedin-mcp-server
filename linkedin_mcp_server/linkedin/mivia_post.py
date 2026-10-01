@@ -87,7 +87,7 @@ _ACTIVITY_URN_JS = r"""(firstLine) => {
     .filter(c => /^urn:li:activity:\d+$/.test(c.urn));
   if (!cards.length) return null;
   const hit = want && cards.find(c => (c.el.innerText || '').toLowerCase().includes(want));
-  return {urn: (hit || cards[0]).urn, matched: !!hit};
+  return {urn: (hit || cards[0]).urn, matched: !!hit, newest: !!hit && hit === cards[0]};
 }"""
 
 _FIND_BUTTON_JS = r"""(arg) => {
@@ -250,6 +250,10 @@ class MiviaPostComposer:
         # tool exists to remove.
         activity = await self._page.evaluate(_ACTIVITY_URN_JS, first_line)
         urn = (activity or {}).get("urn")
+        # The page text holds older posts too: an earlier post with the same
+        # first line made a failed publish read as verified. Only the newest
+        # activity carrying the line counts.
+        found = found and bool((activity or {}).get("newest"))
         return {
             **result,
             "posted": True,

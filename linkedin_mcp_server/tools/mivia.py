@@ -35,7 +35,10 @@ from linkedin_mcp_server.core.exceptions import (
 from linkedin_mcp_server.mivia_message_checks import check_message
 from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_error
 from linkedin_mcp_server.error_handler import raise_tool_error
-from linkedin_mcp_server.linkedin.contracts import refuse_an_invalid_message
+from linkedin_mcp_server.linkedin.contracts import (
+    is_invisible_control,
+    refuse_an_invalid_message,
+)
 from linkedin_mcp_server.linkedin.identifiers import normalize_person_identifier
 from linkedin_mcp_server.linkedin.mivia_network import (
     MiviaNetworkReader,
@@ -137,6 +140,11 @@ class _GuardedMcp:
         return getattr(self._mcp, name)
 
 
+def _utf16_len(text: str) -> int:
+    """Length as LinkedIn's composer counts it: an emoji outside the BMP is 2."""
+    return len(text.encode("utf-16-le")) // 2
+
+
 def check_invite_note(note: str | None) -> dict[str, Any] | None:
     """Browser-free refusal for a connection note; None when it may go."""
     if note is None:
@@ -146,13 +154,13 @@ def check_invite_note(note: str | None) -> dict[str, Any] | None:
             "status": "invalid_note",
             "detail": "note is empty; pass null for no note",
         }
-    if any(ord(c) < 32 or ord(c) == 127 for c in note):
+    if any(ord(c) < 32 or is_invisible_control(c) for c in note):
         return {
             "status": "invalid_note",
             "detail": "no control characters or line breaks",
         }
     limit = invite_note_max()
-    if len(note) > limit:
+    if _utf16_len(note) > limit:
         return {"status": "note_too_long", "max": limit}
     findings = [
         f for f in check_message(note, None) if f["code"] != "salutation_unverifiable"
@@ -563,14 +571,14 @@ def register_mivia_tools(
                 "message": "Company-page posting is not implemented; it requires page admin rights and stays manual.",
             }
         if not text.strip() or any(
-            (ord(c) < 32 and c != "\n") or ord(c) == 127 for c in text
+            (ord(c) < 32 and c != "\n") or is_invisible_control(c) for c in text
         ):
             return {
                 "status": "invalid_text",
                 "posted": False,
                 "message": "Text must be non-empty and contain no control characters other than LF.",
             }
-        if len(text) > 3000:
+        if _utf16_len(text) > 3000:
             return {
                 "status": "invalid_text",
                 "posted": False,
@@ -754,9 +762,30 @@ def register_mivia_tools(
             for index, username in enumerate(targets[:take]):
                 if index:
                     await asyncio.sleep(random.uniform(*SEND_GAP))
-                outcome = await _send_and_verify(
-                    ex, ledger, username, message, campaign=campaign
-                )
+                try:
+                    outcome = await _send_and_verify(
+                        ex, ledger, username, message, campaign=campaign
+                    )
+                except outreach.LedgerCorrupt:
+                    raise
+                except Exception as exc:
+                    # The ledger already holds this attempt as unknown. Raising
+                    # here dropped the verified sends before it from the
+                    # report, and the caller read the whole batch as failed.
+                    results.append(
+                        {
+                            "recipient": username,
+                            "status": "unknown",
+                            "verified": False,
+                            "error": f"{type(exc).__name__}: {exc}"[:300],
+                        }
+                    )
+                    return {
+                        **plan,
+                        "status": "stopped_on_failure",
+                        "results": results,
+                        "remaining": targets[index + 1 :],
+                    }
                 results.append(outcome)
                 if not outcome["verified"]:
                     return {
@@ -852,6 +881,12 @@ def register_mivia_tools(
                 "pending": "skipped",
                 "already_connected": "skipped",
                 "follow_only": "not_sent",
+                # Returned before the invite dialog's Send was ever clicked:
+                # the profile could not be read, or the note quota upsell
+                # replaced the note editor. Booking these as unknown blocked
+                # the person for good although no invitation left.
+                "unavailable": "not_sent",
+                "custom_note_limit_reached": "not_sent",
                 "send_failed": "unknown",
                 # Anything unrecognised may have sent: blocking, not retry-safe.
             }.get(raw, "unknown")

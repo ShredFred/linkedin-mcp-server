@@ -1151,3 +1151,101 @@ def test_legit_texts_still_pass():
         assert refuse_an_invalid_message("dieter", text) is None
     # NFD and NFC compare equal after canon.
     assert canon("Grüße") == canon("Grüße")
+
+
+# -- 2026-10-01: edited text stays blocked; no double pace booking ----------------
+
+
+def test_edited_comment_text_blocks_comment_on_post(monkeypatch):
+    ledger = outreach.Ledger.default()
+    ledger.append(
+        {
+            "attempt": "orig",
+            "kind": "comment",
+            "activity": "7123456789012345678",
+            "text_sha": outreach.text_sha("Alter Text"),
+            "status": "posted",
+            "started_at": outreach.datetime.now().astimezone().isoformat(),
+        }
+    )
+    row = ledger.latest_by_attempt()["orig"]
+    ledger.append(
+        {
+            "attempt": "orig",
+            **outreach.edit_note_shas(row, outreach.text_sha("Erste Fassung")),
+        }
+    )
+    row = ledger.latest_by_attempt()["orig"]
+    ledger.append(
+        {
+            "attempt": "orig",
+            **outreach.edit_note_shas(row, outreach.text_sha("Zweite Fassung")),
+        }
+    )
+    actions = _Commenter({"status": "posted", "posted": True})
+    for text in ("Alter Text", "Erste Fassung", "Zweite Fassung"):
+        out = _comment(monkeypatch, actions, text=text)
+        assert out["status"] == "duplicate_text", text
+    assert actions.calls == 0
+
+
+def test_deleted_comment_keeps_blocking(monkeypatch):
+    # Conservative: taking a comment back does not release its text.
+    ledger = outreach.Ledger.default()
+    ledger.append(
+        {
+            "attempt": "orig",
+            "kind": "comment",
+            "text_sha": outreach.text_sha("Weg damit"),
+            "status": "posted",
+        }
+    )
+    ledger.append({"attempt": "orig", "deleted_by": "x", "deleted_at": "now"})
+    actions = _Commenter({"status": "posted", "posted": True})
+    assert (
+        _comment(monkeypatch, actions, text="Weg damit")["status"] == "duplicate_text"
+    )
+
+
+def test_edited_message_text_counts_as_already_contacted():
+    ledger = outreach.Ledger.default()
+    ledger.append(
+        {
+            "attempt": "m1",
+            "kind": "message",
+            "recipient": outreach.recipient_key("anna-muster"),
+            "text_sha": outreach.text_sha("Hallo alt"),
+            "status": "verified",
+        }
+    )
+    row = ledger.latest_by_attempt()["m1"]
+    ledger.append(
+        {
+            "attempt": "m1",
+            **outreach.edit_note_shas(row, outreach.text_sha("Hallo neu")),
+        }
+    )
+    for text in ("Hallo alt", "Hallo neu"):
+        assert ledger.already_contacted(
+            "message", "anna-muster", outreach.text_sha(text)
+        )
+    assert not ledger.already_contacted(
+        "message", "anna-muster", outreach.text_sha("Anders")
+    )
+    assert not ledger.already_contacted(
+        "message", "bernd", outreach.text_sha("Hallo neu")
+    )
+
+
+def test_legacy_comment_pace_row_not_counted_twice():
+    # Before 14b4d8d a comment was booked as a pace row AND now its attempt
+    # row counts: the old pace row must not add a second unit.
+    ledger = outreach.Ledger.default()
+    now = outreach.datetime.now().astimezone().isoformat()
+    ledger.append({"kind": "pace", "action": "comment", "count": 1, "at": now})
+    ledger.append(
+        {"attempt": "c1", "kind": "comment", "status": "posted", "started_at": now}
+    )
+    ledger.append({"kind": "pace", "action": "like", "count": 1, "at": now})
+    assert _used("comment") == 1
+    assert _used("like") == 1

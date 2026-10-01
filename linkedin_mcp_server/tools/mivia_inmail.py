@@ -63,7 +63,7 @@ def _edit_lands_on_message(
         r
         for r in ledger.latest_by_attempt().values()
         if r.get("kind") == "message"
-        and r.get("text_sha") == old_sha
+        and old_sha in outreach.row_text_shas(r)
         and (
             (tid and r.get("thread") == tid)
             or (not r.get("thread") and key and r.get("recipient") == key)
@@ -402,6 +402,9 @@ def register_mivia_inmail_tools(
                             "text_head": outreach.text_head(new_text),
                             "edited_by": attempt,
                             "edited_at": _now(),
+                            # The edited text is now what this person got:
+                            # the message duplicate check must block it too.
+                            **outreach.edit_note_shas(original, new_sha),
                         }
                     )
                 result = {

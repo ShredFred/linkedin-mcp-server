@@ -610,7 +610,7 @@ def register_mivia_stage2_tools(
                     r
                     for r in ledger.latest_by_attempt().values()
                     if r.get("kind") == "comment"
-                    and r.get("text_sha") == sha
+                    and sha in outreach.row_text_shas(r)
                     and r.get("status")
                     in {"attempted", "unknown", "posted", "unverified"}
                 ),
