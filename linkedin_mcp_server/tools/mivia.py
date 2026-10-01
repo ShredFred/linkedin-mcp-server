@@ -758,7 +758,10 @@ def register_mivia_tools(
         outreach ledger; the same text is never sent twice to the same person
         unless allow_repeat is true (intended for test sends to the canary only).
 
-        Returns status verified / unverified / not_sent / unknown / duplicate.
+        Returns status verified / unverified / not_sent / unknown / duplicate;
+        dry_run without confirm_send; refusals before any send:
+        content_check_failed, repeat_not_allowed (allow_repeat to a
+        non-canary), pace_budget_spent.
         """
         username, bad = _recipient(linkedin_username)
         if bad:
@@ -830,7 +833,9 @@ def register_mivia_tools(
         3. It stops at the first recipient that is not read back verified.
 
         Call repeatedly (spread over the day) until remaining is empty. With
-        confirm_send=false it only reports the plan.
+        confirm_send=false it only reports the plan (status dry_run). Refusals
+        before any send: content_check_failed, campaign_required,
+        invalid_recipients, pace_budget_spent, campaign_quota_reached.
         """
         canary_key, bad = _recipient(canary)
         if bad:

@@ -907,7 +907,8 @@ def register_mivia_stage2_tools(
         One LinkedIn event search (/search/results/events/?keywords=...).
         Per hit only event master data: event_id, url, title, date_text,
         organiser, attendees (count), attendees_text, past. No person data.
-        limit 1-25. Reads only; nothing is clicked.
+        limit 1-25. has_more=true when more hits exist than were returned
+        (cut at limit or further result pages). Reads only; nothing is clicked.
         """
         kw = (keywords or "").strip()
         if not kw:
