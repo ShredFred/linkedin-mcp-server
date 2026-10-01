@@ -62,6 +62,34 @@ _CLEAR_JS = r"""(selector) => {
   return !(editor.innerText || '').trim();
 }"""
 
+# A dry run clears the text but cannot take an attached image out again, and
+# LinkedIn restores a share draft when the composer is opened next. Without this
+# check the productive run would silently publish two images (or a stale one).
+_MEDIA_PRESENT_JS = r"""(selector) => {
+  const dialog = document.querySelector(selector)?.closest('[role="dialog"], dialog');
+  if (!dialog) return 0;
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  return [...dialog.querySelectorAll('img, video')]
+      .filter(el => visible(el) && (el.width > 80 || el.videoWidth > 80)).length;
+}"""
+
+# The newest own activity on /in/me/recent-activity/all/. Preferred match: the
+# card that carries the first line of the text just posted; otherwise the first
+# activity urn on the page, flagged as such.
+_ACTIVITY_URN_JS = r"""(firstLine) => {
+  const want = String(firstLine || '').toLowerCase();
+  const cards = [...document.querySelectorAll('[data-urn], [data-id], [data-activity-urn]')]
+    .map(el => ({
+      el,
+      urn: el.getAttribute('data-urn') || el.getAttribute('data-id')
+           || el.getAttribute('data-activity-urn') || '',
+    }))
+    .filter(c => /^urn:li:activity:\d+$/.test(c.urn));
+  if (!cards.length) return null;
+  const hit = want && cards.find(c => (c.el.innerText || '').toLowerCase().includes(want));
+  return {urn: (hit || cards[0]).urn, matched: !!hit};
+}"""
+
 _FIND_BUTTON_JS = r"""(arg) => {
   const dialog = document.querySelector(arg.selector)?.closest('[role="dialog"], dialog');
   if (!dialog) return null;
@@ -129,6 +157,20 @@ class MiviaPostComposer:
                 **result,
                 "status": "composer_unavailable",
                 "message": "share editor did not open",
+            }
+
+        leftover = await self._page.evaluate(_MEDIA_PRESENT_JS, _EDITOR)
+        if leftover:
+            await self._page.goto(
+                "https://www.linkedin.com/feed/", wait_until="domcontentloaded"
+            )
+            return {
+                **result,
+                "status": "editor_has_media",
+                "attached": leftover,
+                "message": "The share composer already carries attached media "
+                "(a restored draft). Remove it in the browser before posting; "
+                "nothing was written.",
             }
 
         if image is not None:
@@ -203,10 +245,20 @@ class MiviaPostComposer:
 
         first_line = canonical_text(text.split("\n", 1)[0])[:80]
         found = first_line in canonical_text(body or "")
+        # The activity id is what a follow-up comment needs; without it the
+        # first comment has to be found by hand, which is exactly the step this
+        # tool exists to remove.
+        activity = await self._page.evaluate(_ACTIVITY_URN_JS, first_line)
+        urn = (activity or {}).get("urn")
         return {
             **result,
             "posted": True,
             "verified": found,
             "retry_safe": False,
             "status": "posted_verified" if found else "posted_unverified",
+            "activity_id": urn.rsplit(":", 1)[1] if urn else None,
+            "post_url": (
+                f"https://www.linkedin.com/feed/update/{urn}/" if urn else None
+            ),
+            "post_url_matched_text": bool((activity or {}).get("matched")),
         }
