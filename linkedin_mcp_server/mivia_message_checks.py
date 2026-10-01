@@ -37,9 +37,10 @@ _CALENDLY_HOSTS = ("calendly.com", "www.calendly.com")
 # "Siehe_bit.ly/x") where _URL_RE's  and _BARE_HOST's lookbehind miss it. The
 # host must start at a host boundary (no host character or "@" before it, or
 # right after "//") and be followed by "/": robot.co/x, orbit.ly and mail
-# addresses stay clean.
+# addresses stay clean. A single "/" before it is a path segment of another
+# host (https://example.com/t.co/abc) and is not a shortener link.
 _GLUED_SHORTENER_RE = re.compile(
-    r"(?:(?<![a-z0-9.@-])|(?<=//))(?:[a-z0-9-]+\.)*(?:"
+    r"(?:(?<![a-z0-9.@/-])|(?<=//))(?:[a-z0-9-]+\.)*(?:"
     + "|".join(re.escape(s) for s in _SHORTENERS)
     + r")/[^\s<>()\"']*",
     re.IGNORECASE,

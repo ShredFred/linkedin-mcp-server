@@ -422,7 +422,15 @@ def _file_lock(path: Path, timeout: float = 15.0, stale_after: float = 60.0):
     while True:
         try:
             fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, token)
+            try:
+                os.write(fd, token)
+            except BaseException:
+                # The file is ours (O_EXCL) but empty or torn: close the
+                # descriptor and remove it, or every waiter sees a lock
+                # without an owner until stale_after.
+                os.close(fd)
+                path.unlink(missing_ok=True)
+                raise
             break
         except (FileExistsError, PermissionError):
             # PermissionError: Windows refuses O_EXCL on a file that is being

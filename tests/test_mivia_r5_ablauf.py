@@ -65,7 +65,7 @@ class FakeLinkedIn:
     ``unconfirmed`` (may have left), ``readfail`` (sent, read-back fails).
     """
 
-    _mivia_session = _Session()
+    mivia_session = _Session()
 
     def __init__(self, plan=None):
         self.plan = {k: list(v) for k, v in (plan or {}).items()}

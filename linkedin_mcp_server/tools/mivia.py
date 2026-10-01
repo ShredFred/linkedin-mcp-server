@@ -345,6 +345,32 @@ async def _send_and_verify(
             "send": sent,
             "verified": False,
         }
+    try:
+        return await _read_back(extractor, ledger, attempt, username, message, sent)
+    except BaseException:
+        # R7: a cancellation (tool timeout) during the read-back left the row
+        # at "attempted". The send had already answered sent=True, so the row
+        # is closed as unverified -- blocking and counted, never not_sent.
+        # Synchronous append: an await here would be cancelled again at once.
+        ledger.append(
+            {
+                "attempt": attempt,
+                "status": "unverified",
+                "detail": "read-back interrupted",
+            }
+        )
+        raise
+
+
+async def _read_back(
+    extractor: Any,
+    ledger: outreach.Ledger,
+    attempt: str,
+    username: str,
+    message: str,
+    sent: dict[str, Any],
+) -> dict[str, Any]:
+    """Conversation read-back after a send that answered sent=True."""
     await asyncio.sleep(random.uniform(3.0, 6.0))
     verified = False
     # Read back through the thread the send landed in. Looking the conversation

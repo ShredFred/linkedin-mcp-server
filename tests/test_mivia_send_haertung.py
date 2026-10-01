@@ -63,7 +63,7 @@ class _Session:
 class _ExRaise:
     """send_message raises before the click (profile page did not load)."""
 
-    _mivia_session = _Session()
+    mivia_session = _Session()
 
     def __init__(self, exc):
         self.exc = exc
@@ -99,7 +99,7 @@ def test_cancellation_during_send_stays_unknown_and_blocks():
 class _ExBatch:
     """Canary verified beforehand; second target raises before the click."""
 
-    _mivia_session = _Session()
+    mivia_session = _Session()
 
     def __init__(self, failing):
         self.failing = failing

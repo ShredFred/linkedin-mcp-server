@@ -429,6 +429,9 @@ def project_attendees(
         # next_page would skip them for good.
         if resume_at is not None:
             out["next_page"] = resume_at
+    # The list itself ended (before skipped entries lowered "complete"): a
+    # caller must not keep paging past the end for entries it can never use.
+    out["list_end"] = out.get("complete") is True
     if out.get("complete") is not True:
         out["complete"] = False
     if malformed or unidentified:

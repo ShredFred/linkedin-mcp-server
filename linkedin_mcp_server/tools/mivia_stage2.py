@@ -161,7 +161,9 @@ def register_mivia_stage2_tools(
             if since_last_run:
                 reactors = [r for r in reactors if rkey(r) not in known]
                 comments = [c for c in comments if ckey(c) not in known]
-            store.remember(activity_id, keys)
+            # Anonymous keys ('anon=<uuid>') never match again; remembering
+            # them only grows the memory file. They stay reported as new.
+            store.remember(activity_id, {k for k in keys if not _is_anon_key(k)})
             return {
                 **result,
                 "new_only": since_last_run,
@@ -851,10 +853,24 @@ def register_mivia_stage2_tools(
                 if refused["status"] == "duplicate":
                     refused = {**refused, "status": "duplicate_text"}
                 return {"posted": False, **refused}
+            actions = _actions(ex)
+            # R7: comment() resets comment_submitted once the editor is found
+            # and sets it directly before the submit click. Not reset here: an
+            # exception before comment() set the marker at all (page load), or
+            # a reader without it, stays fail-closed (unknown).
             try:
-                result = await _actions(ex).comment(activity_id, text, True)
+                result = await actions.comment(activity_id, text, True)
             except BaseException:
-                ledger.append({"attempt": attempt, "status": "unknown"})
+                clicked = bool(getattr(actions, "comment_submitted", True))
+                ledger.append(
+                    {
+                        "attempt": attempt,
+                        "status": "unknown" if clicked else "not_posted",
+                        "detail": "exception after the submit click"
+                        if clicked
+                        else "exception before the submit click",
+                    }
+                )
                 raise
             # Not posted (no editor, mismatch): release the text for a retry.
             # posted must be literally True; an unknown status with posted=True
@@ -1277,3 +1293,8 @@ class JobWatchStore:
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
         os.replace(tmp, self.path)
+
+
+def _is_anon_key(key: str) -> bool:
+    """engager_key for an engager without id and name ('kind:anon=<uuid>:x')."""
+    return ":anon=" in key

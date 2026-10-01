@@ -468,7 +468,12 @@ class Collector:
                     attendees += chunk["attendees"]
                     last_read = page_no
                     if chunk["complete"] or not chunk["next_page"]:
-                        finished = bool(chunk["complete"])
+                        # list_end: the list ended, only slug-less entries made
+                        # it "incomplete" -- they are unusable on every rescan,
+                        # so waiting for them would resume past the end daily.
+                        finished = bool(chunk["complete"]) or (
+                            chunk.get("list_end") is True
+                        )
                         break
                     if chunk["next_page"] <= page_no:
                         break  # no progress: never read the same page twice
@@ -520,18 +525,29 @@ class Collector:
         self._take("page_read")
         res = await self.actions.profile_viewers(int(spec.get("limit", 50)))
         known = self.seen.keys("profile_viewers")
-        keys = {
-            engager_key("viewer", v["slug"], "", name=v["name"]) for v in res["viewers"]
-        }
-        new = [
-            v
-            for v in res["viewers"]
-            if engager_key("viewer", v["slug"], "", name=v["name"]) not in known
-        ]
-        self.seen.remember("profile_viewers", keys)
+        viewers = [v for v in res.get("viewers") or [] if isinstance(v, dict)]
+
+        def vk(v):
+            slug, name = v.get("slug"), v.get("name")
+            return engager_key(
+                "viewer",
+                slug if isinstance(slug, str) else None,
+                "",
+                name=name if isinstance(name, str) else None,
+            )
+
+        # Without slug and name the key is a fresh anon=<uuid>: remembering it
+        # would grow the memory file by one entry per run and viewer forever.
+        anon = [v for v in viewers if vk(v).startswith("viewer:anon=")]
+        named = [v for v in viewers if v not in anon]
+        keys = {vk(v) for v in named}
+        new = [v for v in named if vk(v) not in known]
+        # Anonymous viewers get a fresh key each run; never remember them.
+        self.seen.remember("profile_viewers", {k for k in keys if ":anon=" not in k})
         return {
             "enabled": True,
-            "total_viewers": res["total_viewers"],
+            "total_viewers": res.get("total_viewers"),
+            "unidentified_viewers": len(anon),
             "new_viewers": new if known else [],
             "first_run": not known,
         }
