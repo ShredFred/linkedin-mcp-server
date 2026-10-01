@@ -423,7 +423,21 @@ def register_mivia_stage2_tools(
         for row in rows:
             latest.setdefault(row["recipient"], row)
         todo = list(latest.values())[:max_threads]
-        refusal = _pace("page_read", max(len(todo), 1), tool="follow_up_list")
+        if not todo:
+            # Nothing to read: no page is opened, so nothing may be booked.
+            return {
+                "follow_up_days": follow_up_days,
+                "threads_read": 0,
+                "recipients_in_ledger": 0,
+                "skipped_undated": outreach.undated_messages(ledger),
+                "has_more": False,
+                "complete": True,
+                "replied": [],
+                "due": [],
+                "unclear": [],
+                "entries": [],
+            }
+        refusal = _pace("page_read", len(todo), tool="follow_up_list")
         if refusal:
             return refusal
         notes = outreach.ContactNotes()
@@ -490,6 +504,12 @@ def register_mivia_stage2_tools(
                 "threads_read": len(entries),
                 "recipients_in_ledger": len(latest),
                 "skipped_undated": outreach.undated_messages(ledger),
+                # max_threads cut the list: "due" is then only the due among
+                # the newest threads, not everyone due. Unreadable threads
+                # leave the answer incomplete as well.
+                "has_more": len(latest) > len(todo),
+                "complete": len(latest) == len(todo)
+                and not any(e.get("status") == "unreadable" for e in entries),
                 "replied": [e for e in entries if e.get("replied")],
                 "due": [e for e in entries if e.get("due")],
                 # Author of a later block not determinable, or a group chat:

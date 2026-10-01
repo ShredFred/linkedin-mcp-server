@@ -119,7 +119,12 @@ class Ledger:
                 # append() seals such a fragment with a newline before the
                 # next row, so it can also sit in the middle: a line that
                 # opens an object and never closes it is the same torn write.
-                if line.startswith("{") and not line.endswith("}"):
+                # A cut can also fall right after a nested object's "}" (e.g.
+                # '{"a": {"b": 1}'): the parser then fails at the very end of
+                # the line -- a truncated document, not a corrupt one.
+                if line.startswith("{") and (
+                    not line.endswith("}") or bad.pos >= len(line)
+                ):
                     continue
                 raise LedgerCorrupt(self.path, number) from bad
             if not isinstance(rows[-1], dict):
@@ -131,15 +136,20 @@ class Ledger:
     def append(self, row: dict[str, Any]) -> dict[str, Any]:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         row = {"at": datetime.now().astimezone().isoformat(timespec="seconds"), **row}
-        torn = _ends_torn(self.path)
-        with self.path.open("a", encoding="utf-8") as handle:
-            if torn:
-                # A crash left a last line without its newline; without this
-                # the new row would be glued onto the fragment and lost.
-                handle.write("\n")
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+        # Two MCP instances append to the same file. On Windows "a" mode is a
+        # seek-to-end plus write, not an atomic append: without a lock two
+        # rows can interleave, or one process seals the other's half-written
+        # line as torn. Own lock file, because take() already holds the pacer
+        # lock while it appends (the lock is not re-entrant).
+        with _file_lock(self.path.with_suffix(".append.lock")):
+            torn = _ends_torn(self.path)
+            # A crash left a last line without its newline; without the
+            # leading newline the new row would be glued onto the fragment.
+            payload = ("\n" if torn else "") + json.dumps(row, ensure_ascii=False)
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(payload + "\n")  # one write call
+                handle.flush()
+                os.fsync(handle.fileno())
         return row
 
     # -- derived state -------------------------------------------------------
@@ -354,19 +364,28 @@ _LEDGER_KINDS = {
 @contextmanager
 def _file_lock(path: Path, timeout: float = 15.0, stale_after: float = 60.0):
     """Exclusive lock by O_EXCL lock file; a lock older than *stale_after* s
-    is taken over (its holder crashed)."""
+    is taken over (its holder crashed).
+
+    The file carries an owner token, and release removes it only while it is
+    still ours: a holder whose lock was taken over as stale must not delete
+    the new owner's lock on its way out (two holders afterwards). A stale
+    takeover moves the file aside first and re-checks the moved file, so a
+    waiter cannot delete a lock another one has just created.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    token = f"{os.getpid()}-{time.monotonic_ns()}-{id(path)}".encode()
     deadline = time.monotonic() + timeout
     while True:
         try:
             fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, token)
             break
         except (FileExistsError, PermissionError):
             # PermissionError: Windows refuses O_EXCL on a file that is being
             # deleted -- the lock is still taken, wait like for an existing one.
             try:
                 if time.time() - path.stat().st_mtime > stale_after:
-                    path.unlink(missing_ok=True)
+                    _take_over_stale(path, stale_after)
                     continue
             except FileNotFoundError:
                 continue
@@ -381,7 +400,33 @@ def _file_lock(path: Path, timeout: float = 15.0, stale_after: float = 60.0):
         yield
     finally:
         os.close(fd)
-        path.unlink(missing_ok=True)
+        # Windows (WinError 32): a reader or virus scanner may hold the file
+        # for a moment; retry briefly instead of leaving our lock behind.
+        for attempt in range(40):
+            try:
+                if path.read_bytes() == token:
+                    path.unlink(missing_ok=True)
+                break
+            except FileNotFoundError:
+                break
+            except PermissionError:
+                time.sleep(0.05)
+
+
+def _take_over_stale(path: Path, stale_after: float) -> None:
+    """Move a stale lock aside atomically; give back one that turned out fresh."""
+    aside = path.with_name(f"{path.name}.stale-{os.getpid()}-{time.monotonic_ns()}")
+    os.rename(path, aside)  # FileNotFoundError: another waiter was first
+    try:
+        if time.time() - aside.stat().st_mtime <= stale_after:
+            # Between the caller's stat and the rename a new owner created a
+            # fresh lock: put it back unless yet another lock exists by now.
+            try:
+                os.link(aside, path)
+            except FileExistsError:
+                pass
+    finally:
+        aside.unlink(missing_ok=True)
 
 
 class AlreadyContacted(Exception):

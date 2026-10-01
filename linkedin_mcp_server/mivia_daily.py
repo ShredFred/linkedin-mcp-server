@@ -381,7 +381,7 @@ class Collector:
                     attendees += chunk["attendees"]
                     last_read = page_no + chunk["pages_read"] - 1
                     if chunk["complete"] or not chunk["next_page"]:
-                        finished = True
+                        finished = bool(chunk["complete"])
                         break
                     page_no = chunk["next_page"]
                 finished = finished or last_read >= total_pages
@@ -638,7 +638,9 @@ class Collector:
                 attendees += chunk["attendees"]
                 last_read = page_no
                 if chunk["complete"] or not chunk["next_page"]:
-                    complete = True
+                    # No next page without complete is a stop, not the end
+                    # (a repeated page): that event stays open for the next run.
+                    complete = bool(chunk["complete"])
                     break
                 if chunk["next_page"] <= page_no:
                     break  # no progress: never read and book the same page twice

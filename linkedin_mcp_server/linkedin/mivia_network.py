@@ -591,6 +591,7 @@ class MiviaNetworkReader:
         warnings: list[str] = []
         page = start_page
         exhausted = False
+        repeated = False
         pages_read = 0
         for page in range(start_page, start_page + max_pages):
             if pages_read:
@@ -641,14 +642,21 @@ class MiviaNetworkReader:
                 warnings.append(
                     f"page {page}: {unknown} card(s) without a recognised action"
                 )
-            if new == 0 or len(cards) < 10:
+            if new == 0:
+                # A page of only already-seen people is LinkedIn repeating a
+                # page (paging ignored or reshuffled), not the end of the list:
+                # reporting complete here would hide everyone behind it.
+                warnings.append(f"page {page}: only repeated attendees, stopped")
+                repeated = True
+                break
+            if len(cards) < 10:
                 exhausted = True
                 break
         return {
             "event_id": event_id,
             "start_page": start_page,
             "pages_read": pages_read,
-            "next_page": None if exhausted else page + 1,
+            "next_page": None if exhausted or repeated else page + 1,
             "complete": exhausted,
             "count": len(attendees),
             "attendees": attendees,
