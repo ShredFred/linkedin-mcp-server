@@ -48,6 +48,7 @@
 > - `send_message` accepts multi-line text: LF becomes a paragraph via `insertParagraph`, never an Enter key, so no half message can be sent. CR, tab and other control characters are still refused.
 > - Profile URLs are normalised in one place (`linkedin/mivia_urls.py`): benign query keys by allowlist (`isSelfProfile=false`, `trk`, ...), no fragment, percent-decoded slug (umlauts), optional locale segment; the recipient stays pinned by its profile URN and anything else fails closed.
 > - `connect_with_person` reads the 2026 More menu: `pending` when the invitation is only shown there, Connect from the menu (`connect_via: more_menu`), and a distinct `follow_only` next to `connect_unavailable`.
+> - Every MiViA tool answers a refusal or outcome with a `status` and names its statuses in its own description. Shared by all of them: `pace_budget_spent` (pacer budget spent; wait, see `pace_status`), `pace_lock_busy` (pacer lock held; nothing booked, retry shortly) and `ledger_corrupt` (the outreach ledger has an unreadable row; repair it, nothing was sent or booked). For write tools `unknown` and `unverified` mean the action may have happened: never retry, check the thread or post by hand. `tests/test_mivia_r6_doku.py` keeps descriptions and code in step.
 >
 > Install from this fork, not PyPI: `uv tool install "mcp-server-linkedin @ git+https://github.com/ShredFred/linkedin-mcp-server@main"`.
 

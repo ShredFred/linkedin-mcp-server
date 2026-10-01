@@ -32,6 +32,15 @@ BEHAVIOUR_CHANGES = [
     "`connect_with_person` reads the 2026 More menu: `pending` when the "
     "invitation is only shown there, Connect from the menu (`connect_via: "
     "more_menu`), and a distinct `follow_only` next to `connect_unavailable`.",
+    "Every MiViA tool answers a refusal or outcome with a `status` and names "
+    "its statuses in its own description. Shared by all of them: "
+    "`pace_budget_spent` (pacer budget spent; wait, see `pace_status`), "
+    "`pace_lock_busy` (pacer lock held; nothing booked, retry shortly) and "
+    "`ledger_corrupt` (the outreach ledger has an unreadable row; repair it, "
+    "nothing was sent or booked). For write tools `unknown` and `unverified` "
+    "mean the action may have happened: never retry, check the thread or "
+    "post by hand. `tests/test_mivia_r6_doku.py` keeps descriptions and code "
+    "in step.",
 ]
 
 

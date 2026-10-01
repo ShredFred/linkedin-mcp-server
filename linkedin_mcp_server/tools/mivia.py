@@ -483,6 +483,10 @@ def register_mivia_tools(
         Returns:
             Dict with count and connections [{name, slug, profile_url,
             profile_urn, headline, connected_on (ISO date or null)}].
+            Refusals: invalid_input (field names the bad argument),
+            pace_budget_spent (pacer budget spent: do not retry now, see
+            pace_status), pace_lock_busy (pacer lock held: nothing booked,
+            retry shortly).
         """
         try:
             since_date = date.fromisoformat(since) if since else None
@@ -533,6 +537,12 @@ def register_mivia_tools(
                 "card" (adds location, button state, page; same card). Neither
                 opens a profile. "readable": false means the first page was
                 empty -- usually the account has not RSVP'd.
+
+        Refusals: invalid_input (field names the bad argument),
+        pace_budget_spent (pacer budget spent: do not retry now, see
+        pace_status), pace_lock_busy (pacer lock held: nothing booked, retry
+        shortly), monthly_search_limit (LinkedIn's monthly people-search wall: stop
+        searching until next month, retrying burns nothing but time).
         """
         event_id, bad = _event_id(event_id)
         if bad:
@@ -585,6 +595,10 @@ def register_mivia_tools(
         Returns:
             Dict with event_id and attendee_count (null when the page shows no
             total, e.g. the event is gone or the layout changed).
+            Refusals: invalid_input (event_id not numeric),
+            pace_budget_spent (pacer budget spent: do not retry now, see
+            pace_status), pace_lock_busy (pacer lock held: nothing booked,
+            retry shortly).
         """
         event_id, bad = _event_id(event_id)
         if bad:
@@ -616,6 +630,10 @@ def register_mivia_tools(
             acting_as (text of a page-actor switch if the page offers one),
             gone (page missing or redirected away from /events/) and
             cancelled (LinkedIn's cancelled banner as its own line).
+            Refusals: invalid_input (event_id not numeric),
+            pace_budget_spent (pacer budget spent: do not retry now, see
+            pace_status), pace_lock_busy (pacer lock held: nothing booked,
+            retry shortly).
         """
         event_id, bad = _event_id(event_id)
         if bad:
@@ -648,6 +666,10 @@ def register_mivia_tools(
             Dict with count, header_total, complete and invitations [{name, slug,
             profile_url, headline, sent_text}]. sent_text is LinkedIn's relative
             wording ("Vor 18 Stunden gesendet"), kept as rendered.
+            Refusals: invalid_input (limit out of range),
+            pace_budget_spent (pacer budget spent: do not retry now, see
+            pace_status), pace_lock_busy (pacer lock held: nothing booked,
+            retry shortly).
         """
         if not _int_in(limit, 1, 1000):
             return {"status": "invalid_input", "field": "limit"}
@@ -689,6 +711,18 @@ def register_mivia_tools(
             image_path: Optional local image file to attach.
             as_company: Posting as a company page is not implemented; the member
                 must be a page admin and that is posted from the browser.
+
+        Returns the composer result; its status is posted_verified (live and
+        read back), posted_unverified (published, read-back missed it: check
+        recent activity, do not repost), post_unconfirmed (may be live: do
+        not repost, check recent activity), dry_run, or a stop before the
+        publish click (composer_unavailable, editor_has_media, invalid_image,
+        post_button_disabled, post_button_unavailable: safe to fix and retry).
+        Refusals before anything is booked: not_supported (as_company),
+        invalid_text (empty, control characters or > 3000 chars),
+        duplicate_text (same text attempted within 30 days; previous holds
+        the row), pace_budget_spent (post budget spent: wait), pace_lock_busy
+        (retry shortly). All refusals carry posted=false.
         """
         if as_company:
             return {
@@ -823,6 +857,15 @@ def register_mivia_tools(
         dry_run without confirm_send; refusals before any send:
         content_check_failed, repeat_not_allowed (allow_repeat to a
         non-canary), pace_budget_spent.
+
+        What to do: verified = done. unverified = sent, read-back missed it;
+        check the thread, do not resend. unknown = the click may have gone
+        out; never retry, check the thread by hand. not_sent = nothing left,
+        safe to retry. duplicate = already in the ledger (previous holds the
+        row). invalid_recipient (bad username/URL), invalid_message (empty,
+        control or invisible characters), content_check_failed
+        (findings list the rule), message_too_long (over the length cap),
+        pace_lock_busy (nothing booked, retry shortly).
         """
         username, bad = _recipient(linkedin_username)
         if bad:
@@ -897,6 +940,19 @@ def register_mivia_tools(
         confirm_send=false it only reports the plan (status dry_run). Refusals
         before any send: content_check_failed, campaign_required,
         invalid_recipients, pace_budget_spent, campaign_quota_reached.
+
+        Batch statuses: canary_verified (canary read back, call again to
+        start), canary_failed (stopped; check the canary thread before a
+        retry), batch_sent (all of this batch verified; call again while
+        remaining is non-empty), done (nothing left), daily_cap_reached
+        (continue tomorrow), campaign_quota_reached (campaign day quota spent
+        under the lock; nothing booked for remaining), stopped_on_failure
+        (a recipient was not verified; results[-1].status is verified /
+        unverified / unknown / not_sent / duplicate / pace_budget_spent /
+        pace_lock_busy -- unknown and unverified must not be resent, remaining
+        excludes them). Other refusals: invalid_recipient (bad canary, with
+        field=canary), invalid_message, message_too_long, pace_lock_busy
+        (retry shortly).
         """
         canary_key, bad = _recipient(canary)
         if bad:
@@ -1093,6 +1149,17 @@ def register_mivia_tools(
         is recorded as unknown, which blocks a retry. The note is limited to 200
         characters (free account) unless MIVIA_INVITE_NOTE_MAX raises it to at
         most 300 (Premium).
+
+        On a send the response has no status; result.status is the dialog
+        outcome: connected/accepted (invite left), pending/already_connected
+        (nothing new), send_failed (may have left: do not retry), follow_only,
+        unavailable, connect_unavailable, custom_note_limit_reached (no invite
+        if the click did not happen; the ledger decides). Refusals:
+        invalid_recipient, invalid_note (empty or control characters),
+        note_too_long (max holds the limit), content_check_failed (findings),
+        duplicate (person already invited), cap_reached (today's invite cap;
+        continue tomorrow), dry_run (confirm_send=false, quota shown),
+        pace_budget_spent (wait), pace_lock_busy (retry shortly).
         """
         username, bad = _recipient(linkedin_username)
         if bad:
@@ -1218,6 +1285,8 @@ def register_mivia_tools(
         and profile URN and its connection state; optionally classifies one
         not-connected profile (may open its More menu, never clicks an item).
         Sends nothing, invites nobody. ok=false lists the problems.
+        Refusals: invalid_recipient (bad connect_probe_username, with field),
+        pace_budget_spent (wait), pace_lock_busy (retry shortly).
         """
         if connect_probe_username is not None:
             connect_probe_username, bad = _recipient(connect_probe_username)

@@ -167,6 +167,14 @@ def register_mivia_inmail_tools(
         pace_budget_spent, repeat_not_allowed (allow_repeat to a non-canary),
         unexpected_inmail_cost, invalid_message, message_too_long. Never
         falls back to a connection request.
+
+        Further refusals before anything is booked: recipient_required,
+        invalid_recipient, invalid_subject (control characters),
+        subject_too_long / body_too_long (max holds the limit),
+        pace_lock_busy (retry shortly). Page-side stops before the send
+        (safe to retry after a look): composer_not_opened, editor_mismatch.
+        unknown / unverified: the InMail may have left and a credit may be
+        spent -- never resend, check Sales Navigator's sent folder.
         """
         ident = linkedin_username or profile_url
         if not ident:
@@ -292,7 +300,11 @@ def register_mivia_inmail_tools(
         tags={TAG, "messaging"},
     )
     async def inmail_credits(ctx: Context) -> dict[str, Any]:
-        """Remaining Sales Navigator InMail credits (one page read)."""
+        """Remaining Sales Navigator InMail credits (one page read).
+
+        Refusals: pace_budget_spent (wait, see pace_status), pace_lock_busy
+        (nothing booked, retry shortly).
+        """
         spent = _pace("page_read", tool="inmail_credits")
         if spent:
             return spent
@@ -326,6 +338,11 @@ def register_mivia_inmail_tools(
         ambiguous_match, unchanged, content_check_failed, edit_form_mismatch,
         editor_mismatch, invalid_message, message_too_long,
         pace_budget_spent. The ledger keeps old and new hash.
+
+        Also: invalid_thread (not a thread URL/id), not_own_message,
+        edit_form_not_opened, no_more_menu, save_button_unavailable (nothing
+        saved, safe to retry), pace_lock_busy (retry shortly). unverified =
+        the edit may be saved: re-read the thread before editing again.
         """
         try:
             url = thread_url(thread)

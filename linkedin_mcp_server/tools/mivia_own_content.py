@@ -262,6 +262,10 @@ def register_mivia_own_content_tools(
         author_unknown, author_ambiguous, own_identity_unknown, post_not_found, menu_unavailable,
         menu_item_missing, menu_item_ambiguous, confirm_dialog_missing,
         already_attempted, pace_budget_spent (post_delete: 3/day).
+        Also: invalid_post (bad URL/URN, nothing read), own_identity_unknown
+        (own profile not resolved: re-check login), pace_lock_busy (retry
+        shortly). unverified = the action may have happened: re-read the
+        post, never repeat it (the ledger answers already_attempted).
         """
         activity, _, bad = resolve_target(post_url, None)
         if bad:
@@ -297,6 +301,10 @@ def register_mivia_own_content_tools(
         menu_item_missing, editor_missing, editor_prefill_mismatch,
         editor_mismatch, save_button_unavailable, already_attempted,
         pace_budget_spent (post_edit: 5/day).
+        Also: author_ambiguous, menu_item_ambiguous, invalid_post (bad
+        URL/URN, nothing read), own_identity_unknown (own profile not
+        resolved: re-check login), pace_lock_busy (retry shortly). unverified = the action may have happened: re-read the
+        post, never repeat it (the ledger answers already_attempted).
         """
         bad = check_text(new_text, POST_MAX)
         if bad:
@@ -334,6 +342,10 @@ def register_mivia_own_content_tools(
         comment_not_found, comment_ambiguous, author_unknown, menu_unavailable,
         menu_item_missing, confirm_dialog_missing, already_attempted,
         pace_budget_spent (comment_delete: 5/day).
+        Also: invalid_post / invalid_comment (bad URL or comment id, or a
+        comment URN of another post), own_identity_unknown (own profile not
+        resolved: re-check login), pace_lock_busy (retry shortly). unverified = the action may have happened: re-read the
+        comment, never repeat it (the ledger answers already_attempted).
         """
         activity, cid, bad = resolve_target(post_url, comment_id)
         if bad:
@@ -372,6 +384,11 @@ def register_mivia_own_content_tools(
         menu_item_missing, editor_missing, editor_prefill_mismatch,
         editor_mismatch, save_button_unavailable, already_attempted,
         pace_budget_spent (comment_edit: 5/day).
+        Also: comment_ambiguous, menu_item_ambiguous, invalid_post /
+        invalid_comment (bad URL or comment id, or a comment URN of another
+        post), own_identity_unknown (own profile not resolved: re-check
+        login), pace_lock_busy (retry shortly). unverified = the action may have happened: re-read the
+        comment, never repeat it (the ledger answers already_attempted).
         """
         bad = check_text(new_text, COMMENT_MAX)
         if bad:

@@ -108,6 +108,12 @@ def register_mivia_stage2_tools(
 
         Leads from this list are a professional activity signal only: company
         first, suppression check and the cadence tracker decide what is used.
+
+        reactors_complete=false: the reactor list was cut at limit or did not
+        finish scrolling. reactors_available=false comes with
+        reactors_unavailable_reason (not our post): use reaction_count.
+        Refusals: invalid_post_url (not a post URL/URN), pace_budget_spent (wait, see pace_status),
+        pace_lock_busy (nothing booked, retry shortly).
         """
         activity_id, bad = _activity(post_url)
         if bad:
@@ -183,6 +189,10 @@ def register_mivia_stage2_tools(
         profile views and followers gained for the account's own posts. At most
         10 posts per call; posts without analytics (anyone else's, and page
         posts where LinkedIn shows none) come back available=false.
+
+        Refusals: invalid_post_url (empty list or a bad URL), too_many_posts
+        (more than 10; split the list, nothing is cut), pace_budget_spent (wait, see pace_status),
+        pace_lock_busy (nothing booked, retry shortly).
         """
         if not post_urls:
             return {"status": "invalid_post_url", "message": "post_urls is empty"}
@@ -260,6 +270,12 @@ def register_mivia_stage2_tools(
         The invite dialog has not been measured yet -- no event of an account
         page was available on 2026-09-29 -- so even for an organiser this
         returns status dialog_not_measured instead of clicking blind.
+
+        Statuses: not_organizer (cannot invite, nothing done), dry_run
+        (confirm_send=false), dialog_not_measured (nothing clicked). Refusals:
+        invalid_event_id (not a 10-25 digit id or event URL), no_recipients
+        (usernames empty), invalid_recipient, pace_budget_spent (event_invite
+        budget below the requested count, or page_read spent), pace_lock_busy.
         """
         event_id = event_id.strip().split("?")[0].strip("/").rsplit("/", 1)[-1]
         # One rule with the network layer (10-25 digits): a shorter id was
@@ -338,6 +354,15 @@ def register_mivia_stage2_tools(
         Each is verified by re-reading the sent list; the withdraw pacer caps
         the day (30). Note LinkedIn blocks re-inviting a withdrawn person for
         about three weeks.
+
+        Statuses: dry_run (candidates listed), withdrawn (all picked done),
+        partial (some withdrawn, then a stop), stopped (none withdrawn),
+        nothing_selected (confirm without matching usernames). results[].status
+        is withdrawn, still_pending, not_found (card gone), not_confirmed
+        (dialog did not confirm) or unverified (read-back unclear: re-read
+        the sent list before retrying), pace_budget_spent or pace_lock_busy.
+        Refusals: invalid_recipient, pace_budget_spent (wait, see pace_status),
+        pace_lock_busy (nothing booked, retry shortly).
         """
         chosen = set()
         for raw in usernames or []:
@@ -460,6 +485,11 @@ def register_mivia_stage2_tools(
         after us (group chat). Recipients without a reply whose last message is at
         least follow_up_days old are due. Local contact notes (set_contact_note)
         are attached.
+
+        complete=false / has_more=true: more ledger threads than max_threads,
+        or an entry with status unreadable (thread could not be read; listed,
+        never due) -- call again later. Refusals: pace_budget_spent (wait, see pace_status),
+        pace_lock_busy (nothing booked, retry shortly).
         """
         ledger = outreach.Ledger.default()
         rows = outreach.sent_messages(ledger, include_canary=include_canary)
@@ -580,6 +610,11 @@ def register_mivia_stage2_tools(
         Local keywords and a short note per contact (~/.linkedin-mcp/mivia-contact-notes.json),
         shown by follow_up_list. Never leaves the machine. Professional context
         only -- no private-sphere details.
+
+        Statuses: saved (entry holds the stored note). Refusals:
+        invalid_recipient, invalid_note / invalid_tag (control or invisible
+        characters), note_too_long / tag_too_long (max holds the limit),
+        notes_unreadable (notes file corrupt: nothing written, repair it).
         """
         username, bad = _recipient(linkedin_username)
         if bad:
@@ -638,6 +673,9 @@ def register_mivia_stage2_tools(
         with Premium / Sales Navigator). Each viewer: name, slug, profile_url,
         degree, headline and detail lines ("Vor 1 Tag angesehen", shared
         connections, rendered action).
+
+        Refusals: pace_budget_spent (wait, see pace_status),
+        pace_lock_busy (nothing booked, retry shortly).
         """
         refusal = _pace("page_read", tool="get_profile_viewers")
         if refusal:
@@ -670,6 +708,14 @@ def register_mivia_stage2_tools(
         pacer (8/day).
 
         reply_to (a comment id) is not implemented yet and is refused.
+
+        Result status: posted (read back), unverified (posted=true but not
+        read back: check the post, never comment again), no_editor /
+        editor_mismatch (posted=false, nothing posted: safe to retry), dry_run.
+        Refusals (posted=false): not_supported (reply_to), invalid_text,
+        invalid_post_url, duplicate_text (same text attempted before),
+        already_commented (an earlier comment on this post may be live),
+        pace_budget_spent (comment budget spent: wait), pace_lock_busy.
         """
         if reply_to:
             return {
@@ -853,6 +899,14 @@ def register_mivia_stage2_tools(
         Args:
             companies: Company names to search jobs for (keywords = name).
             searches: Override the saved searches: [{keywords, location}].
+
+        Statuses: ran (every search answered; complete=true), partial (some
+        searches failed: complete=false, failed_searches counts them, last_run
+        is not advanced so the next call retries them), failed (every search
+        failed, e.g. session expired; nothing recorded), not_due (last run
+        under 6 days ago: pass force=true only on purpose). searches[].status
+        is ok or failed (with error). Refusals: pace_budget_spent (wait, see pace_status),
+        pace_lock_busy (nothing booked, retry shortly).
         """
         store = JobWatchStore()
         last = store.last_run()
@@ -948,7 +1002,11 @@ def register_mivia_stage2_tools(
         tags={TAG, "network"},
     )
     async def list_groups(ctx: Context) -> dict[str, Any]:
-        """The account's LinkedIn groups with id, name and member count."""
+        """The account's LinkedIn groups with id, name and member count.
+
+        Refusals: pace_budget_spent (wait, see pace_status), pace_lock_busy
+        (nothing booked, retry shortly).
+        """
         refusal = _pace("page_read", tool="list_groups")
         if refusal:
             return refusal
@@ -969,6 +1027,9 @@ def register_mivia_stage2_tools(
         Members of a group the account belongs to (name, slug, degree,
         headline), in LinkedIn's rendered order. A professional-context list:
         company first, then the cadence tracker with its suppression check.
+
+        Refusals: pace_budget_spent (wait, see pace_status),
+        pace_lock_busy (nothing booked, retry shortly).
         """
         group_id = parse_group_id(group)
         refusal = _pace("page_read", tool="get_group_members")
@@ -1000,6 +1061,9 @@ def register_mivia_stage2_tools(
         include_past also past ones). Each event: event_id, title, date_text,
         place, organiser, description, attendees, url, found_by, past.
         Duplicates across keywords/organisers are merged. At most 12 queries.
+
+        Refusals: pace_budget_spent (wait, see pace_status),
+        pace_lock_busy (nothing booked, retry shortly).
         """
         kws = [k for k in (keywords or []) if k.strip()][:12]
         orgs = [o for o in (organisers or []) if o.strip()][: max(0, 12 - len(kws))]
@@ -1058,6 +1122,9 @@ def register_mivia_stage2_tools(
         organiser, attendees (count), attendees_text, past. No person data.
         limit 1-25. has_more=true when more hits exist than were returned
         (cut at limit or further result pages). Reads only; nothing is clicked.
+
+        Refusals: pace_budget_spent (wait, see pace_status),
+        pace_lock_busy (nothing booked, retry shortly).
         """
         kw = (keywords or "").strip()
         if not kw:
@@ -1094,6 +1161,9 @@ def register_mivia_stage2_tools(
         """
         Events tab of one organiser page (/company/<slug>/events/). Same
         fields as search_events. Upcoming only unless include_past.
+
+        Refusals: pace_budget_spent (wait, see pace_status),
+        pace_lock_busy (nothing booked, retry shortly).
         """
         slug = (company_slug or "").strip().strip("/")
         if not slug or "/" in slug:
@@ -1125,6 +1195,9 @@ def register_mivia_stage2_tools(
         Newest followers of a company page the account administers (numeric
         page id, e.g. MiViA 81728804), with name, degree, headline and the
         month followed. Needs page admin rights; otherwise available=false.
+
+        Refusals: pace_budget_spent (wait, see pace_status),
+        pace_lock_busy (nothing booked, retry shortly).
         """
         refusal = _pace("page_read", tool="get_page_followers")
         if refusal:
