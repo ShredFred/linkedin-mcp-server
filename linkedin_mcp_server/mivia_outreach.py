@@ -13,6 +13,7 @@ days. The hard maxima cannot be raised by a caller.
 
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import os
@@ -101,9 +102,32 @@ class Ledger:
         if not self.path.exists():
             return []
         rows = []
-        with self.path.open(encoding="utf-8") as handle:
-            lines = handle.readlines()
-        for number, raw in enumerate(lines, 1):
+        data = self.path.read_bytes()
+        # A hand repair in Notepad / PowerShell 5 leaves a UTF-8 BOM in front
+        # of row 1; it is an encoding marker, not row content.
+        if data.startswith(codecs.BOM_UTF8):
+            data = data[3:]
+        # Bytes first, decode per line: rows are written ensure_ascii=False,
+        # so a crash can cut a row inside a multi-byte character. Decoding
+        # the whole file would raise UnicodeDecodeError before the torn-row
+        # rules below could see the line.
+        lines = data.splitlines(keepends=True)
+        for number, raw_bytes in enumerate(lines, 1):
+            try:
+                raw = raw_bytes.decode("utf-8")
+            except UnicodeDecodeError as bad_bytes:
+                # Undecodable only at its end is a cut inside a character:
+                # the torn final row, or such a row sealed by append().
+                # Any other undecodable byte is corruption.
+                body = raw_bytes.rstrip(b"\r\n")
+                try:
+                    head = body[: bad_bytes.start].decode("utf-8")
+                    torn_char = bad_bytes.end >= len(body)
+                except UnicodeDecodeError:
+                    torn_char = False
+                if torn_char and head.lstrip().startswith("{"):
+                    continue
+                raise LedgerCorrupt(self.path, number) from bad_bytes
             line = raw.strip()
             if not line:
                 continue
@@ -131,6 +155,12 @@ class Ledger:
                 # Valid JSON but not a row ("null", a list): every reader
                 # would die on .get(); it is corruption like any other line.
                 raise LedgerCorrupt(self.path, number)
+            for key in ("attempt", "status", "kind", "action", "recipient"):
+                # These fields are dict keys and set members in every reader;
+                # a list or object there is a TypeError in each pacer call.
+                value = rows[-1].get(key)
+                if value is not None and not isinstance(value, str):
+                    raise LedgerCorrupt(self.path, number)
         return rows
 
     def append(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -429,33 +459,70 @@ def _file_lock(path: Path, timeout: float = 15.0, stale_after: float = 60.0):
                 time.sleep(0.05)
 
 
+_ERROR_ACCESS_DENIED = 5
+_ERROR_INVALID_PARAMETER = 87
+_STILL_ACTIVE = 259
+
+
+def _win_kernel32():
+    """kernel32 with argtypes/restype set: without them ctypes passes a
+    HANDLE as C int and truncates it on 64-bit."""
+    import ctypes
+    from ctypes import wintypes
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k.OpenProcess.restype = wintypes.HANDLE
+    k.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    k.GetExitCodeProcess.restype = wintypes.BOOL
+    pft = ctypes.POINTER(wintypes.FILETIME)
+    k.GetProcessTimes.argtypes = [wintypes.HANDLE, pft, pft, pft, pft]
+    k.GetProcessTimes.restype = wintypes.BOOL
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    k.CloseHandle.restype = wintypes.BOOL
+    return k
+
+
+def _win_process_state(pid: int) -> tuple[str, int | None]:
+    """("alive", created) | ("dead", None) | ("denied", None).
+
+    "denied": the process exists but we may not query it (other user,
+    protected process) -- for a lock holder that means alive, never dead.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    if not 0 < pid <= 0xFFFFFFFF:
+        return "dead", None
+    k = _win_kernel32()
+    handle = k.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+    if not handle:
+        err = ctypes.get_last_error()
+        if err == _ERROR_INVALID_PARAMETER:
+            return "dead", None  # no such process
+        return "denied", None  # ACCESS_DENIED and anything unclear
+    try:
+        code = wintypes.DWORD()
+        if k.GetExitCodeProcess(handle, ctypes.byref(code)) and (
+            code.value != _STILL_ACTIVE
+        ):
+            return "dead", None
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not k.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+            return "denied", None
+        created = times[0]
+        return "alive", (created.dwHighDateTime << 32) | created.dwLowDateTime
+    finally:
+        k.CloseHandle(handle)
+
+
 def _process_created(pid: int) -> int | None:
     """Creation time of *pid* (opaque int), None if unknown or not running.
 
     Guards against PID reuse: a recycled PID has a different creation time.
     """
     if os.name == "nt":
-        import ctypes
-        from ctypes import wintypes
-
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.OpenProcess.restype = wintypes.HANDLE
-        handle = kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFO
-        if not handle:
-            return None
-        try:
-            code = wintypes.DWORD()
-            if kernel32.GetExitCodeProcess(handle, ctypes.byref(code)) and (
-                code.value != 259  # STILL_ACTIVE
-            ):
-                return None
-            times = [wintypes.FILETIME() for _ in range(4)]
-            if not kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
-                return None
-            created = times[0]
-            return (created.dwHighDateTime << 32) | created.dwLowDateTime
-        finally:
-            kernel32.CloseHandle(handle)
+        return _win_process_state(pid)[1]
     stat = Path(f"/proc/{pid}/stat")
     try:
         # Field 22 (starttime) after the parenthesised comm.
@@ -466,7 +533,9 @@ def _process_created(pid: int) -> int | None:
 
 def _pid_running(pid: int) -> bool:
     if os.name == "nt":
-        return _process_created(pid) is not None
+        # Access denied counts as running: taking over a live foreign
+        # holder's lock would put two writers on the ledger.
+        return _win_process_state(pid)[0] != "dead"
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -898,7 +967,15 @@ def row_time(row: dict[str, Any]) -> datetime | None:
         except ValueError:
             continue
         if parsed.tzinfo is None:
-            parsed = parsed.astimezone()
+            try:
+                parsed = parsed.astimezone()
+            except (OSError, OverflowError, ValueError):
+                # Windows cannot localise dates before 1970 or far ahead
+                # (Errno 22). Treat the stamp as unreadable like a bad
+                # string: counted_time then books the row as now, which
+                # over-counts a budget rather than freeing it, and blocking
+                # rules (already_contacted) do not depend on time at all.
+                continue
         return parsed
     return None
 
