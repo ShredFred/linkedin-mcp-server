@@ -802,7 +802,7 @@ async def _main(args: argparse.Namespace) -> int:
         get_or_create_browser,
         set_headless,
     )
-    from linkedin_mcp_server.linkedin.extractor import LinkedInExtractor
+    from linkedin_mcp_server.linkedin import LinkedInExtractor
 
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
     out_path = Path(args.out)

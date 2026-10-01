@@ -18,6 +18,38 @@ from linkedin_mcp_server.exceptions import BrowserShutdownUnconfirmedError
 from linkedin_mcp_server.process_tree import forget_browser_process_marker
 
 
+@pytest.fixture(autouse=True)
+def _no_windows_job_for_fake_drivers(monkeypatch):
+    """The fakes here are not Patchright drivers and have no Node process.
+
+    On Windows `contain_browser_launch` asks the driver for its process to put
+    it in a Job and fails on every fake, so the launch never reaches the code
+    under test. Containment itself is covered by tests/test_process_tree.py;
+    tests here that care about it patch it explicitly, which overrides this.
+    POSIX already answers None, so this changes nothing there.
+
+    The stand-in is an already settled, proved Job, not None: a launch without
+    a Job can never prove its shutdown on Windows (fail-closed, deliberately),
+    so None would turn every fallback test into an unconfirmed shutdown.
+    """
+    if os.name == "nt":
+        monkeypatch.setattr(
+            "linkedin_mcp_server.core.browser.contain_browser_launch",
+            lambda _driver: _FAKE_CONTAINMENT,
+        )
+
+
+class _SettledJob:
+    """A Windows Job whose earlier drain already proved it empty."""
+
+    closed = True
+    drained = True
+
+
+# What a fake launch is contained in: nothing on POSIX, the settled Job on Windows.
+_FAKE_CONTAINMENT = _SettledJob() if os.name == "nt" else None
+
+
 def test_a_no_viewport_override_is_refused(tmp_path):
     """The geometry decision must not be overridable through launch options.
 
@@ -1281,7 +1313,10 @@ class TestStartingAgainAfterAClose:
         assert second_marker != first_marker
         assert record["launch_markers"] == [first_marker, second_marker]
         assert record["remembered"] == [first_marker, second_marker]
-        assert record["drained"] == [(first_marker, None), (second_marker, None)]
+        assert record["drained"] == [
+            (first_marker, _FAKE_CONTAINMENT),
+            (second_marker, _FAKE_CONTAINMENT),
+        ]
         assert record["forgotten"] == [first_marker, second_marker]
 
     @pytest.mark.asyncio
@@ -1334,7 +1369,7 @@ class TestStartingAgainAfterAClose:
             assert record["launch_markers"] == [launch_marker]
             assert await manager.close() is True
 
-        assert record["drained"] == [(launch_marker, None)]
+        assert record["drained"] == [(launch_marker, _FAKE_CONTAINMENT)]
 
     @pytest.mark.asyncio
     async def test_an_unproved_close_refuses_the_next_start(
@@ -1451,7 +1486,7 @@ async def test_start_orders_driver_containment_guard_and_launch(tmp_path, monkey
 
     monkeypatch.setattr(
         "linkedin_mcp_server.core.browser.contain_browser_launch",
-        lambda _driver: events.append("contain") or object(),
+        lambda _driver: events.append("contain") or _SettledJob(),
     )
     monkeypatch.setattr(
         "linkedin_mcp_server.core.browser.refuse_a_downgrade",

@@ -19,20 +19,29 @@ a page-owning collaborator.
 | `capture` | `CaptureMode`, `CapturePlan`, `OverlayRootNotFoundError`, `RATE_LIMIT_RETRY_DELAY`, `SectionCapture`, `capture_plan_for_url()` | `page-owning` |
 | `company` | `CompanyReader` | `browser-free` |
 | `connection` | `ActionSignals`, `ConnectionState`, `detect_connection_state()` | `browser-free` |
-| `connection_actions` | `ACTION_SIGNALS_JS`, `CLICK_INCOMING_ACCEPT_JS`, `ConnectionActions`, `OPEN_MORE_BUTTON_JS`, `ReadMainProfile` | `page-owning` |
+| `connection_actions` | `ACTION_SIGNALS_JS`, `CLICK_INCOMING_ACCEPT_JS`, `ConnectionActions`, `MENU_PENDING_JS`, `OPEN_MORE_BUTTON_JS`, `ReadMainProfile` | `page-owning` |
 | `content` | `PageContentReader` | `page-owning` |
-| `contracts` | `ExtractedSection`, `FilterValidationError`, `RATE_LIMITED_SECTION_TEXT`, `SEND_INTERRUPTED_WARNING`, `message_action_result()`, `rate_limited_section_error()`, `refuse_an_invalid_message()` | `browser-free` |
+| `contracts` | `ExtractedSection`, `FilterValidationError`, `RATE_LIMITED_SECTION_TEXT`, `SEND_INTERRUPTED_WARNING`, `is_invisible_control()`, `message_action_result()`, `rate_limited_section_error()`, `refuse_an_invalid_message()` | `browser-free` |
 | `conversations` | `ConversationReader`, `strip_select_conversation_prefix()` | `page-owning` |
 | `extractor` | `LinkedInExtractor` | `page-owning` |
 | `feed` | `FeedReader` | `page-owning` |
 | `feed_payload` | `POST_SLUG_URL_RE`, `append_permalink_references()`, `build_feed_references()`, `is_feed_payload_response()`, `is_permalink_payload_response()`, `permalink_paths_from_payload()` | `browser-free` |
 | `fields` | `COMPANY_SECTIONS`, `PERSON_SECTIONS`, `parse_company_sections()`, `parse_person_sections()` | `browser-free` |
-| `identifiers` | `company_page_url()`, `job_view_url()`, `messaging_thread_url()`, `normalize_company_identifier()`, `normalize_job_id()`, `normalize_opaque_id()`, `normalize_person_identifier()`, `normalize_profile_urn()`, `normalize_thread_id()`, `person_profile_url()` | `browser-free` |
+| `identifiers` | `company_page_url()`, `job_view_url()`, `landed_identity_mismatch()`, `messaging_thread_url()`, `normalize_company_identifier()`, `normalize_job_id()`, `normalize_opaque_id()`, `normalize_person_identifier()`, `normalize_profile_urn()`, `normalize_thread_id()`, `person_profile_url()` | `browser-free` |
 | `job_pages` | `JOB_IDS_JS`, `JobPageCapture`, `JobPageReader`, `PROMOTED_JOB_IDS_JS` | `page-owning` |
 | `job_policy` | `JOB_SEARCH_PATHS`, `RESULTS_PER_LINKEDIN_PAGE`, `SAVED_JOBS_PAGE_SIZE`, `SAVED_JOBS_PATHS`, `SAVED_JOBS_URL`, `SCROLL_BUDGET_TOTAL`, `SCROLL_DEADLINE_MAX`, `SEARCH_TIMEOUT_FRACTION`, `dropped_filters_section_error()`, `dropped_offset_section_error()`, `label_similar_jobs()`, `lost_keywords_section_error()`, `missing_description_section_error()`, `no_matching_jobs_section_error()`, `reconcile_search_references()`, `route()`, `same_job_search()` | `browser-free` |
 | `jobs` | `JobReader` | `browser-free` |
 | `link_metadata` | `JOB_PATH_RE`, `RawReference`, `Reference`, `ReferenceKind`, `build_references()`, `choose_reference_text()`, `classify_link()`, `clean_heading()`, `clean_label()`, `dedupe_references()`, `derive_context()`, `normalize_reference()`, `normalize_url()` | `browser-free` |
 | `message_sender` | `MessageSender` | `page-owning` |
+| `mivia_actions` | `GROUPS_URL`, `MiviaActions`, `PROFILE_VIEWS_URL`, `group_member_lines()`, `parse_group_id()`, `sent_age_days()` | `browser-free` |
+| `mivia_engagement` | `MiviaEngagementReader`, `REACTION_ICONS`, `REACTION_TEXT`, `SEEN_ENV`, `SeenStore`, `engager_key()`, `parse_activity_id()`, `parse_person_ref()`, `parse_post_summary()`, `reaction_kind()`, `seen_path()`, `split_comment_lines()`, `split_engager_lines()` | `browser-free` |
+| `mivia_events` | `MiviaEventFinder`, `attendee_count()`, `event_id()`, `event_summary()`, `keyword_url()`, `organiser_url()`, `parse_current_position()`, `parse_event_card()`, `parse_follower_lines()`, `place_facts()` | `page-owning` |
+| `mivia_inmail` | `MiviaInmail`, `SN_INBOX_URL`, `canon()`, `credit_refusal()`, `edit_landed()`, `first_match()`, `mark_edited()`, `parse_credits()`, `parse_degree()`, `pick_own_message()`, `strip_edit_marker()`, `thread_url()` | `browser-free` |
+| `mivia_network` | `ATTENDEE_FIELDS_CARD`, `ATTENDEE_FIELDS_MINIMAL`, `CONNECTIONS_URL`, `EVENT_COUNT_JS`, `EVENT_COUNT_WAIT_SECONDS`, `EVENT_STATUS_JS`, `MAX_ATTENDEE_PAGES`, `MAX_LIST_LIMIT`, `MiviaNetworkReader`, `SENT_INVITATIONS_URL`, `SearchLimitReached`, `classify_action()`, `event_attendees_url()`, `event_page_flags()`, `is_search_limit_text()`, `own_rsvp_from()`, `parse_connected_date()`, `parse_degree()`, `project_attendees()`, `read_event_count()`, `split_person_lines()` | `browser-free` |
+| `mivia_own_content` | `CANCEL_WORDS`, `CONFIRM_DELETE_WORDS`, `DELETE_COMMENT_WORDS`, `DELETE_POST_WORDS`, `DISCARD_WORDS`, `EDIT_COMMENT_WORDS`, `EDIT_POST_WORDS`, `ME_URL`, `MiviaOwnContent`, `SAVE_WORDS`, `comment_permalink()`, `parse_comment_ref()`, `post_gone_evidence()`, `prefill_matches()`, `same_member()`, `slug_of()`, `text_matches()` | `browser-free` |
+| `mivia_post` | `MiviaPostComposer`, `RECENT_ACTIVITY_URL`, `SHARE_URL` | `browser-free` |
+| `mivia_selftest` | `outreach_selftest()` | `page-owning` |
+| `mivia_urls` | `BENIGN_PROFILE_QUERY`, `benign_query()`, `canonical_profile_path()`, `identity_path()`, `profile_key()`, `profile_slug_from_url()` | `browser-free` |
 | `navigation` | `PageNavigator`, `WaitUntil` | `page-owning` |
 | `person` | `PersonReader` | `page-owning` |
 | `posts` | `PostSearch` | `browser-free` |
@@ -60,7 +69,16 @@ a page-owning collaborator.
 - `job_policy` -> `link_metadata`
 - `jobs` -> `capture`, `contracts`, `identifiers`, `job_pages`, `job_policy`, `link_metadata`, `navigation`, `search_urls`, `session`, `text`
 - `link_metadata` -> _(none)_
-- `message_sender` -> `contracts`, `identifiers`, `navigation`, `session`
+- `message_sender` -> `contracts`, `identifiers`, `mivia_urls`, `navigation`, `session`
+- `mivia_actions` -> `mivia_network`
+- `mivia_engagement` -> `navigation`, `session`
+- `mivia_events` -> `navigation`, `session`
+- `mivia_inmail` -> `mivia_actions`
+- `mivia_network` -> `navigation`, `session`
+- `mivia_own_content` -> `mivia_actions`, `mivia_engagement`, `mivia_inmail`
+- `mivia_post` -> `navigation`, `session`
+- `mivia_selftest` -> `connection`, `connection_actions`, `identifiers`, `message_sender`, `mivia_urls`, `navigation`, `session`
+- `mivia_urls` -> _(none)_
 - `navigation` -> `session`
 - `person` -> `capture`, `contracts`, `fields`, `identifiers`, `link_metadata`, `navigation`, `profile_page`, `search_urls`, `session`, `text`
 - `posts` -> `capture`, `contracts`, `link_metadata`, `search_urls`
@@ -102,6 +120,8 @@ a page-owning collaborator.
 - `_feed`
 - `_jobs`
 - `_message_sender`
+- `_mivia_navigator`
+- `_mivia_session`
 - `_person`
 - `_posts`
 

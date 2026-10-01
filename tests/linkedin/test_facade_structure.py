@@ -27,7 +27,14 @@ FACADE_PACKAGE_IMPORTERS = {
     Path("tests/linkedin/test_facade_results.py"),
     Path("tests/linkedin/test_facade_structure.py"),
     Path("tests/test_dependencies.py"),
+    # MiViA fork: the daily-report runner builds its own extractor.
+    Path("linkedin_mcp_server/mivia_daily.py"),
 }
+
+# MiViA fork: the fork's own tools (tools/mivia*.py, mivia_daily.py) reach the
+# raw session/navigator through these two named attributes and nothing else.
+# Every other private facade access stays forbidden.
+MIVIA_FORK_FACADE_STATE = {"_mivia_navigator", "_mivia_session"}
 
 PUBLIC_SIGNATURES = {
     "click_button_by_text": "(self, text: 'str', *, scope: 'str' = 'main', timeout: 'int' = 5000) -> 'bool'",
@@ -109,7 +116,10 @@ FACADE_STATE = {
     "_message_sender",
     "_person",
     "_posts",
-}
+} | MIVIA_FORK_FACADE_STATE
+
+# MiViA fork: read-only properties the fork's outreach tools consult.
+MIVIA_FORK_PROPERTIES = {"invite_send_clicked"}
 
 PERMANENT_ALIASES = {
     "ExtractedSection": contracts.ExtractedSection,
@@ -160,7 +170,8 @@ def _assert_facade_shape(source: str) -> None:
         for node in facade.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
-    assert set(methods) == {*PUBLIC_SIGNATURES, "__init__"}
+    # MiViA fork: invite_send_clicked is a read-only property, not a delegate.
+    assert set(methods) == {*PUBLIC_SIGNATURES, "__init__", *MIVIA_FORK_PROPERTIES}
     assert all(
         isinstance(methods[name], ast.AsyncFunctionDef) for name in PUBLIC_SIGNATURES
     )
@@ -323,6 +334,7 @@ def _assert_no_private_facade_accesses(sources: dict[Path, str]) -> None:
             if (
                 isinstance(node, ast.Attribute)
                 and node.attr.startswith("_")
+                and node.attr not in MIVIA_FORK_FACADE_STATE
                 and isinstance(node.value, ast.Name)
                 and node.value.id in facade_names
             ):

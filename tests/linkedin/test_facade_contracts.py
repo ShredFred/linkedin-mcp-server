@@ -101,6 +101,9 @@ async def test_constructor_export_and_dependency_use_the_same_facade(monkeypatch
         "_message_sender",
         "_person",
         "_posts",
+        # MiViA fork: raw collaborators for the fork's own tools.
+        "_mivia_navigator",
+        "_mivia_session",
     }
     assert set(vars(extractor)) == expected_state
     assert type(constructed) is LinkedInExtractor
@@ -121,7 +124,9 @@ def test_permanent_facade_aliases_are_the_canonical_objects():
 
 async def test_registered_tools_match_extractor_delegates():
     tools = await create_mcp_server().list_tools()
-    tool_names = {tool.name for tool in tools}
+    # MiViA fork: fork tools carry the "mivia" tag and are contracted in
+    # tests/test_mivia_tools.py; the upstream delegate contract stays exact.
+    tool_names = {tool.name for tool in tools if "mivia" not in tool.tags}
 
     assert tool_names == {*TOOL_DELEGATES, "close_session"}
     assert set(TOOL_DELEGATES.values()) == TOOL_FACADE_METHODS
