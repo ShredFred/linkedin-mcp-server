@@ -23,10 +23,24 @@ from __future__ import annotations
 import re
 import unicodedata
 from typing import Any
+from urllib.parse import urlsplit
 
 CALENDLY_ACCOUNT = "calendly.com/mivia_jessica-schneider"
 _URL_RE = re.compile(r"\b((?:https?://|www\.)[^\s<>()\"']+)", re.IGNORECASE)
-_SHORTENERS = ("bit.ly", "tinyurl.com", "t.co/", "goo.gl", "ow.ly", "lnkd.in")
+# Matched against the URL host (exact or as a parent domain), never as a
+# substring: "t.co/" used to hit robot.co/x and "bit.ly" www.orbit.ly.
+_SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "lnkd.in")
+_CALENDLY_HOSTS = ("calendly.com", "www.calendly.com")
+# Hidden in a pasted text and reordering or hiding it; same rule as
+# tools/mivia.py:_hidden_format_char (ZWNJ/ZWJ and emoji tags allowed).
+_ALLOWED_CF = (0x200C, 0x200D)
+# LinkedIn's direct-message limit, counted in UTF-16 units like the composer.
+MESSAGE_MAX_UTF16 = 8000
+_BARE_WWW = re.compile(r"(?<![\w/.:@-])www\.", re.IGNORECASE)
+_BARE_HOST = re.compile(
+    r"(?<![\w/.:@-])(?=(?:[a-z0-9-]+\.)+(?:ly|com|co|gl|in|link|me|io|to|gd|is|cc)\b/)",
+    re.IGNORECASE,
+)
 _PLACEHOLDER_RE = re.compile(
     r"\{[^{}\n]{1,40}\}|\[(?:ihr |dein )?(?:vorname|nachname|name|firma|firmenname"
     r"|unternehmen|anrede|position|titel|company|first ?name|last ?name)\]"
@@ -54,6 +68,45 @@ def _fold(value: str) -> str:
     return value.replace("ß", "ss").lower().strip()
 
 
+def utf16_len(text: str) -> int:
+    """Length as the browser counts it: an emoji is two units, not one."""
+    return len((text or "").encode("utf-16-le")) // 2
+
+
+def hidden_format_char(character: str) -> bool:
+    """A Unicode format character (Cf) or C1/bidi control that hides or
+    reorders text. ZWNJ/ZWJ and the emoji tag characters stay allowed."""
+    code = ord(character)
+    if 0x7F <= code <= 0x9F:
+        return True
+    if unicodedata.category(character) != "Cf":
+        return False
+    return not (code in _ALLOWED_CF or 0xE0020 <= code <= 0xE007F)
+
+
+def _host(url: str) -> str:
+    try:
+        return (urlsplit(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return ""
+
+
+def _host_is(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
+def calendly_ok(url: str) -> bool:
+    """Host exactly calendly.com/www.calendly.com and first path segment
+    exactly the booking account."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    host = (parts.hostname or "").lower().rstrip(".")
+    segment = parts.path.lstrip("/").split("/", 1)[0].lower()
+    return host in _CALENDLY_HOSTS and segment == CALENDLY_ACCOUNT.split("/", 1)[1]
+
+
 def check_links(text: str) -> list[dict[str, Any]]:
     found = []
     for match in _URL_RE.finditer(text or ""):
@@ -61,11 +114,38 @@ def check_links(text: str) -> list[dict[str, Any]]:
         low = url.lower()
         if not low.startswith("https://"):
             found.append({"code": "link_not_https", "url": url})
-        elif any(s in low for s in _SHORTENERS):
+            continue
+        host = _host(url)
+        if any(_host_is(host, s) for s in _SHORTENERS):
             found.append({"code": "link_shortener", "url": url})
-        elif "calendly.com" in low and CALENDLY_ACCOUNT not in low:
+        elif "calendly" in low and not calendly_ok(url):
+            # Any mention counts: calendly.com.evil.example/... and
+            # ?r=calendly.com/... are not the booking page.
             found.append({"code": "calendly_wrong_account", "url": url})
     return found
+
+
+def bare_links_as_https(text: str) -> str:
+    """ "www.x" and bare "bit.ly/x" are linkified by LinkedIn: rewrite them to
+    https:// so the link rules run on them too."""
+    return _BARE_HOST.sub("https://", _BARE_WWW.sub("https://www.", text or ""))
+
+
+def check_outgoing(text: str, *, max_utf16: int) -> dict[str, Any] | None:
+    """Browser-free refusal shared by InMail body/subject and message edit:
+    hidden format characters, length, links (bare ones too), placeholders.
+    Salutation is left to the caller, who knows the recipient."""
+    if any(hidden_format_char(c) for c in text or ""):
+        return {
+            "status": "invalid_message",
+            "detail": "invisible or direction-changing characters are refused",
+        }
+    if utf16_len(text) > max_utf16:
+        return {"status": "message_too_long", "max": max_utf16}
+    findings = check_links(bare_links_as_https(text)) + check_placeholders(text)
+    if findings:
+        return {"status": "content_check_failed", "findings": findings}
+    return None
 
 
 def check_placeholders(text: str) -> list[dict[str, Any]]:

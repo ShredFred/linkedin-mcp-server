@@ -17,7 +17,13 @@ from fastmcp import Context, FastMCP
 
 from linkedin_mcp_server import mivia_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
-from linkedin_mcp_server.mivia_message_checks import check_message
+from linkedin_mcp_server.mivia_message_checks import (
+    MESSAGE_MAX_UTF16,
+    check_message,
+    check_outgoing,
+    hidden_format_char,
+)
+from linkedin_mcp_server.mivia_message_checks import utf16_len as utf16_len
 from linkedin_mcp_server.linkedin.contracts import (
     is_invisible_control,
     refuse_an_invalid_message,
@@ -41,11 +47,6 @@ def _reader(extractor: Any) -> MiviaInmail:
 
 def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
-
-
-def utf16_len(text: str) -> int:
-    """Length as the browser counts it: an emoji is two units, not one."""
-    return len(text.encode("utf-16-le")) // 2
 
 
 def _edit_lands_on_message(
@@ -80,7 +81,9 @@ def precheck_inmail(username: str, subject: str, body: str) -> dict[str, Any] | 
         return {"status": "invalid_message", "detail": refusal}
     if not subject or not subject.strip():
         return {"status": "subject_required"}
-    if any(ord(c) < 32 or is_invisible_control(c) for c in subject):
+    if any(
+        ord(c) < 32 or is_invisible_control(c) or hidden_format_char(c) for c in subject
+    ):
         return {
             "status": "invalid_subject",
             "detail": "no control characters or line breaks",
@@ -89,14 +92,34 @@ def precheck_inmail(username: str, subject: str, body: str) -> dict[str, Any] | 
         return {"status": "subject_too_long", "max": SUBJECT_MAX}
     if utf16_len(body) > INMAIL_BODY_MAX:
         return {"status": "body_too_long", "max": INMAIL_BODY_MAX}
-    findings = [
-        f
-        for f in check_message(subject, None) + check_message(body, None)
-        if f["code"] != "salutation_unverifiable"
-    ]
-    if findings:
-        return {"status": "content_check_failed", "findings": findings}
+    # Strict links (host-bound Calendly and shorteners, bare hosts too),
+    # placeholders and Cf characters for both fields.
+    for text in (subject, body):
+        refusal = check_outgoing(text, max_utf16=INMAIL_BODY_MAX)
+        if refusal is not None:
+            return refusal
     return None
+
+
+def repeat_refusal(username: str, allow_repeat: bool) -> dict[str, Any] | None:
+    """allow_repeat is for test sends to the canary only: a repeat to a real
+    person is a second InMail (and a second credit) in their inbox."""
+    if allow_repeat and outreach.recipient_key(username) != outreach.recipient_key(
+        outreach.DEFAULT_CANARY
+    ):
+        return {
+            "status": "repeat_not_allowed",
+            "detail": "allow_repeat is for the canary only",
+        }
+    return None
+
+
+def precheck_edit(new_text: str) -> dict[str, Any] | None:
+    """Browser-free refusals for an edited message; None when it may proceed."""
+    refusal = refuse_an_invalid_message("thread", new_text)
+    if refusal is not None:
+        return {"status": "invalid_message", "detail": refusal}
+    return check_outgoing(new_text, max_utf16=MESSAGE_MAX_UTF16)
 
 
 def register_mivia_inmail_tools(
@@ -141,7 +164,9 @@ def register_mivia_inmail_tools(
         (use send_message_verified), open_profile, no_inmail_credits,
         inmail_not_allowed, no_sales_navigator_route, not_an_inmail_composer,
         composer_mismatch, content_check_failed, subject_required, duplicate,
-        pace_budget_spent. Never falls back to a connection request.
+        pace_budget_spent, repeat_not_allowed (allow_repeat to a non-canary),
+        unexpected_inmail_cost, invalid_message, message_too_long. Never
+        falls back to a connection request.
         """
         ident = linkedin_username or profile_url
         if not ident:
@@ -149,7 +174,9 @@ def register_mivia_inmail_tools(
         username, bad = _recipient(ident)
         if bad:
             return bad
-        refusal = precheck_inmail(username, subject, body)
+        refusal = precheck_inmail(username, subject, body) or repeat_refusal(
+            username, allow_repeat
+        )
         if refusal:
             return {"recipient": username, **refusal}
         ledger = outreach.Ledger.default()
@@ -297,22 +324,16 @@ def register_mivia_inmail_tools(
         menu item is missing the status is edit_window_closed. Other codes:
         dry_run, verified, unverified, no_own_message, message_not_found,
         ambiguous_match, unchanged, content_check_failed, edit_form_mismatch,
-        editor_mismatch, pace_budget_spent. The ledger keeps old and new hash.
+        editor_mismatch, invalid_message, message_too_long,
+        pace_budget_spent. The ledger keeps old and new hash.
         """
         try:
             url = thread_url(thread)
         except ValueError as bad:
             return {"status": "invalid_thread", "detail": str(bad)}
-        refusal = refuse_an_invalid_message("thread", new_text)
+        refusal = precheck_edit(new_text)
         if refusal is not None:
-            return {"status": "invalid_message", "detail": refusal}
-        blocking = [
-            f
-            for f in check_message(new_text, None)
-            if f["code"] != "salutation_unverifiable"
-        ]
-        if blocking:
-            return {"status": "content_check_failed", "findings": blocking}
+            return refusal
         if confirm:
             spent = _peek("message_edit")
             if spent:

@@ -129,6 +129,29 @@ def parse_credits(text: str) -> dict[str, Any]:
     }
 
 
+def credit_refusal(credits: dict[str, Any]) -> str | None:
+    """Status that stops the send on the composer's credit line; None to go.
+
+    Measured cost is 1. A different cost, or fewer credits left than it
+    costs, is not a send we have priced: stop rather than spend.
+    """
+    if credits.get("free"):
+        return "open_profile"
+    if credits.get("none_left"):
+        return "no_inmail_credits"
+    cost = credits.get("cost")
+    if cost is None:
+        # No credit line: an existing conversation or a connection. Never
+        # send something whose kind we cannot name.
+        return "not_an_inmail_composer"
+    if cost != 1:
+        return "unexpected_inmail_cost"
+    remaining = credits.get("remaining")
+    if remaining is not None and remaining < cost:
+        return "no_inmail_credits"
+    return None
+
+
 def parse_degree(text: str) -> int | None:
     match = _DEGREE_RE.search(text or "")
     return int(match.group(1)) if match else None
@@ -387,14 +410,9 @@ class MiviaInmail(MiviaActions):
             await self._close_sn_dialog(dialog)
             return {**base, "status": status, "sent": False, **extra}
 
-        if credits["free"]:
-            return await discard("open_profile")
-        if credits["none_left"]:
-            return await discard("no_inmail_credits")
-        if credits["cost"] is None:
-            # No credit line: an existing conversation or a connection. Never
-            # send something whose kind we cannot name.
-            return await discard("not_an_inmail_composer")
+        stop = credit_refusal(credits)
+        if stop is not None:
+            return await discard(stop)
         if subject_field is None or await body_field.count() == 0:
             return await discard("composer_fields_missing")
         await subject_field.fill(subject)
