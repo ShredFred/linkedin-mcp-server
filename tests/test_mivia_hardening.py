@@ -791,3 +791,365 @@ def test_stale_lock_unlink_permission_error_keeps_waiting(tmp_path, monkeypatch)
         assert lock.exists()
     assert calls["n"] == 1
     assert not lock.exists()
+
+
+# -- 3. InMail/edit hardening 2026-10-01 ----------------------------------------
+
+
+def test_edit_landed_refuses_truncated_old_text():
+    # Fix 1: the old text must not verify a new text that is only its start;
+    # only LinkedIn's edit marker is ignored.
+    from linkedin_mcp_server.scraping.mivia_inmail import edit_landed
+
+    target = {"index": 0, "own": True}
+    old = [{"index": 0, "own": True, "text": "Danke für Ihr Interesse"}]
+    assert not edit_landed(old, target, "Danke für Ihr")
+    marked = [{"index": 0, "own": True, "text": "Danke für Ihr (bearbeitet)"}]
+    assert edit_landed(marked, target, "Danke für Ihr")
+    assert edit_landed(
+        [{"index": 0, "own": True, "text": "Danke\nEdited"}], target, "Danke"
+    )
+    # A sentence ending in "bearbeitet" is text, not a marker.
+    assert not edit_landed(
+        [{"index": 0, "own": True, "text": "Ich habe das bearbeitet"}],
+        target,
+        "Ich habe das",
+    )
+
+
+class _Clicky:
+    """Reader that raises before or after setting clicked."""
+
+    def __init__(self, click_first):
+        self.click_first = click_first
+        self.clicked = False
+        self.target = {"status": "ok", "name": "Dieter König"}
+
+    async def inmail_target(self, username):
+        return self.target
+
+    async def inmail(self, target, subject, body, confirm):
+        self.clicked = self.click_first
+        raise RuntimeError("boom")
+
+    async def thread_messages(self, url):
+        return {
+            "messages": [{"index": 0, "own": True, "text": "Alt"}],
+            "partner": None,
+        }
+
+    async def edit(self, url, message, new_text, confirm):
+        self.clicked = self.click_first
+        raise RuntimeError("boom")
+
+
+@pytest.mark.parametrize("clicked,status", [(False, "not_sent"), (True, "unknown")])
+def test_inmail_exception_before_click_is_not_sent(monkeypatch, clicked, status):
+    # Fix 2
+    assert "not_sent" not in outreach._BLOCKING
+    assert "not_sent" not in outreach._COUNTED
+    with pytest.raises(Exception):
+        _inmail(monkeypatch, _Clicky(clicked))
+    rows = [r for r in outreach.Ledger.default().rows() if r.get("attempt")]
+    assert rows[-1]["status"] == status
+    assert _used("inmail") == (1 if clicked else 0)
+    previous = outreach.Ledger.default().already_contacted("inmail", "dieter", None)
+    assert bool(previous) is clicked
+
+
+def _edit(monkeypatch, reader, **over):
+    import linkedin_mcp_server.tools.mivia_inmail as mi
+
+    monkeypatch.setattr(mi, "_reader", lambda ex: reader)
+    args = {"thread": "2-abcdefghij", "new_text": "Neu", "confirm": True, **over}
+    return _call("edit_sent_message", args, extractor=object(), monkeypatch=monkeypatch)
+
+
+@pytest.mark.parametrize("clicked,status", [(False, "not_sent"), (True, "unknown")])
+def test_edit_exception_before_save_is_not_sent(monkeypatch, clicked, status):
+    # Fix 2, edit side
+    with pytest.raises(Exception):
+        _edit(monkeypatch, _Clicky(clicked))
+    rows = [r for r in outreach.Ledger.default().rows() if r.get("attempt")]
+    assert rows[-1]["status"] == status
+    assert rows[-1]["detail"] == (
+        "exception during edit" if clicked else "exception before send"
+    )
+
+
+class _Commenter:
+    def __init__(self, result):
+        self.result = result
+        self.calls = 0
+
+    async def comment(self, activity_id, text, confirm):
+        self.calls += 1
+        return self.result
+
+
+POST = "https://www.linkedin.com/feed/update/urn:li:activity:7123456789012345678/"
+
+
+def _comment(monkeypatch, actions, text="Starker Beitrag"):
+    import linkedin_mcp_server.tools.mivia_stage2 as s2
+
+    async def fake_run(ctx, tool, body):
+        return await body(object())
+
+    monkeypatch.setattr(s2, "_run", fake_run)
+    monkeypatch.setattr(s2, "_actions", lambda ex: actions)
+    return _call("comment_on_post", {"post_url": POST, "text": text, "confirm": True})
+
+
+def test_comment_posted_counts_once_via_attempt_row(monkeypatch):
+    # Fixes 3+6: the attempt row is the booking; no separate pace row.
+    actions = _Commenter({"status": "posted", "posted": True})
+    assert _comment(monkeypatch, actions)["status"] == "posted"
+    assert _used("comment") == 1
+    assert not [r for r in outreach.Ledger.default().rows() if r.get("kind") == "pace"]
+    again = _comment(monkeypatch, actions)
+    assert again["status"] == "duplicate_text"
+    assert actions.calls == 1
+    assert _used("comment") == 1
+
+
+def test_comment_not_posted_spends_no_budget(monkeypatch):
+    actions = _Commenter({"status": "no_editor", "posted": False})
+    _comment(monkeypatch, actions)
+    assert _used("comment") == 0
+    rows = [r for r in outreach.Ledger.default().rows() if r.get("attempt")]
+    assert rows[-1]["status"] == "not_posted"
+    # Released for a retry.
+    assert _comment(monkeypatch, actions)["status"] == "no_editor"
+
+
+def test_comment_duplicate_rechecked_under_lock(monkeypatch):
+    # A parallel call booked the same text between the outer check and the
+    # booking: refused under the lock, nothing posted.
+    import linkedin_mcp_server.tools.mivia_stage2 as s2
+
+    actions = _Commenter({"status": "posted", "posted": True})
+    real = s2._book_attempt
+
+    def racing(ledger, kind, row, **k):
+        ledger.append({**row, "attempt": "other"})
+        return real(ledger, kind, row, **k)
+
+    monkeypatch.setattr(s2, "_book_attempt", racing)
+    out = _comment(monkeypatch, actions)
+    assert out["status"] == "duplicate_text"
+    assert out["posted"] is False
+    assert actions.calls == 0
+    assert out["previous"]["attempt"] == "other"
+
+
+def test_edit_menu_item_selectors_are_visible_only():
+    # Fix 4
+    from linkedin_mcp_server.scraping import mivia_inmail as sm
+
+    for entry in sm._EDIT_MENU_ITEM:
+        css = entry[0] if isinstance(entry, tuple) else entry
+        assert ":visible" in css
+
+
+def test_edit_without_visible_menu_item_is_mismatch_not_click(monkeypatch):
+    from linkedin_mcp_server.scraping import mivia_inmail as sm
+
+    reader = sm.MiviaInmail.__new__(sm.MiviaInmail)
+    pressed = []
+
+    class _Kb:
+        async def press(self, key):
+            pressed.append(key)
+
+    class _P:
+        keyboard = _Kb()
+
+    async def menu(index):
+        return ["Weiterleiten", "Bearbeiten"]
+
+    async def none(scope, chain, *, last=False):
+        return None
+
+    reader._open_menu = menu
+    monkeypatch.setattr(sm.MiviaInmail, "_page", property(lambda s: _P()))
+    monkeypatch.setattr(sm, "first_match", none)
+    out = asyncio.run(
+        reader.edit("u", {"index": 0, "own": True, "text": "A"}, "B", confirm=True)
+    )
+    assert out["status"] == "editor_mismatch"
+    assert out["reason"] == "no_edit_menu_item"
+    assert reader.clicked is False
+    assert pressed == ["Escape"]
+
+
+def test_edit_marker_is_stripped_and_unchanged(monkeypatch):
+    # Fix 5
+    from linkedin_mcp_server.scraping.mivia_inmail import (
+        mark_edited,
+        pick_own_message,
+        strip_edit_marker,
+    )
+
+    assert strip_edit_marker("X (bearbeitet)") == ("X", True)
+    assert strip_edit_marker("X [Edited]") == ("X", True)
+    assert strip_edit_marker("X") == ("X", False)
+    listed = mark_edited(
+        {"messages": [{"index": 0, "own": True, "text": "X (bearbeitet)"}]}
+    )
+    assert listed["messages"][0] == {
+        "index": 0,
+        "own": True,
+        "text": "X",
+        "edited": True,
+    }
+    picked = pick_own_message(
+        [{"index": 0, "own": True, "text": "X (bearbeitet)"}], "X (bearbeitet)"
+    )
+    assert picked["status"] == "ok"
+
+    class _R:
+        async def thread_messages(self, url):
+            return {
+                "messages": [{"index": 0, "own": True, "text": "X (bearbeitet)"}],
+                "partner": None,
+            }
+
+    assert _edit(monkeypatch, _R(), new_text="X")["status"] == "unchanged"
+
+
+def test_edit_prefill_ignores_marker(monkeypatch):
+    from linkedin_mcp_server.scraping import mivia_inmail as sm
+
+    reader = sm.MiviaInmail.__new__(sm.MiviaInmail)
+
+    class _El:
+        def __init__(self, text):
+            self.text = text
+
+        first = property(lambda s: s)
+
+        def locator(self, *a, **k):
+            return self
+
+        async def wait_for(self, **k):
+            return None
+
+        async def count(self):
+            return 1
+
+        async def inner_text(self):
+            return self.text
+
+        async def evaluate(self, js, text):
+            self.text = text
+            return True
+
+        async def click(self):
+            return None
+
+        async def is_disabled(self):
+            return False
+
+    editor = _El("X (bearbeitet)")
+
+    class _P:
+        def locator(self, *a, **k):
+            return editor
+
+    async def menu(index):
+        return ["Bearbeiten"]
+
+    async def first(scope, chain, *, last=False):
+        return editor
+
+    async def noop(*a, **k):
+        return None
+
+    reader._open_menu = menu
+    reader._wait = noop
+    monkeypatch.setattr(sm.MiviaInmail, "_page", property(lambda s: _P()))
+    monkeypatch.setattr(sm, "first_match", first)
+    out = asyncio.run(
+        reader.edit("u", {"index": 0, "own": True, "text": "X"}, "Y", confirm=False)
+    )
+    assert out["status"] == "dry_run"
+
+
+def test_edit_updates_text_head_of_original_message_row(monkeypatch):
+    # Fix 7: follow_up_list searches the thread for the row's text_head.
+    ledger = outreach.Ledger.default()
+    ledger.append(
+        {
+            "attempt": "orig",
+            "kind": "message",
+            "recipient": "dieter",
+            "thread": "2-abcdefghij",
+            "text_sha": outreach.text_sha("Hallo Dieter, alter Text"),
+            "text_head": "Hallo Dieter, alter Text",
+            "status": "verified",
+            "started_at": "2026-10-01T10:00:00+02:00",
+        }
+    )
+
+    class _R:
+        clicked = False
+
+        async def thread_messages(self, url):
+            return {
+                "messages": [
+                    {"index": 0, "own": True, "text": "Hallo Dieter, alter Text"}
+                ],
+                "partner": "Dieter Maier",
+            }
+
+        async def edit(self, url, message, new_text, confirm):
+            self.clicked = True
+            return {"status": "verified", "edited": True, "verified": True}
+
+    out = _edit(monkeypatch, _R(), new_text="Hallo Dieter, neuer Text")
+    assert out["status"] == "verified"
+    assert out["message_row"] == "orig"
+    row = outreach.Ledger.default().latest_by_attempt()["orig"]
+    assert row["text_head"] == "Hallo Dieter, neuer Text"
+    assert row["status"] == "verified"
+    sent = outreach.sent_messages(outreach.Ledger.default())
+    assert sent[0]["text_head"] == "Hallo Dieter, neuer Text"
+
+
+def test_inmail_lengths_in_utf16_units():
+    # Fix 8: an emoji is two UTF-16 units, as the browser counts.
+    from linkedin_mcp_server.tools.mivia_inmail import (
+        INMAIL_BODY_MAX,
+        SUBJECT_MAX,
+        precheck_inmail,
+        utf16_len,
+    )
+
+    assert utf16_len("😀") == 2
+    long_subject = "😀" * (SUBJECT_MAX // 2 + 1)
+    assert precheck_inmail("dieter", long_subject, "B")["status"] == "subject_too_long"
+    long_body = "😀" * (INMAIL_BODY_MAX // 2 + 1)
+    assert precheck_inmail("dieter", "S", long_body)["status"] == "body_too_long"
+
+
+@pytest.mark.parametrize(
+    "ch", ["\x85", "\x9f", " ", " ", "​", "‎", "‏", "﻿"]
+)
+def test_invisible_controls_refused(ch):
+    from linkedin_mcp_server.scraping.contracts import refuse_an_invalid_message
+    from linkedin_mcp_server.tools.mivia_inmail import precheck_inmail
+
+    assert precheck_inmail("dieter", f"Betreff{ch}", "B")["status"] == "invalid_subject"
+    assert precheck_inmail("dieter", "S", f"Text{ch}")["status"] == "invalid_message"
+    assert refuse_an_invalid_message("dieter", f"Hallo{ch}") is not None
+
+
+def test_legit_texts_still_pass():
+    from linkedin_mcp_server.scraping.contracts import refuse_an_invalid_message
+    from linkedin_mcp_server.scraping.mivia_inmail import canon
+
+    for text in ["Grüße aus Köln, Straße", "Top 👍🏽 👨‍👩‍👧 ❤️", "Zeile 1\nZeile 2"]:
+        assert refuse_an_invalid_message("dieter", text) is None
+    # NFD and NFC compare equal after canon.
+    assert canon("Grüße") == canon("Grüße")

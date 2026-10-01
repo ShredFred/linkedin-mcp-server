@@ -41,6 +41,7 @@ from __future__ import annotations
 import logging
 import random
 import re
+import unicodedata
 from typing import Any
 
 from linkedin_mcp_server.scraping.mivia_actions import MiviaActions
@@ -70,7 +71,38 @@ _THREAD_ID_RE = re.compile(r"/messaging/thread/([A-Za-z0-9_=-]+)")
 
 
 def canon(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "").replace(" ", " ")).strip()
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFC", text or "").replace(" ", " ")).strip()
+
+
+# Only LinkedIn's own edit markers, at the very end of a message. Anything
+# else after the text is a different text, never "new text plus a marker".
+# Either bracketed, or on its own last line: a sentence that merely ends in
+# "... bearbeitet" is text, and stripping it would make a truncated old text
+# look like the new one.
+_EDIT_MARKER_RE = re.compile(
+    r"(?:\s*[(\[]\s*(?:bearbeitet|edited)\s*[)\]]|\s*\n\s*(?:bearbeitet|edited))\s*$",
+    re.IGNORECASE,
+)
+
+
+def strip_edit_marker(text: str) -> tuple[str, bool]:
+    """Text without a trailing "(bearbeitet)"/"Edited" marker, and whether one was there."""
+    raw = text or ""
+    stripped = _EDIT_MARKER_RE.sub("", raw)
+    return stripped, stripped != raw
+
+
+def mark_edited(listed: dict[str, Any]) -> dict[str, Any]:
+    """Strip the edit marker from every read message and record it as ``edited``.
+
+    The marker is LinkedIn's decoration, not message text: kept, it made the
+    prefill check fail and "X (bearbeitet)" -> "X" look like a change.
+    """
+    for message in listed.get("messages") or []:
+        text, edited = strip_edit_marker(message.get("text", ""))
+        message["text"] = text.strip()
+        message["edited"] = edited
+    return listed
 
 
 def _num(value: str | None) -> int | None:
@@ -123,8 +155,8 @@ def pick_own_message(
         return {"status": "no_own_message"}
     if not match:
         return {"status": "ok", "message": own[-1]}
-    want = canon(match)
-    hits = [m for m in own if want in canon(m.get("text", ""))]
+    want = canon(strip_edit_marker(match)[0])
+    hits = [m for m in own if want in canon(strip_edit_marker(m.get("text", ""))[0])]
     if not hits:
         return {"status": "message_not_found", "own_count": len(own)}
     if len(hits) > 1:
@@ -145,9 +177,11 @@ def edit_landed(
     hit = next((m for m in messages if m.get("index") == target.get("index")), None)
     if hit is None or not hit.get("own"):
         return False
-    got = canon(hit.get("text", ""))
-    # LinkedIn may append an "(bearbeitet)"/"Edited" marker after the text.
-    return got == want or (got.startswith(want) and len(got) - len(want) <= 20)
+    # LinkedIn may append an "(bearbeitet)"/"Edited" marker: only that marker
+    # is removed, then the comparison is exact. The former prefix match let
+    # the unedited old text pass whenever the new text was its beginning.
+    got = canon(strip_edit_marker(hit.get("text", ""))[0])
+    return got == want
 
 
 _TOP_CARD_JS = r"""() => {
@@ -211,10 +245,12 @@ _OPTIONS_TRIGGER: tuple[Any, ...] = (
     'button[aria-label*="Optionen"]',
     'button[aria-label*="options" i]',
 )
+# Visible hits only: a hidden dropdown of another bubble may still hold a
+# "Bearbeiten" entry, and clicking that would edit the wrong message.
 _EDIT_MENU_ITEM: tuple[Any, ...] = (
-    '.artdeco-dropdown__content :text-is("Bearbeiten")',
-    '.artdeco-dropdown__content :text-is("Edit")',
-    ('[role="menuitem"]', r"^\s*(Bearbeiten|Edit)\s*$"),
+    '.artdeco-dropdown__content :text-is("Bearbeiten"):visible',
+    '.artdeco-dropdown__content :text-is("Edit"):visible',
+    ('[role="menuitem"]:visible', r"^\s*(Bearbeiten|Edit)\s*$"),
 )
 _EDIT_CANCEL: tuple[Any, ...] = (
     "button.msg-edit-form__dismiss-button",
@@ -312,6 +348,9 @@ class MiviaInmail(MiviaActions):
         confirm: bool,
     ) -> dict[str, Any]:
         """Open the Sales Navigator composer, fill it, then send or discard."""
+        # True from the moment the send button is clicked: an exception before
+        # it means nothing left, one after it means it may have.
+        self.clicked = False
         await self._goto(target["sales_url"])
         await self._wait(3.0, 5.0)
         button = (
@@ -374,6 +413,7 @@ class MiviaInmail(MiviaActions):
             await subject_field.fill("")
             await body_field.fill("")
             return await discard("dry_run", composer_verified=True)
+        self.clicked = True
         await send.click()
         # From here the InMail may have left: a failing read-back is
         # "unverified", never an exception that would leave the ledger at
@@ -450,7 +490,7 @@ class MiviaInmail(MiviaActions):
             )
         except Exception:
             return {"messages": [], "partner": None}
-        return await self._page.evaluate(_MESSAGES_JS)
+        return mark_edited(await self._page.evaluate(_MESSAGES_JS))
 
     async def _open_menu(self, index: int) -> list[str]:
         bubble = self._page.locator(f'[data-mivia-msg="{index}"]').first
@@ -467,6 +507,7 @@ class MiviaInmail(MiviaActions):
     async def edit(
         self, url: str, message: dict[str, Any], new_text: str, *, confirm: bool
     ) -> dict[str, Any]:
+        self.clicked = False
         if message.get("own") is False:
             return {"status": "not_own_message", "edited": False}
         menu = await self._open_menu(message["index"])
@@ -505,8 +546,8 @@ class MiviaInmail(MiviaActions):
                 "edited": False,
                 "reason": "no_cancel_or_editor",
             }
-        prefilled = canon(await editor.inner_text())
-        if prefilled != canon(message["text"]):
+        prefilled = canon(strip_edit_marker(await editor.inner_text())[0])
+        if prefilled != canon(strip_edit_marker(message["text"])[0]):
             await cancel.click()
             return {
                 "status": "edit_form_mismatch",
@@ -526,6 +567,7 @@ class MiviaInmail(MiviaActions):
             await cancel.click()
             await self._wait(0.8, 1.4)
             return {"status": "dry_run", "edited": False, "editor_verified": True}
+        self.clicked = True
         await save.click()
         # The edit may have landed: a failing read-back is "unverified".
         try:

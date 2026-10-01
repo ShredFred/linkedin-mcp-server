@@ -8,6 +8,7 @@ checks (links, placeholders, salutation), ledger duplicate check, pacer.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime
 from typing import Any
@@ -17,11 +18,15 @@ from fastmcp import Context, FastMCP
 from linkedin_mcp_server import mivia_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.mivia_message_checks import check_message
-from linkedin_mcp_server.scraping.contracts import refuse_an_invalid_message
+from linkedin_mcp_server.scraping.contracts import (
+    is_invisible_control,
+    refuse_an_invalid_message,
+)
 from linkedin_mcp_server.scraping.mivia_inmail import (
     MiviaInmail,
     canon,
     pick_own_message,
+    strip_edit_marker,
     thread_url,
 )
 
@@ -38,6 +43,36 @@ def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def utf16_len(text: str) -> int:
+    """Length as the browser counts it: an emoji is two units, not one."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _edit_lands_on_message(
+    ledger: outreach.Ledger, url: str, partner: str | None, old_sha: str
+) -> dict[str, Any] | None:
+    """The newest message row the edited text was sent as, in this thread.
+
+    Thread id first (what the send stored); the partner key only for a row
+    without a thread. None when nothing matches -- no guess.
+    """
+    match = re.search(r"/messaging/thread/([^/]+)/", url)
+    tid = match.group(1) if match else None
+    key = outreach.recipient_key(partner) if partner else None
+    rows = [
+        r
+        for r in ledger.latest_by_attempt().values()
+        if r.get("kind") == "message"
+        and r.get("text_sha") == old_sha
+        and (
+            (tid and r.get("thread") == tid)
+            or (not r.get("thread") and key and r.get("recipient") == key)
+        )
+    ]
+    rows.sort(key=lambda r: str(r.get("started_at") or ""))
+    return rows[-1] if rows else None
+
+
 def precheck_inmail(username: str, subject: str, body: str) -> dict[str, Any] | None:
     """Browser-free refusals for an InMail; None when it may proceed."""
     refusal = refuse_an_invalid_message(username, body)
@@ -45,14 +80,14 @@ def precheck_inmail(username: str, subject: str, body: str) -> dict[str, Any] | 
         return {"status": "invalid_message", "detail": refusal}
     if not subject or not subject.strip():
         return {"status": "subject_required"}
-    if any(ord(c) < 32 or ord(c) == 127 for c in subject):
+    if any(ord(c) < 32 or is_invisible_control(c) for c in subject):
         return {
             "status": "invalid_subject",
             "detail": "no control characters or line breaks",
         }
-    if len(subject) > SUBJECT_MAX:
+    if utf16_len(subject) > SUBJECT_MAX:
         return {"status": "subject_too_long", "max": SUBJECT_MAX}
-    if len(body) > INMAIL_BODY_MAX:
+    if utf16_len(body) > INMAIL_BODY_MAX:
         return {"status": "body_too_long", "max": INMAIL_BODY_MAX}
     findings = [
         f
@@ -187,11 +222,16 @@ def register_mivia_inmail_tools(
             try:
                 result = await reader.inmail(target, subject, body, confirm=True)
             except BaseException:
+                # Before the send click nothing left: not_sent neither counts
+                # nor blocks. After it the InMail may be out: unknown.
+                clicked = getattr(reader, "clicked", True)
                 ledger.append(
                     {
                         "attempt": attempt,
-                        "status": "unknown",
-                        "detail": "exception during send",
+                        "status": "unknown" if clicked else "not_sent",
+                        "detail": "exception during send"
+                        if clicked
+                        else "exception before send",
                     }
                 )
                 raise
@@ -288,7 +328,7 @@ def register_mivia_inmail_tools(
             if picked["status"] != "ok":
                 return {"thread": url, **picked}
             message = picked["message"]
-            if canon(message["text"]) == canon(new_text):
+            if canon(strip_edit_marker(message["text"])[0]) == canon(new_text):
                 return {"thread": url, "status": "unchanged"}
             warnings = check_message(new_text, listed.get("partner"))
             salutation = [f for f in warnings if f["code"] == "salutation_mismatch"]
@@ -333,11 +373,14 @@ def register_mivia_inmail_tools(
             try:
                 result = await reader.edit(url, message, new_text, confirm=True)
             except BaseException:
+                clicked = getattr(reader, "clicked", True)
                 ledger.append(
                     {
                         "attempt": attempt,
-                        "status": "unknown",
-                        "detail": "exception during edit",
+                        "status": "unknown" if clicked else "not_sent",
+                        "detail": "exception during edit"
+                        if clicked
+                        else "exception before send",
                     }
                 )
                 raise
@@ -345,6 +388,26 @@ def register_mivia_inmail_tools(
             ledger.append(
                 {"attempt": attempt, "status": status, "detail": result["status"]}
             )
+            if result.get("edited"):
+                # The thread now shows the new text: the original message row
+                # must carry its first line, or follow_up_list/reply_after
+                # search for a text that is no longer there.
+                original = _edit_lands_on_message(
+                    ledger, url, listed.get("partner"), old_sha
+                )
+                if original is not None:
+                    ledger.append(
+                        {
+                            "attempt": original["attempt"],
+                            "text_head": outreach.text_head(new_text),
+                            "edited_by": attempt,
+                            "edited_at": _now(),
+                        }
+                    )
+                result = {
+                    **result,
+                    "message_row": original["attempt"] if original else None,
+                }
             return {**base, "attempt": attempt, **result}
 
         return await _run(ctx, "edit_sent_message", body_fn)

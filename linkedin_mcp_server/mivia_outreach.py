@@ -39,7 +39,8 @@ DEFAULT_CANARY = "frederikstadler"
 # Rows in these states block another send of the same text to the same person.
 _BLOCKING = {"attempted", "sent", "verified", "unverified", "unknown"}
 # Rows in these states count against the caps (anything that may have left).
-_COUNTED = _BLOCKING
+# "posted" is a comment's success state; not_sent/not_posted never count.
+_COUNTED = _BLOCKING | {"posted"}
 
 
 def ledger_path() -> Path:
@@ -281,7 +282,8 @@ PACE_WRITE_TOTAL_PER_DAY = 150
 # LinkedIn's own event-invitation ceiling per organiser account and week.
 EVENT_INVITES_PLATFORM_PER_WEEK = 1000
 
-_LEDGER_KINDS = {"message", "invite", "inmail", "message_edit"}
+# Kinds whose attempt row is the pacer booking (no separate pace row).
+_LEDGER_KINDS = {"message", "invite", "inmail", "message_edit", "comment"}
 
 
 @contextmanager

@@ -92,6 +92,19 @@ def message_action_result(
     }
 
 
+# MiViA fork: characters that are not C0 but still invisible or line-breaking
+# in the composer -- C1 controls, the Unicode line/paragraph separators,
+# zero-width space, directional marks and the BOM. Not the zero-width joiner
+# (U+200D) or variation selectors: emojis are built from them.
+_INVISIBLE_CONTROLS = frozenset("  ​‎‏﻿")
+
+
+def is_invisible_control(character: str) -> bool:
+    """DEL, a C1 control, or one of the invisible separators above."""
+    code = ord(character)
+    return code == 127 or 0x80 <= code <= 0x9F or character in _INVISIBLE_CONTROLS
+
+
 def refuse_an_invalid_message(
     linkedin_username: str, message: str
 ) -> dict[str, Any] | None:
@@ -100,7 +113,8 @@ def refuse_an_invalid_message(
     if not message.strip():
         reason = "Message must contain non-whitespace characters."
     elif any(
-        (ord(character) < 32 and character != "\n") or ord(character) == 127
+        (ord(character) < 32 and character != "\n")
+        or is_invisible_control(character)
         for character in message
     ):
         # Keep the browser-side insertion contract to plain message text.

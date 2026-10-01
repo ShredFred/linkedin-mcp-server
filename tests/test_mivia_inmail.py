@@ -89,7 +89,7 @@ def _editor(hits, menu=("Bearbeiten",)):
 _MSG = {"index": 0, "own": True, "text": "alt"}
 _BASE = {
     "button.msg-s-event-listitem__options-trigger": 1,
-    '.artdeco-dropdown__content :text-is("Bearbeiten")': 1,
+    '.artdeco-dropdown__content :text-is("Bearbeiten"):visible': 1,
     "form.msg-edit-form__base-form": 1,
     '[contenteditable="true"]': 1,
     "text": "alt",
@@ -137,7 +137,7 @@ class TestEditFallbacks:
         assert ed._page.clicks == []
 
     def test_no_menu_item_is_editor_mismatch(self):
-        hits = {**_BASE, '.artdeco-dropdown__content :text-is("Bearbeiten")': 0}
+        hits = {**_BASE, '.artdeco-dropdown__content :text-is("Bearbeiten"):visible': 0}
         _, out = _run_edit(hits)
         assert out["reason"] == "no_edit_menu_item"
 

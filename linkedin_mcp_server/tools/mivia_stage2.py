@@ -32,8 +32,10 @@ from linkedin_mcp_server.scraping.mivia_engagement import (
 from linkedin_mcp_server.tools.mivia import (
     BATCH_TIMEOUT_SECONDS,
     TAG,
+    _book_attempt,
     _GuardedMcp,
     _pace,
+    _peek,
     _recipient,
     _run,
     pace_lock_busy,
@@ -601,20 +603,27 @@ def register_mivia_stage2_tools(
         # Any attempt that may have posted blocks the same text again: an
         # attempt row without outcome counts as posted (repeated text is a
         # restriction trigger).
-        repeat = next(
-            (
-                r
-                for r in ledger.latest_by_attempt().values()
-                if r.get("kind") == "comment"
-                and r.get("text_sha") == sha
-                and r.get("status") in {"attempted", "unknown", "posted", "unverified"}
-            ),
-            None,
-        )
-        if repeat:
-            return {"status": "duplicate_text", "posted": False, "previous": repeat}
+        def repeat() -> dict[str, Any] | None:
+            return next(
+                (
+                    r
+                    for r in ledger.latest_by_attempt().values()
+                    if r.get("kind") == "comment"
+                    and r.get("text_sha") == sha
+                    and r.get("status")
+                    in {"attempted", "unknown", "posted", "unverified"}
+                ),
+                None,
+            )
+
+        previous = repeat()
+        if previous:
+            return {"status": "duplicate_text", "posted": False, "previous": previous}
         if confirm:
-            refusal = _pace("comment", tool="comment_on_post")
+            # Peek only: the attempt row below is the booking, written under
+            # the pacer lock together with the repeated duplicate check, so
+            # two parallel calls cannot both post the same text.
+            refusal = _peek("comment")
             if refusal:
                 return refusal
         else:
@@ -627,7 +636,9 @@ def register_mivia_stage2_tools(
                 result = await _actions(ex).comment(activity_id, text, False)
                 return {"activity_id": activity_id, **result}
             attempt = uuid.uuid4().hex
-            ledger.append(
+            refused = _book_attempt(
+                ledger,
+                "comment",
                 {
                     "attempt": attempt,
                     "kind": "comment",
@@ -637,8 +648,14 @@ def register_mivia_stage2_tools(
                     "started_at": datetime.now()
                     .astimezone()
                     .isoformat(timespec="seconds"),
-                }
+                },
+                tool="comment_on_post",
+                duplicate=repeat,
             )
+            if refused:
+                if refused["status"] == "duplicate":
+                    refused = {**refused, "status": "duplicate_text"}
+                return {"posted": False, **refused}
             try:
                 result = await _actions(ex).comment(activity_id, text, True)
             except BaseException:
