@@ -21,6 +21,7 @@ from pydantic import Field
 
 from linkedin_mcp_server import mivia_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
+from linkedin_mcp_server.linkedin.contracts import is_invisible_control
 from linkedin_mcp_server.linkedin.mivia_actions import MiviaActions, parse_group_id
 from linkedin_mcp_server.linkedin.mivia_events import MiviaEventFinder, event_summary
 from linkedin_mcp_server.linkedin.mivia_engagement import (
@@ -38,6 +39,7 @@ from linkedin_mcp_server.tools.mivia import (
     _peek,
     _recipient,
     _run,
+    _utf16_len,
     pace_lock_busy,
 )
 
@@ -337,8 +339,23 @@ def register_mivia_stage2_tools(
             pacer = outreach.Pacer(ledger)
             results = []
             for index, inv in enumerate(picked):
+                if index:
+                    await asyncio.sleep(random.uniform(8.0, 20.0))
+                # The attempt row is the booking, written under the pacer lock
+                # (withdraw is a ledger kind). A card that is gone (not_found)
+                # ends as an uncounted status and gives the unit back.
+                attempt = uuid.uuid4().hex
+                row = {
+                    "attempt": attempt,
+                    "kind": "withdraw",
+                    "recipient": outreach.recipient_key(inv["slug"]),
+                    "status": "attempted",
+                    "started_at": datetime.now()
+                    .astimezone()
+                    .isoformat(timespec="seconds"),
+                }
                 try:
-                    pacer.take("withdraw", tool="withdraw_invitations")
+                    pacer.take("withdraw", tool="withdraw_invitations", row=row)
                 except outreach.PaceExceeded as spent:
                     results.append(
                         {
@@ -351,22 +368,8 @@ def register_mivia_stage2_tools(
                 except TimeoutError as busy:
                     results.append({"slug": inv["slug"], **pace_lock_busy(busy)})
                     break
-                if index:
-                    await asyncio.sleep(random.uniform(8.0, 20.0))
                 # Row before the click, closed afterwards: a withdrawal that may
                 # have happened must leave a trace even if the read-back throws.
-                attempt = uuid.uuid4().hex
-                ledger.append(
-                    {
-                        "attempt": attempt,
-                        "kind": "withdraw",
-                        "recipient": outreach.recipient_key(inv["slug"]),
-                        "status": "attempted",
-                        "started_at": datetime.now()
-                        .astimezone()
-                        .isoformat(timespec="seconds"),
-                    }
-                )
                 try:
                     outcome = await actions.withdraw(inv["name"], inv["slug"])
                 except BaseException:
@@ -587,15 +590,21 @@ def register_mivia_stage2_tools(
                 "posted": False,
                 "message": "Replies to a comment are not implemented yet.",
             }
+        # Same checks as a message: LinkedIn counts UTF-16 units (an emoji is
+        # two), and an invisible control (zero-width, bidi override) makes the
+        # read-back compare a text the reader never sees.
         if (
             not text.strip()
-            or len(text) > 1250
-            or any((ord(c) < 32 and c != "\n") or ord(c) == 127 for c in text)
+            or _utf16_len(text) > 1250
+            or any(
+                (ord(c) < 32 and c != "\n") or ord(c) == 127 or is_invisible_control(c)
+                for c in text
+            )
         ):
             return {
                 "status": "invalid_text",
                 "posted": False,
-                "message": "1-1250 characters, LF allowed, no other control characters.",
+                "message": "1-1250 UTF-16 units, LF allowed, no other control or invisible characters.",
             }
         activity_id = parse_activity_id(post_url)
         ledger = outreach.Ledger.default()

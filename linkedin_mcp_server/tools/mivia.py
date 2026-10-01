@@ -19,7 +19,7 @@ import os
 import random
 import re
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context, FastMCP
@@ -179,6 +179,20 @@ def _peek(action: str, count: int = 1) -> dict[str, Any] | None:
     except TimeoutError as busy:
         return pace_lock_busy(busy)
     return None
+
+
+# create_post (2026-10-01): the same text is not published twice within this
+# window; repeated posts are a spam signal and a post_unconfirmed may be live.
+POST_REPEAT_DAYS = 30
+_POST_REPEAT_BLOCKING = {"attempted", "unknown", "posted", "posted_verified"}
+# Composer result -> ledger status. posted_unverified was published (the
+# composer closed); post_unconfirmed may have been. Everything else did not
+# reach the publish click or stopped before it and releases the text.
+_POST_LEDGER_STATUS = {
+    "posted_verified": "posted_verified",
+    "posted_unverified": "posted",
+    "post_unconfirmed": "unknown",
+}
 
 
 def _composer(extractor: Any) -> MiviaPostComposer:
@@ -554,7 +568,9 @@ def register_mivia_tools(
         text (LF) is supported. Without confirm_post=true this is a dry run: the
         editor is filled and verified, then cleared again; nothing is published.
         With confirm_post=true the post is published (public, irreversible
-        without manual deletion) and read back from recent activity.
+        without manual deletion) and read back from recent activity. Budget:
+        post pacer (3/day, 10/week); the same text is refused for 30 days after
+        any attempt that may have published (including post_unconfirmed).
 
         Args:
             text: Post text; LF separates paragraphs. Other control characters
@@ -584,13 +600,95 @@ def register_mivia_tools(
                 "posted": False,
                 "message": "LinkedIn posts are limited to 3000 characters.",
             }
-        return await _run(
-            ctx,
-            "create_post",
-            lambda ex: _composer(ex).create_post(
-                text, image_path=image_path, confirm_post=confirm_post
-            ),
-        )
+        ledger = outreach.Ledger.default()
+        sha = outreach.text_sha(text)
+
+        # The same text again within POST_REPEAT_DAYS is refused: any attempt
+        # that may have published (attempted, unknown = post_unconfirmed,
+        # posted = unverified) blocks it like a verified one.
+        def repeat() -> dict[str, Any] | None:
+            since = datetime.now().astimezone() - timedelta(days=POST_REPEAT_DAYS)
+            return next(
+                (
+                    r
+                    for r in ledger.latest_by_attempt().values()
+                    if r.get("kind") == "post"
+                    and sha in outreach.row_text_shas(r)
+                    and r.get("status") in _POST_REPEAT_BLOCKING
+                    and outreach.counted_time(r) >= since
+                ),
+                None,
+            )
+
+        previous = repeat()
+        if previous:
+            return {"status": "duplicate_text", "posted": False, "previous": previous}
+        if not confirm_post:
+            # Dry run: nothing is published, nothing is booked.
+            return await _run(
+                ctx,
+                "create_post",
+                lambda ex: _composer(ex).create_post(
+                    text, image_path=image_path, confirm_post=False
+                ),
+            )
+        # Peek only: the attempt row below is the booking, written under the
+        # pacer lock together with the repeated duplicate check.
+        refusal = _peek("post")
+        if refusal:
+            return {"posted": False, **refusal}
+
+        async def body(ex: Any) -> dict[str, Any]:
+            attempt = uuid.uuid4().hex
+            refused = _book_attempt(
+                ledger,
+                "post",
+                {
+                    "attempt": attempt,
+                    "kind": "post",
+                    "text_sha": sha,
+                    "text_head": outreach.text_head(text),
+                    "status": "attempted",
+                    "started_at": datetime.now()
+                    .astimezone()
+                    .isoformat(timespec="seconds"),
+                },
+                tool="create_post",
+                duplicate=repeat,
+            )
+            if refused:
+                if refused["status"] == "duplicate":
+                    refused = {**refused, "status": "duplicate_text"}
+                return {"posted": False, **refused}
+            composer = _composer(ex)
+            try:
+                result = await composer.create_post(
+                    text, image_path=image_path, confirm_post=True
+                )
+            except BaseException:
+                clicked = getattr(composer, "clicked", True)
+                ledger.append(
+                    {
+                        "attempt": attempt,
+                        "status": "unknown" if clicked else "not_posted",
+                        "detail": "exception after the publish click"
+                        if clicked
+                        else "exception before the publish click",
+                    }
+                )
+                raise
+            status = _POST_LEDGER_STATUS.get(result.get("status"), "not_posted")
+            outcome: dict[str, Any] = {
+                "attempt": attempt,
+                "status": status,
+                "detail": result.get("status"),
+            }
+            if result.get("activity_id"):
+                outcome["activity"] = result["activity_id"]
+            ledger.append(outcome)
+            return result
+
+        return await _run(ctx, "create_post", body)
 
     @mcp.tool(
         timeout=tool_timeout,

@@ -100,9 +100,17 @@ _INVISIBLE_CONTROLS = frozenset("  ​‎‏﻿")
 
 
 def is_invisible_control(character: str) -> bool:
-    """DEL, a C1 control, or one of the invisible separators above."""
+    """DEL, a C1 control, a bidi embedding/override/isolate, or one of the
+    invisible separators above. Bidi controls reorder what the recipient sees
+    without changing the stored text, so a reviewed draft could read differently."""
     code = ord(character)
-    return code == 127 or 0x80 <= code <= 0x9F or character in _INVISIBLE_CONTROLS
+    return (
+        code == 127
+        or 0x80 <= code <= 0x9F
+        or 0x202A <= code <= 0x202E
+        or 0x2066 <= code <= 0x2069
+        or character in _INVISIBLE_CONTROLS
+    )
 
 
 def refuse_an_invalid_message(

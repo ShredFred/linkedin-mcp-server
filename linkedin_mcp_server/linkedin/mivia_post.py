@@ -109,6 +109,7 @@ class MiviaPostComposer:
     def __init__(self, session: PageSession, navigator: PageNavigator):
         self._session = session
         self._navigator = navigator
+        self.clicked = False
 
     @property
     def _page(self) -> Any:
@@ -222,6 +223,9 @@ class MiviaPostComposer:
             await self._leave()
             return {**result, "status": "post_button_disabled"}
 
+        # Set directly before the publish click: an exception before it means
+        # nothing was published, one after it may have published.
+        self.clicked = True
         await self._page.click('[data-mivia-target="post"]')
         try:
             await self._page.wait_for_selector(

@@ -181,12 +181,30 @@ _MARK_WITHDRAW_JS = r"""(slug) => {
   return false;
 }"""
 
+# Comment key (urn) with its text: the read-back compares the keys before and
+# after the click, so an older comment with the same opening never counts.
 _COMMENT_TEXTS_JS = r"""() => [...document.querySelectorAll('[componentkey^="replaceableComment_urn:li:comment:"]')]
-  .map(c => (c.innerText || ''))"""
+  .map(c => ({key: c.getAttribute('componentkey') || '', text: c.innerText || ''}))"""
 
 
 def _canon(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
+
+
+def _matching_comment_keys(comments: Any, probe: str) -> set[str]:
+    """Keys of the rendered comments whose text carries *probe*.
+
+    A comment without a key cannot be told apart from an older one and never
+    counts as new.
+    """
+    keys: set[str] = set()
+    for c in comments or []:
+        if not isinstance(c, dict):
+            continue
+        key = str(c.get("key") or "")
+        if key and probe in _canon(str(c.get("text") or "")):
+            keys.add(key)
+    return keys
 
 
 class MiviaActions(MiviaNetworkReader):
@@ -349,13 +367,20 @@ class MiviaActions(MiviaNetworkReader):
         if not confirm:
             await self._clear(editor)
             return {"status": "dry_run", "posted": False, "verified_text": typed}
+        # LinkedIn truncates long comments ("…mehr"); a prefix is enough to
+        # recognise our own fresh comment -- but only a fresh one: a comment
+        # with the same opening that was already on the page before the click
+        # made a failed submit read as posted.
+        probe = _canon(text)[:150]
+        before = _matching_comment_keys(
+            await self._page.evaluate(_COMMENT_TEXTS_JS), probe
+        )
         await self._page.locator('[data-mivia-submit="1"]').first.click()
         await self._session.delay(random.uniform(3.0, 5.0))
-        texts = await self._page.evaluate(_COMMENT_TEXTS_JS)
-        # LinkedIn truncates long comments ("…mehr"); a prefix is enough to
-        # recognise our own fresh comment.
-        probe = _canon(text)[:150]
-        verified = any(probe in _canon(t) for t in texts)
+        after = _matching_comment_keys(
+            await self._page.evaluate(_COMMENT_TEXTS_JS), probe
+        )
+        verified = bool(after - before)
         return {
             "status": "posted" if verified else "unverified",
             "posted": True,

@@ -41,6 +41,9 @@ _BLOCKING = {"attempted", "sent", "verified", "unverified", "unknown"}
 # Rows in these states count against the caps (anything that may have left).
 # "posted" is a comment's success state; not_sent/not_posted never count.
 _COUNTED = _BLOCKING | {"posted"}
+# create_post (2026-10-01) closes with posted_verified; a withdrawal with
+# withdrawn or still_pending (the click happened). not_found never counts.
+_COUNTED = _COUNTED | {"posted_verified", "withdrawn", "still_pending"}
 
 
 def ledger_path() -> Path:
@@ -289,6 +292,9 @@ PACE_BUDGETS: dict[str, dict[str, int]] = {
     # Taking back an own post or comment (2026-10-01): rare by design, and a
     # burst of deletions looks like account clean-up to LinkedIn.
     "post_delete": {"day": 3, "week": 10},
+    # Publishing an own post (2026-10-01): public and broadcast to the whole
+    # network, so the tightest cap of all writes.
+    "post": {"day": 3, "week": 10},
     "post_edit": {"day": 5, "week": 20},
     "comment_delete": {"day": 5, "week": 20},
     "comment_edit": {"day": 5, "week": 20},
@@ -307,6 +313,7 @@ PACE_WRITE_KINDS = {
     "post_edit",
     "comment_delete",
     "comment_edit",
+    "post",
 }
 PACE_WRITE_TOTAL_PER_DAY = 150
 # LinkedIn's own event-invitation ceiling per organiser account and week.
@@ -323,6 +330,8 @@ _LEDGER_KINDS = {
     "post_edit",
     "comment_delete",
     "comment_edit",
+    "post",
+    "withdraw",
 }
 
 
