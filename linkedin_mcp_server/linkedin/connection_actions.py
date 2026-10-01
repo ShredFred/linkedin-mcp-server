@@ -681,6 +681,10 @@ class ConnectionActions:
                             )
                             await self._dismiss_dialog()
                             return False, False, note_limit_message
+                        # A dialog without note editor and without the quota
+                        # upsell is unexplained: a misdirected Send can leave
+                        # a follow-up dialog behind. Treat it as clicked.
+                        self.send_clicked = True
 
             note_filled = await self._fill_dialog_textarea(note)
             if not note_filled:

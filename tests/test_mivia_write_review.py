@@ -214,3 +214,18 @@ def test_message_content_allows_bare_www_but_not_http():
     refused = m.check_message_content("Mehr unter http://mivia.ai")
     assert refused and refused["status"] == "content_check_failed"
     assert m.check_message_content("Hallo {{vorname}}, kurz zu MiViA.")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "siehe www.bit.ly/abc",
+        "www.lnkd.in/x",
+        "Termin: www.calendly.com/mivia/30min",
+    ],
+)
+def test_bare_www_still_gets_shortener_and_calendly_rules(text):
+    import linkedin_mcp_server.tools.mivia as m
+
+    refused = m.check_message_content(text)
+    assert refused and refused["status"] == "content_check_failed"

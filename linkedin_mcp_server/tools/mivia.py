@@ -171,6 +171,9 @@ def check_invite_note(note: str | None) -> dict[str, Any] | None:
     return None
 
 
+_BARE_WWW = re.compile(r"(?<![\w/.:@-])www\.", re.IGNORECASE)
+
+
 def check_message_content(message: str) -> dict[str, Any] | None:
     """Browser-free content refusal for a direct message; None when it may go.
 
@@ -181,14 +184,12 @@ def check_message_content(message: str) -> dict[str, Any] | None:
     """
     findings = [
         f
-        for f in check_message(message, None)
-        if not f["code"].startswith("salutation")
         # "www.mivia.ai" without a scheme is ordinary prose in a direct
-        # message; only an explicit http:// link is refused here.
-        and not (
-            f["code"] == "link_not_https"
-            and str(f.get("url", "")).lower().startswith("www.")
-        )
+        # message. It is checked as https so the shortener and Calendly rules
+        # still run on it; exempting the finding instead let www.bit.ly and a
+        # foreign www.calendly.com account through unchecked.
+        for f in check_message(_BARE_WWW.sub("https://www.", message), None)
+        if not f["code"].startswith("salutation")
     ]
     if findings:
         return {"status": "content_check_failed", "findings": findings}
