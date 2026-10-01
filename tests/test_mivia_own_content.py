@@ -79,6 +79,7 @@ class _Page:
         self.buttons = kw.pop("buttons", {})
         self.editor = kw.pop("editor", {"count": 1, "text": "Alter Kommentar"})
         self.page_text = kw.pop("page_text", "Dieser Beitrag ist nicht mehr verfügbar")
+        self.feed_cards = kw.pop("feed_cards", 0)
         self.missing = set(kw.pop("missing", ()))
         self.raise_on = kw.pop("raise_on", None)
         self.type_ok = kw.pop("type_ok", True)
@@ -106,8 +107,8 @@ class _Page:
             return self.buttons.get(arg["tag"], {"count": 1, "disabled": False})
         if js is oc._EDITOR_PICK_JS:
             return self.editor
-        if js is oc._PAGE_TEXT_JS:
-            return self.page_text
+        if js is oc._PAGE_STATE_JS:
+            return {"text": self.page_text, "cards": self.feed_cards}
         raise AssertionError("unexpected script")
 
 

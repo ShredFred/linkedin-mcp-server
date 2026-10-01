@@ -31,7 +31,7 @@ import logging
 import random
 import re
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 from linkedin_mcp_server.linkedin.mivia_actions import MiviaActions
 from linkedin_mcp_server.linkedin.mivia_engagement import (
@@ -293,7 +293,53 @@ _REPLACE_EDITOR_JS = r"""(el, text) => {
   return ok;
 }"""
 
-_PAGE_TEXT_JS = r"""() => (document.querySelector('main') || document.body).innerText.slice(0, 4000)"""
+# State of the page after navigating to a deleted post: its main text and how
+# many feed cards it still renders. The gone wording only counts on a page that
+# shows no card at all -- a feed or a sidebar quoting "nicht verfügbar" is not
+# the error page of this post.
+_PAGE_STATE_JS = r"""() => {
+  const main = document.querySelector('main') || document.body;
+  const cards = document.querySelectorAll(
+      '[data-urn^="urn:li:activity:"], [data-id^="urn:li:activity:"], [componentkey^="update-card"]').length;
+  return {text: (main.innerText || '').slice(0, 4000), cards};
+}"""
+
+# An error page is short; a feed that happens to contain the wording is not.
+_ERROR_PAGE_MAX_CHARS = 1500
+
+
+def comment_permalink(activity_id: str, comment_id: str) -> str:
+    """The comment's own permalink: LinkedIn loads the post with that comment
+    pinned at the top, independent of "Relevanteste" sorting or collapsing."""
+    urn = quote(f"urn:li:comment:(activity:{activity_id},{comment_id})", safe="")
+    return (
+        f"https://www.linkedin.com/feed/update/urn:li:activity:{activity_id}/"
+        f"?commentUrn={urn}"
+    )
+
+
+def post_gone_evidence(
+    activity_id: str, url: str | None, state: dict[str, Any] | None
+) -> bool:
+    """Strong evidence that a post is gone, given no post card was found.
+
+    Either LinkedIn redirected to the bare feed, or the page still names the
+    activity and is a short error page without any feed card whose text says
+    the content is unavailable. Anything else (login wall, checkpoint, a feed
+    quoting "nicht verfügbar") is not evidence.
+    """
+    url = url or ""
+    if re.fullmatch(r"https://www\.linkedin\.com/feed/?(?:\?.*)?", url):
+        return True
+    if activity_id not in url:
+        return False
+    state = state or {}
+    text = state.get("text") or ""
+    return (
+        int(state.get("cards") or 0) == 0
+        and len(text) <= _ERROR_PAGE_MAX_CHARS
+        and bool(_GONE_RE.search(text))
+    )
 
 
 class MiviaOwnContent(MiviaActions):
@@ -414,6 +460,25 @@ class MiviaOwnContent(MiviaActions):
         found = await self._locate(activity_id, comment_id)
         if found["status"] != "ok":
             return {**base, **found}
+        try:
+            return await self._delete_clicks(
+                activity_id, comment_id, found, base, confirm
+            )
+        except BaseException:
+            # A menu or the confirm dialog must not stay open on the shared
+            # page; after the final click there is nothing left to close.
+            if not self.clicked:
+                await self._cancel_dialog()
+            raise
+
+    async def _delete_clicks(
+        self,
+        activity_id: str,
+        comment_id: str | None,
+        found: dict[str, Any],
+        base: dict[str, Any],
+        confirm: bool,
+    ) -> dict[str, Any]:
         words = DELETE_COMMENT_WORDS if comment_id else DELETE_POST_WORDS
         entry = await self._open_menu_entry(found["menu"], words)
         if entry["status"] != "ok":
@@ -456,29 +521,33 @@ class MiviaOwnContent(MiviaActions):
         }
 
     async def _is_gone(self, activity_id: str, comment_id: str | None) -> bool:
-        url = await self._post_page(activity_id)
-        post = await self._page.evaluate(_POST_CARD_JS, activity_id)
+        """True only on strong evidence; False means "not confirmed".
+
+        Comment: reloaded through its own permalink (commentUrn), which pins
+        the comment at the top regardless of sorting or collapsed threads; it
+        counts as gone only when the post loaded, other comment cards rendered
+        and this one is absent. Post: see ``post_gone_evidence``.
+        """
         if comment_id:
-            # The post must have loaded, or "no card" proves nothing.
+            url = comment_permalink(activity_id, comment_id)
+            await self._goto(url)
+            if activity_id not in (self._page.url or ""):
+                return False
+            post = await self._page.evaluate(_POST_CARD_JS, activity_id)
             if not post:
                 return False
             card = await self._page.evaluate(_COMMENT_CARD_JS, comment_id)
-            # Zero cards in total means the comment list did not render
-            # (collapsed, lazy): absence proves nothing then.
             return (
                 bool(card)
                 and card.get("count") == 0
                 and int(card.get("total") or 0) > 0
             )
+        await self._post_page(activity_id)
+        post = await self._page.evaluate(_POST_CARD_JS, activity_id)
         if post:
             return False
-        text = await self._page.evaluate(_PAGE_TEXT_JS)
-        # Only a redirect to the feed itself counts; a login wall or checkpoint
-        # also "moves" the page and proves nothing about the post.
-        moved = re.fullmatch(
-            r"https://www\.linkedin\.com/feed/?(?:\?.*)?", self._page.url or url
-        )
-        return bool(_GONE_RE.search(text or "")) or bool(moved)
+        state = await self._page.evaluate(_PAGE_STATE_JS)
+        return post_gone_evidence(activity_id, self._page.url, state)
 
     async def _cancel_dialog(self) -> None:
         try:
@@ -521,8 +590,30 @@ class MiviaOwnContent(MiviaActions):
         base["old_text"] = old
         if old is not None and text_matches(old, new_text):
             return {**base, "status": "unchanged"}
+        try:
+            return await self._edit_clicks(
+                activity_id, comment_id, new_text, old, base, confirm
+            )
+        except BaseException:
+            # Never leave a menu or a half-typed editor behind on the shared
+            # page: the next tool would find it open (or save it).
+            if not self.clicked:
+                await self._abort_edit("editor-scope")
+            raise
+
+    async def _edit_clicks(
+        self,
+        activity_id: str,
+        comment_id: str | None,
+        new_text: str,
+        old: str | None,
+        base: dict[str, Any],
+        confirm: bool,
+    ) -> dict[str, Any]:
         words = EDIT_COMMENT_WORDS if comment_id else EDIT_POST_WORDS
-        entry = await self._open_menu_entry(found["menu"], words)
+        entry = await self._open_menu_entry(
+            "comment-menu" if comment_id else "post-menu", words
+        )
         if entry["status"] != "ok":
             return {**base, **entry}
         if not confirm:

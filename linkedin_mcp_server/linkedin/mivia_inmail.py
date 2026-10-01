@@ -376,6 +376,23 @@ class MiviaInmail(MiviaActions):
         # True from the moment the send button is clicked: an exception before
         # it means nothing left, one after it means it may have.
         self.clicked = False
+        try:
+            return await self._inmail(target, subject, body, confirm=confirm)
+        except BaseException:
+            # A filled composer must not survive an exception before the send
+            # click: it would sit open on the shared page as a ready draft.
+            if not self.clicked:
+                await self._close_sn_dialog(self._page.locator(_SN_DIALOG).last)
+            raise
+
+    async def _inmail(
+        self,
+        target: dict[str, Any],
+        subject: str,
+        body: str,
+        *,
+        confirm: bool,
+    ) -> dict[str, Any]:
         await self._goto(target["sales_url"])
         await self._wait(3.0, 5.0)
         button = (
@@ -528,6 +545,31 @@ class MiviaInmail(MiviaActions):
         self, url: str, message: dict[str, Any], new_text: str, *, confirm: bool
     ) -> dict[str, Any]:
         self.clicked = False
+        try:
+            return await self._edit(url, message, new_text, confirm=confirm)
+        except BaseException:
+            # An open menu or a half-replaced edit form must not stay on the
+            # page: the next send would land in the edit form instead.
+            if not self.clicked:
+                await self._leave_edit_form()
+            raise
+
+    async def _leave_edit_form(self) -> None:
+        try:
+            form = self._page.locator(_EDIT_FORM).first
+            cancel = (
+                await first_match(form, _EDIT_CANCEL) if await form.count() else None
+            )
+            if cancel is not None:
+                await cancel.click()
+            else:
+                await self._page.keyboard.press("Escape")
+        except Exception:
+            logger.warning("leaving the message edit form failed", exc_info=True)
+
+    async def _edit(
+        self, url: str, message: dict[str, Any], new_text: str, *, confirm: bool
+    ) -> dict[str, Any]:
         if message.get("own") is False:
             return {"status": "not_own_message", "edited": False}
         menu = await self._open_menu(message["index"])

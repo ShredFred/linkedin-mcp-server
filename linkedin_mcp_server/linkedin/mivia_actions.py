@@ -317,15 +317,26 @@ class MiviaActions(MiviaNetworkReader):
         await link.scroll_into_view_if_needed()
         await self._session.delay(random.uniform(0.8, 1.6))
         await link.click()
-        await self._session.delay(random.uniform(1.5, 2.5))
-        dialog = self._page.locator('[role="dialog"], [role="alertdialog"]').first
-        if await dialog.count():
+        try:
+            await self._session.delay(random.uniform(1.5, 2.5))
+            dialog = self._page.locator('[role="dialog"], [role="alertdialog"]').first
+            has_dialog = await dialog.count()
+        except BaseException:
+            # The confirm dialog may be open: never leave it on the page.
+            await self._escape_quietly()
+            raise
+        if has_dialog:
             confirm = (
                 dialog.locator("button")
                 .filter(has_text=re.compile(r"^\s*(Zurückziehen|Withdraw)\s*$"))
                 .first
             )
-            if not await confirm.count():
+            try:
+                found = await confirm.count()
+            except BaseException:
+                await self._escape_quietly()
+                raise
+            if not found:
                 # MiViA fork (2026-10-01): a confirm dialog without a
                 # recognisable confirm button was left open and then read
                 # back as still_pending, which the ledger counts as a click.
@@ -356,6 +367,28 @@ class MiviaActions(MiviaNetworkReader):
         editor = self._page.locator(_COMMENT_EDITOR).first
         if await editor.count() == 0:
             return {"status": "no_editor", "posted": False}
+        self.comment_submitted = False
+        try:
+            return await self._comment_typed(editor, text, confirm)
+        except BaseException:
+            # Typed text left in the editor would be prepended to the next
+            # comment on this post; clear it unless the submit was clicked.
+            if not self.comment_submitted:
+                try:
+                    await self._clear(editor)
+                except Exception:
+                    logger.warning("clearing the comment editor failed", exc_info=True)
+            raise
+
+    async def _escape_quietly(self) -> None:
+        try:
+            await self._page.keyboard.press("Escape")
+        except Exception:
+            logger.debug("Escape failed", exc_info=True)
+
+    async def _comment_typed(
+        self, editor: Any, text: str, confirm: bool
+    ) -> dict[str, Any]:
         await editor.click()
         await self._session.delay(random.uniform(0.6, 1.2))
         for index, paragraph in enumerate(text.split("\n")):
@@ -384,6 +417,7 @@ class MiviaActions(MiviaNetworkReader):
         before = _matching_comment_keys(
             await self._page.evaluate(_COMMENT_TEXTS_JS), probe
         )
+        self.comment_submitted = True
         await self._page.locator('[data-mivia-submit="1"]').first.click()
         await self._session.delay(random.uniform(3.0, 5.0))
         after = _matching_comment_keys(
