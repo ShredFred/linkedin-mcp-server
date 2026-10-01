@@ -817,10 +817,18 @@ class ConnectionActions:
         except Exception:
             btn_count = 0
         if btn_count >= 3:
+            # MiViA fork (2026-10-01): an unknown layout can put Send at
+            # ``btn_count - 2``. The probe returned without any click marker,
+            # so a misdirected send was booked not_sent and the person could
+            # be invited again. Same rule as the submit reveal step: the
+            # click counts as a send when it raised, or the dialog vanished
+            # without a note editor.
             try:
                 await buttons.nth(btn_count - 2).click()
             except Exception:
+                self.send_clicked = True
                 logger.debug("Could not open invite note editor", exc_info=True)
+            textarea_appeared = True
             try:
                 await self._session.page.wait_for_selector(
                     _DIALOG_TEXTAREA_SELECTOR,
@@ -828,7 +836,17 @@ class ConnectionActions:
                     timeout=3000,
                 )
             except PlaywrightTimeoutError:
+                textarea_appeared = False
                 logger.debug("Note textarea did not appear during quota probe")
+            if not textarea_appeared:
+                try:
+                    dialog_left = await self._session.page.locator(
+                        f"{_DIALOG_SELECTOR} >> visible=true"
+                    ).count()
+                except Exception:
+                    dialog_left = 0
+                if not dialog_left:
+                    self.send_clicked = True
 
         note_limit_message = await self._get_premium_upsell_message()
         await self._dismiss_dialog()
@@ -1015,6 +1033,17 @@ class ConnectionActions:
                         "custom_note_limit_reached",
                         note_limit_message,
                         note_sent=False,
+                        profile=page_text,
+                    )
+                if self.send_clicked:
+                    # The probe click may have sent (see the probe). follow_only
+                    # is booked not_sent unconditionally by connect_guarded, so
+                    # report send_failed: it books unknown and blocks a retry.
+                    return _connection_result(
+                        url,
+                        "send_failed",
+                        "The note-quota probe may have submitted the invite "
+                        "dialog; delivery is unknown.",
                         profile=page_text,
                     )
             if state == "follow_only":

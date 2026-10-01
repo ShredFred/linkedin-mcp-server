@@ -325,9 +325,18 @@ class MiviaActions(MiviaNetworkReader):
                 .filter(has_text=re.compile(r"^\s*(Zurückziehen|Withdraw)\s*$"))
                 .first
             )
-            if await confirm.count():
-                await confirm.click()
-                await self._session.delay(random.uniform(1.5, 2.5))
+            if not await confirm.count():
+                # MiViA fork (2026-10-01): a confirm dialog without a
+                # recognisable confirm button was left open and then read
+                # back as still_pending, which the ledger counts as a click.
+                # Nothing was withdrawn: close it and report uncounted.
+                try:
+                    await self._page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                return {"slug": slug, "name": name, "status": "not_confirmed"}
+            await confirm.click()
+            await self._session.delay(random.uniform(1.5, 2.5))
         # Verify on a fully loaded list: the oldest invitations, which are the
         # candidates, sit at the bottom and are not rendered without scrolling.
         present = await self._slug_present(slug)
