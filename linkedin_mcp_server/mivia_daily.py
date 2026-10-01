@@ -141,8 +141,8 @@ def has_hashtag(text: str, hashtags: list[str]) -> bool:
 class Collector:
     def __init__(self, extractor: Any, config: dict[str, Any], state_dir: Path):
         self.cfg = config
-        self.session = extractor._mivia_session
-        self.navigator = extractor._mivia_navigator
+        self.session = extractor.mivia_session
+        self.navigator = extractor.mivia_navigator
         self.engagement = MiviaEngagementReader(self.session, self.navigator)
         self.actions = MiviaActions(self.session, self.navigator)
         self.events = MiviaEventFinder(self.session, self.navigator)

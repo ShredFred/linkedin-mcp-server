@@ -538,7 +538,7 @@ def _first_two_checks_free(monkeypatch):
 class _Sender:
     def __init__(self):
         self.sends = 0
-        self._mivia_session = type("S", (), {"page": None})()
+        self.mivia_session = type("S", (), {"page": None})()
 
     async def send_message(self, username, message, confirm_send):
         self.sends += 1
@@ -605,7 +605,7 @@ class _InboxGuess:
 
     def __init__(self, partner):
         self.partner = partner
-        self._mivia_session = type("S", (), {"page": None})()
+        self.mivia_session = type("S", (), {"page": None})()
 
     async def send_message(self, username, message, confirm_send):
         return {"sent": True, "url": "https://www.linkedin.com/messaging/compose/"}

@@ -34,8 +34,8 @@ def test_daily_event_waits_for_the_late_attendee_line(tmp_path, monkeypatch):
             return None
 
     class Ex:
-        _mivia_session = Session()
-        _mivia_navigator = Nav()
+        mivia_session = Session()
+        mivia_navigator = Nav()
 
     c = mivia_daily.Collector(Ex(), {}, tmp_path)
 

@@ -46,8 +46,8 @@ def test_company_posts_view_as_member_and_admin_redirect_refused(tmp_path, monke
             return None
 
     class Ex:
-        _mivia_session = Session()
-        _mivia_navigator = Nav()
+        mivia_session = Session()
+        mivia_navigator = Nav()
 
     c = mivia_daily.Collector(Ex(), {}, tmp_path)
     with pytest.raises(RuntimeError, match="admin view"):
@@ -65,8 +65,8 @@ def test_event_scout_spreads_over_days_within_the_search_budget(tmp_path, monkey
             return None
 
     class Ex:
-        _mivia_session = Session()
-        _mivia_navigator = object()
+        mivia_session = Session()
+        mivia_navigator = object()
 
     cfg = {
         "events": {
@@ -147,8 +147,8 @@ def test_employer_lookup_refuses_other_triggers_and_returns_two_fields(
             return None
 
     class Ex:
-        _mivia_session = Session()
-        _mivia_navigator = object()
+        mivia_session = Session()
+        mivia_navigator = object()
 
     c = mivia_daily.Collector(
         Ex(), {"employer_lookup": {"enabled": True, "queue": str(queue)}}, tmp_path
@@ -239,8 +239,8 @@ def test_a_failing_part_does_not_stop_the_others(tmp_path, monkeypatch):
     monkeypatch.setenv("MIVIA_LINKEDIN_ENGAGERS_SEEN", str(tmp_path / "seen.json"))
 
     class Ex:
-        _mivia_session = object()
-        _mivia_navigator = object()
+        mivia_session = object()
+        mivia_navigator = object()
 
     c = mivia_daily.Collector(Ex(), {"radar": {"enabled": False}}, tmp_path)
 
@@ -269,8 +269,8 @@ def test_harvest_reads_only_ordered_pages_within_budget(tmp_path, monkeypatch):
             return None
 
     class Ex:
-        _mivia_session = Session()
-        _mivia_navigator = object()
+        mivia_session = Session()
+        mivia_navigator = object()
 
     good, other = "7286622235937701888", "7457346711301214208"
     cfg = {
@@ -337,8 +337,8 @@ def _harvest_collector(tmp_path, monkeypatch, orders, max_pages=10):
             return None
 
     class Ex:
-        _mivia_session = Session()
-        _mivia_navigator = object()
+        mivia_session = Session()
+        mivia_navigator = object()
 
     cfg = {
         "harvest": {

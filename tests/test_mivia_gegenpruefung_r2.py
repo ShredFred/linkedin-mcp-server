@@ -32,12 +32,19 @@ def _deleted(status: str) -> None:
 
 def test_verified_delete_reopens_the_post(monkeypatch):
     # Before: one posted comment locked the post forever, even after it was
-    # removed by a verified delete_own_comment.
+    # removed by a verified delete_own_comment. Since round 5 the release is
+    # bound to the deleted comment: delete_own_comment notes deleted_by on
+    # that comment row; an unbound delete no longer releases (see
+    # test_mivia_r5_kommentar.py).
     actions = _Commenter({"status": "posted", "posted": True})
     assert _comment(monkeypatch, actions)["status"] == "posted"
     time.sleep(1.1)  # second-resolution timestamps
     _deleted("verified")
-    time.sleep(1.1)
+    ledger = outreach.Ledger.default()
+    original = next(
+        r for r in ledger.latest_by_attempt().values() if r.get("kind") == "comment"
+    )
+    ledger.append({"attempt": original["attempt"], "deleted_by": "del-verified"})
     assert _comment(monkeypatch, actions, text="Neuer Gedanke")["status"] == "posted"
     # The new comment blocks the post again.
     assert _comment(monkeypatch, actions, text="Dritter")["status"] == (

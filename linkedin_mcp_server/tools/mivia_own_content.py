@@ -15,7 +15,7 @@ blocks), ``unknown`` when an exception came after the final click.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastmcp import Context, FastMCP
@@ -38,7 +38,7 @@ _REPEAT_BLOCKING = {"attempted", "unknown", "verified", "unverified"}
 
 
 def _reader(extractor: Any) -> MiviaOwnContent:
-    return MiviaOwnContent(extractor._mivia_session, extractor._mivia_navigator)
+    return MiviaOwnContent(extractor.mivia_session, extractor.mivia_navigator)
 
 
 def _now() -> str:
@@ -106,7 +106,10 @@ def _original_comment_row(
         and r.get("activity") == activity
         and sha in outreach.row_text_shas(r)
     ]
-    rows.sort(key=lambda r: str(r.get("started_at") or ""))
+    # Real aware datetimes: text order breaks across UTC offsets.
+    rows.sort(
+        key=lambda r: outreach.row_time(r) or datetime.min.replace(tzinfo=timezone.utc)
+    )
     return rows[-1] if rows else None
 
 

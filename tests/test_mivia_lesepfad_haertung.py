@@ -153,8 +153,8 @@ def test_projection_cut_resumes_on_the_cut_page():
 
 class _Ex:
     def __init__(self, page=None):
-        self._mivia_session = _Session(page)
-        self._mivia_navigator = _Nav()
+        self.mivia_session = _Session(page)
+        self.mivia_navigator = _Nav()
 
 
 def _collector(tmp_path, monkeypatch, cfg=None, page=None):

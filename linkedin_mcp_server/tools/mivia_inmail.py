@@ -42,7 +42,7 @@ INMAIL_BODY_MAX = 1900
 
 
 def _reader(extractor: Any) -> MiviaInmail:
-    return MiviaInmail(extractor._mivia_session, extractor._mivia_navigator)
+    return MiviaInmail(extractor.mivia_session, extractor.mivia_navigator)
 
 
 def _now() -> str:

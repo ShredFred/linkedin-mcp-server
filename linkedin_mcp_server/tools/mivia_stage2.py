@@ -49,11 +49,11 @@ from linkedin_mcp_server.tools.mivia import (
 
 
 def _engagement(extractor: Any) -> MiviaEngagementReader:
-    return MiviaEngagementReader(extractor._mivia_session, extractor._mivia_navigator)
+    return MiviaEngagementReader(extractor.mivia_session, extractor.mivia_navigator)
 
 
 def _actions(extractor: Any) -> MiviaActions:
-    return MiviaActions(extractor._mivia_session, extractor._mivia_navigator)
+    return MiviaActions(extractor.mivia_session, extractor.mivia_navigator)
 
 
 def _activity(post_url: str) -> tuple[str | None, dict[str, Any] | None]:
@@ -718,31 +718,42 @@ def register_mivia_stage2_tools(
         # A second comment on the same post (other text) is refused as well
         # while an earlier one may have posted: two comments from one account
         # under one post read as spam and cannot be taken back here.
-        # A comment removed afterwards by a verified delete_own_comment on the
-        # same post no longer blocks it: otherwise one deleted comment locked
-        # the post forever. Only a verified delete counts; the same text stays
-        # refused through repeat() regardless.
+        # A comment removed afterwards by a verified delete_own_comment no
+        # longer blocks the post: otherwise one deleted comment locked it
+        # forever. The release is bound to the deleted comment itself, never
+        # to the post: delete_own_comment notes deleted_by on exactly the
+        # comment row whose text it removed (matched by the text it read
+        # back). A row counts as gone only when that note names a delete
+        # attempt on this post whose latest status is verified and which
+        # started after the comment (real aware datetimes, not text order).
+        # Every other open row -- in particular an unknown attempt the delete
+        # could not be tied to -- keeps blocking. The same text stays refused
+        # through repeat() regardless.
         def same_post() -> dict[str, Any] | None:
-            rows = list(ledger.latest_by_attempt().values())
-            deleted_at = max(
-                (
-                    str(r.get("started_at") or "")
-                    for r in rows
-                    if r.get("kind") == "comment_delete"
-                    and r.get("activity") == activity_id
-                    and r.get("status") == "verified"
-                ),
-                default="",
-            )
+            latest = ledger.latest_by_attempt()
+
+            def deleted(r: dict[str, Any]) -> bool:
+                d = latest.get(str(r.get("deleted_by") or ""))
+                if not d or d.get("kind") != "comment_delete":
+                    return False
+                if d.get("activity") != activity_id or d.get("status") != "verified":
+                    return False
+                posted_at, deleted_at = outreach.row_time(r), outreach.row_time(d)
+                return (
+                    posted_at is not None
+                    and deleted_at is not None
+                    and deleted_at >= posted_at
+                )
+
             return next(
                 (
                     r
-                    for r in rows
+                    for r in latest.values()
                     if r.get("kind") == "comment"
                     and r.get("activity") == activity_id
                     and r.get("status")
                     in {"attempted", "unknown", "posted", "unverified"}
-                    and not (deleted_at and str(r.get("started_at") or "") < deleted_at)
+                    and not deleted(r)
                 ),
                 None,
             )
@@ -997,7 +1008,7 @@ def register_mivia_stage2_tools(
             return refusal
 
         async def body(ex: Any) -> dict[str, Any]:
-            finder = MiviaEventFinder(ex._mivia_session, ex._mivia_navigator)
+            finder = MiviaEventFinder(ex.mivia_session, ex.mivia_navigator)
             found: dict[str, dict[str, Any]] = {}
             errors = []
             for index, (kind, value) in enumerate(
@@ -1057,7 +1068,7 @@ def register_mivia_stage2_tools(
             return refusal
 
         async def body(ex: Any) -> dict[str, Any]:
-            finder = MiviaEventFinder(ex._mivia_session, ex._mivia_navigator)
+            finder = MiviaEventFinder(ex.mivia_session, ex.mivia_navigator)
             events = await finder.by_keyword(kw, max_pages=1 if limit <= 10 else 3)
             out = [event_summary(e) for e in events][:limit]
             truncated = len(events) > limit
@@ -1092,7 +1103,7 @@ def register_mivia_stage2_tools(
             return refusal
 
         async def body(ex: Any) -> dict[str, Any]:
-            finder = MiviaEventFinder(ex._mivia_session, ex._mivia_navigator)
+            finder = MiviaEventFinder(ex.mivia_session, ex.mivia_navigator)
             events = await finder.by_organiser(slug, include_past=include_past)
             out = [event_summary(e) for e in events]
             return {"company_slug": slug, "count": len(out), "events": out}
@@ -1122,7 +1133,7 @@ def register_mivia_stage2_tools(
             ctx,
             "get_page_followers",
             lambda ex: MiviaEventFinder(
-                ex._mivia_session, ex._mivia_navigator
+                ex.mivia_session, ex.mivia_navigator
             ).page_followers(page_id.strip(), known=set(), limit=limit),
         )
 

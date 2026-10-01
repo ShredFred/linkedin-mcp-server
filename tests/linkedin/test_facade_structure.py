@@ -31,9 +31,9 @@ FACADE_PACKAGE_IMPORTERS = {
     Path("linkedin_mcp_server/mivia_daily.py"),
 }
 
-# MiViA fork: the fork's own tools (tools/mivia*.py, mivia_daily.py) reach the
-# raw session/navigator through these two named attributes and nothing else.
-# Every other private facade access stays forbidden.
+# MiViA fork: state behind the public mivia_session/mivia_navigator
+# properties. No caller reaches it directly; private facade access is
+# forbidden without exception.
 MIVIA_FORK_FACADE_STATE = {"_mivia_navigator", "_mivia_session"}
 
 PUBLIC_SIGNATURES = {
@@ -119,7 +119,7 @@ FACADE_STATE = {
 } | MIVIA_FORK_FACADE_STATE
 
 # MiViA fork: read-only properties the fork's outreach tools consult.
-MIVIA_FORK_PROPERTIES = {"invite_send_clicked"}
+MIVIA_FORK_PROPERTIES = {"invite_send_clicked", "mivia_navigator", "mivia_session"}
 
 PERMANENT_ALIASES = {
     "ExtractedSection": contracts.ExtractedSection,
@@ -334,7 +334,6 @@ def _assert_no_private_facade_accesses(sources: dict[Path, str]) -> None:
             if (
                 isinstance(node, ast.Attribute)
                 and node.attr.startswith("_")
-                and node.attr not in MIVIA_FORK_FACADE_STATE
                 and isinstance(node.value, ast.Name)
                 and node.value.id in facade_names
             ):

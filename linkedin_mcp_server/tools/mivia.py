@@ -63,7 +63,7 @@ _THREAD_RE = re.compile(r"/messaging/thread/([A-Za-z0-9_=-]+)/")
 
 
 def _network(extractor: Any) -> MiviaNetworkReader:
-    return MiviaNetworkReader(extractor._mivia_session, extractor._mivia_navigator)
+    return MiviaNetworkReader(extractor.mivia_session, extractor.mivia_navigator)
 
 
 def _pace(action: str, count: int = 1, *, tool: str) -> dict[str, Any] | None:
@@ -241,7 +241,7 @@ _POST_LEDGER_STATUS = {
 
 
 def _composer(extractor: Any) -> MiviaPostComposer:
-    return MiviaPostComposer(extractor._mivia_session, extractor._mivia_navigator)
+    return MiviaPostComposer(extractor.mivia_session, extractor.mivia_navigator)
 
 
 async def _run(ctx: Context, name: str, body: Any) -> dict[str, Any]:
@@ -354,7 +354,7 @@ async def _send_and_verify(
     # the thread by now. Failing both, the newest inbox thread is the one just
     # written to.
     thread = _THREAD_RE.search(str(sent.get("url", ""))) or _THREAD_RE.search(
-        str(getattr(extractor._mivia_session.page, "url", ""))
+        str(getattr(extractor.mivia_session.page, "url", ""))
     )
     lookups: list[dict[str, str]] = []
     # A thread taken from the inbox is a guess: the newest thread may belong to
@@ -1235,8 +1235,8 @@ def register_mivia_tools(
             ctx,
             "outreach_selftest",
             lambda ex: run_selftest(
-                ex._mivia_session,
-                ex._mivia_navigator,
+                ex.mivia_session,
+                ex.mivia_navigator,
                 canary=outreach.DEFAULT_CANARY,
                 connect_probe=connect_probe_username,
             ),

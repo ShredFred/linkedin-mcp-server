@@ -135,6 +135,16 @@ class LinkedInExtractor:
         return await self._connection.connect_with_person(username, note=note)
 
     @property
+    def mivia_session(self) -> Any:
+        """MiViA fork: the raw browser session for the fork's own tools."""
+        return self._mivia_session
+
+    @property
+    def mivia_navigator(self) -> Any:
+        """MiViA fork: the raw navigator for the fork's own tools."""
+        return self._mivia_navigator
+
+    @property
     def invite_send_clicked(self) -> bool:
         """Whether the last connect_with_person reached a send/accept click."""
         return self._connection.send_clicked
