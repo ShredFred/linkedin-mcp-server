@@ -230,9 +230,10 @@ class Collector:
             return engager_key("reaction", x["id"], x["reaction"], name=x["name"])
 
         def ck(x):
-            return engager_key(
-                "comment", x["id"], x["comment_id"] or "", name=x["name"]
-            )
+            # Without a comment id the text stands in; otherwise every later
+            # comment of the same person would count as already seen.
+            extra = x["comment_id"] or "text=" + outreach.text_sha(x.get("text") or "")
+            return engager_key("comment", x["id"], extra, name=x["name"])
 
         out["new_reactors"] = [x for x in found_r if rk(x) not in known]
         out["new_comments"] = [x for x in comments if ck(x) not in known]

@@ -276,6 +276,35 @@ class TestConnectWithPerson:
             result = await actions.connect_with_person("testuser")
 
         assert result["status"] == "connect_unavailable"
+        # MiViA fork: no Send control was triggered, so nothing can have left.
+        assert actions.send_clicked is False
+
+    async def test_send_click_marker_set_even_when_click_raises(self, mock_page):
+        """MiViA fork: a raising Send click may still have landed -> marked."""
+        actions = _actions(mock_page)
+        actions.send_clicked = False
+        buttons = MagicMock()
+        buttons.count = AsyncMock(return_value=2)
+        target = MagicMock()
+        target.click = AsyncMock(side_effect=RuntimeError("intercepted"))
+        buttons.nth = MagicMock(return_value=target)
+        mock_page.locator = MagicMock(return_value=buttons)
+
+        assert await actions._click_dialog_primary_button() is False
+        assert actions.send_clicked is True
+
+    async def test_send_click_marker_reset_per_call(self, mock_page):
+        """MiViA fork: a stale True from an earlier call must not leak."""
+        actions = _actions(mock_page, _reads("Daniel\n\nEdit profile\n"))
+        actions.send_clicked = True
+        with patch.object(
+            actions,
+            "_read_action_signals",
+            new_callable=AsyncMock,
+            return_value=_signals(edit=True),
+        ):
+            await actions.connect_with_person("testuser")
+        assert actions.send_clicked is False
 
     async def test_returns_already_connected_via_anchor(self, mock_page):
         """1st-degree detected via /messaging/compose anchor."""

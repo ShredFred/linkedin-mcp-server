@@ -134,6 +134,11 @@ class LinkedInExtractor:
         """Send a LinkedIn connection request or accept an incoming one."""
         return await self._connection.connect_with_person(username, note=note)
 
+    @property
+    def invite_send_clicked(self) -> bool:
+        """Whether the last connect_with_person reached a send/accept click."""
+        return self._connection.send_clicked
+
     async def get_sidebar_profiles(self, username: str) -> dict[str, Any]:
         """Extract profile links from sidebar sections on a profile page."""
         return await self._person.get_sidebar_profiles(username)

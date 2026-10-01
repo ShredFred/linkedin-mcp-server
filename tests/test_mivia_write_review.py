@@ -89,6 +89,74 @@ def test_connect_send_failed_still_blocks(monkeypatch):
     assert outreach.Ledger.default().already_contacted("invite", "dieter", None)
 
 
+class _ExClick(_Ex):
+    def __init__(self, status, clicked, raises=False):
+        super().__init__(status)
+        self.invite_send_clicked = clicked
+        self.raises = raises
+
+    async def connect_with_person(self, username, note=None):
+        if self.raises:
+            raise RuntimeError("browser died")
+        return {"status": self.status}
+
+
+def _last_status():
+    rows = outreach.Ledger.default().path.read_text(encoding="utf-8").splitlines()
+    import json
+
+    return json.loads(rows[-1])["status"]
+
+
+@pytest.mark.parametrize(
+    ("clicked", "blocked", "status"),
+    [(False, False, "not_sent"), (True, True, "unknown")],
+)
+def test_connect_unavailable_booked_by_click_marker(
+    monkeypatch, clicked, blocked, status
+):
+    import linkedin_mcp_server.tools.mivia as m
+
+    monkeypatch.setattr(m, "_pace", lambda *a, **k: None)
+    args = {"linkedin_username": "dieter", "confirm_send": True}
+    ex = _ExClick("connect_unavailable", clicked)
+    _call("connect_guarded", args, extractor=ex, monkeypatch=monkeypatch)
+    assert (
+        bool(outreach.Ledger.default().already_contacted("invite", "dieter", None))
+        is blocked
+    )
+    assert _last_status() == status
+
+
+def test_connect_unavailable_without_marker_fails_closed(monkeypatch):
+    import linkedin_mcp_server.tools.mivia as m
+
+    monkeypatch.setattr(m, "_pace", lambda *a, **k: None)
+    args = {"linkedin_username": "dieter", "confirm_send": True}
+    _call(
+        "connect_guarded",
+        args,
+        extractor=_Ex("connect_unavailable"),
+        monkeypatch=monkeypatch,
+    )
+    assert outreach.Ledger.default().already_contacted("invite", "dieter", None)
+
+
+@pytest.mark.parametrize(("clicked", "blocked"), [(False, False), (True, True)])
+def test_connect_exception_booked_by_click_marker(monkeypatch, clicked, blocked):
+    import linkedin_mcp_server.tools.mivia as m
+
+    monkeypatch.setattr(m, "_pace", lambda *a, **k: None)
+    args = {"linkedin_username": "dieter", "confirm_send": True}
+    ex = _ExClick("connected", clicked, raises=True)
+    with pytest.raises(Exception):
+        _call("connect_guarded", args, extractor=ex, monkeypatch=monkeypatch)
+    assert (
+        bool(outreach.Ledger.default().already_contacted("invite", "dieter", None))
+        is blocked
+    )
+
+
 def test_batch_exception_keeps_earlier_verified_sends(monkeypatch):
     import linkedin_mcp_server.tools.mivia as m
 

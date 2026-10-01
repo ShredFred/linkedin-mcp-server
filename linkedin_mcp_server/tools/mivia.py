@@ -967,8 +967,20 @@ def register_mivia_tools(
             try:
                 res = await ex.connect_with_person(username, note=note)
             except BaseException:
-                ledger.append({"attempt": attempt, "status": "unknown"})
+                # An extractor without the click marker is treated as clicked:
+                # fail closed, the attempt blocks a retry.
+                clicked = bool(getattr(ex, "invite_send_clicked", True))
+                ledger.append(
+                    {
+                        "attempt": attempt,
+                        "status": "unknown" if clicked else "not_sent",
+                        "detail": "exception after the send click"
+                        if clicked
+                        else "exception before the send click",
+                    }
+                )
                 raise
+            clicked = bool(getattr(ex, "invite_send_clicked", True))
             raw = str(res.get("status", ""))
             # connected/accepted: an invitation left or one was accepted.
             # pending/already_connected: nothing new left -> not counted.
@@ -986,8 +998,13 @@ def register_mivia_tools(
                 "unavailable": "not_sent",
                 "custom_note_limit_reached": "not_sent",
                 "send_failed": "unknown",
+                # connect_unavailable comes both before the deeplink (nothing
+                # left) and after a failed dialog submit; the click marker
+                # decides, see below.
                 # Anything unrecognised may have sent: blocking, not retry-safe.
             }.get(raw, "unknown")
+            if raw == "connect_unavailable" and not clicked:
+                status = "not_sent"
             ledger.append({"attempt": attempt, "status": status, "detail": raw})
             return {
                 "recipient": username,

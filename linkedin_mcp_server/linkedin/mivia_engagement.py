@@ -417,7 +417,9 @@ class MiviaEngagementReader:
         return {
             "available": True,
             "reactors": reactors,
-            "complete": not state["more"] and len(reactors) < limit,
+            # Measured on the raw items: duplicates dropped above must not hide
+            # that items beyond *limit* were cut off.
+            "complete": not state["more"] and len(state["items"]) < limit,
         }
 
     async def read_post_page(self, activity_id: str) -> dict[str, Any]:

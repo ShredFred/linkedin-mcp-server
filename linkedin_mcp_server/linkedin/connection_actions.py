@@ -383,6 +383,11 @@ class ConnectionActions:
         self._session = session
         self._navigator = navigator
         self._read_main_profile = read_main_profile
+        # MiViA fork (2026-10-01): set immediately before any control that can
+        # send or accept an invitation is triggered, reset at the start of
+        # every connect_with_person. False after a call (or an exception) means
+        # nothing can have left, so the caller may book not_sent.
+        self.send_clicked = False
 
     async def _dialog_is_open(self, *, timeout: int = 1000) -> bool:
         """Return whether a dialog is currently open (structural check)."""
@@ -409,6 +414,7 @@ class ConnectionActions:
         if count == 0:
             return False
         try:
+            self.send_clicked = True
             await buttons.nth(count - 1).click(timeout=timeout)
             return True
         except Exception:
@@ -699,6 +705,7 @@ class ConnectionActions:
             if btn_count > 0:
                 try:
                     await buttons.nth(btn_count - 1).focus()
+                    self.send_clicked = True
                     await self._session.page.keyboard.press("Enter")
                     sent = not await self._dialog_is_open(timeout=2000)
                 except Exception:
@@ -825,6 +832,7 @@ class ConnectionActions:
         whether the user-visible Connect button is in the action bar
         or buried under the More menu.
         """
+        self.send_clicked = False
         username = normalize_person_identifier(username)
         url = person_profile_url(username, "/")
 
@@ -871,6 +879,7 @@ class ConnectionActions:
             # locale), and accepting/ignoring is irreversible. When the
             # fingerprint does not match we report send_failed rather than
             # guess.
+            self.send_clicked = True
             clicked = await self._click_incoming_accept()
             if not clicked:
                 return _connection_result(

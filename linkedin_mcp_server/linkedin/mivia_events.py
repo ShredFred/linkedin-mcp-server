@@ -324,11 +324,16 @@ class MiviaEventFinder:
         self, keyword: str, max_pages: int = 1
     ) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
+        seen: set[str] = set()
         for page in range(1, max_pages + 1):
             state = await self._read(keyword_url(keyword, page))
             if not state["items"]:
                 break
             for it in state["items"]:
+                # Result pages shift between reads; one event once.
+                if it["id"] in seen:
+                    continue
+                seen.add(it["id"])
                 events.append(
                     {
                         "event_id": it["id"],

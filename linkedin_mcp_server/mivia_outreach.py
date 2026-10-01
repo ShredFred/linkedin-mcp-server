@@ -122,6 +122,10 @@ class Ledger:
                 if line.startswith("{") and not line.endswith("}"):
                     continue
                 raise LedgerCorrupt(self.path, number) from bad
+            if not isinstance(rows[-1], dict):
+                # Valid JSON but not a row ("null", a list): every reader
+                # would die on .get(); it is corruption like any other line.
+                raise LedgerCorrupt(self.path, number)
         return rows
 
     def append(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -189,6 +193,14 @@ class Ledger:
         return total
 
 
+def _count(row: dict[str, Any]) -> int:
+    """A pace row's units; an unreadable count books 1 instead of crashing."""
+    try:
+        return max(1, int(row.get("count", 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
 def row_text_shas(row: dict[str, Any]) -> set[str]:
     """Every text this attempt has stood for: the sent one and each edit.
 
@@ -210,8 +222,12 @@ def edit_note_shas(row: dict[str, Any], new_sha: str) -> dict[str, Any]:
 
 
 def day_start(now: datetime | None = None) -> datetime:
-    now = now or datetime.now().astimezone()
-    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    now = (now or datetime.now()).astimezone()
+    # Midnight through the local zone rules, not with *now*'s offset: on a
+    # DST change day midnight carried the other offset, and replace() would
+    # shift the day window by an hour (25.10.: 00:00-01:00 not counted).
+    midnight = now.replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
+    return midnight.astimezone()
 
 
 def month_start_pst(now: datetime | None = None) -> datetime:
@@ -405,7 +421,7 @@ class Pacer:
                     (
                         row.get("action"),
                         counted_time(row),
-                        int(row.get("count", 1)),
+                        _count(row),
                     )
                 )
             elif row.get("kind") == "limit_hit":
@@ -663,6 +679,9 @@ def sent_messages(
         r
         for r in ledger.latest_by_attempt().values()
         if r.get("kind") == "message"
+        # A row without recipient cannot be looked up or grouped per person.
+        and isinstance(r.get("recipient"), str)
+        and r["recipient"]
         # attempted/unknown may have left too; a follow-up list that hides them
         # hides exactly the sends nobody could confirm.
         and r.get("status")
