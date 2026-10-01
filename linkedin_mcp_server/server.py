@@ -216,6 +216,15 @@ def create_mcp_server(
         mask_error_details=True,
         auth=_StaticTokenAuth(auth_token) if auth_token is not None else None,
     )
+    # MiViA fork: outermost on every process that drives the browser, so an
+    # unguarded upstream write tool is refused before it queues for Chromium.
+    # A proxy forwards to an owner, which carries the guard itself.
+    if role.drives_browser:
+        from linkedin_mcp_server.mivia_upstream_write_guard import (
+            UpstreamWriteGuardMiddleware,
+        )
+
+        mcp.add_middleware(UpstreamWriteGuardMiddleware())
     # Added before the serializing middleware below, which makes it the outer one.
     # An inner position would work: `close_browser` does not consult the in-flight
     # count, so quiescence succeeds from there, and the lease reference the inner
