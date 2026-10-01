@@ -40,7 +40,7 @@ _CALENDLY_HOSTS = ("calendly.com", "www.calendly.com")
 # addresses stay clean. A single "/" before it is a path segment of another
 # host (https://example.com/t.co/abc) and is not a shortener link.
 _GLUED_SHORTENER_RE = re.compile(
-    r"(?:(?<![a-z0-9.@/-])|(?<=//))(?:[a-z0-9-]+\.)*(?:"
+    r"(?:(?<![a-z0-9.@-])|(?<=//))(?:[a-z0-9-]+\.)*(?:"
     + "|".join(re.escape(s) for s in _SHORTENERS)
     + r")/[^\s<>()\"']*",
     re.IGNORECASE,
@@ -163,10 +163,32 @@ def calendly_findings(text: str) -> list[dict[str, Any]]:
     return found
 
 
+_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+_HOST_SEGMENT_RE = re.compile(r"^(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?$", re.IGNORECASE)
+
+
+def _in_foreign_path(text: str, start: int) -> bool:
+    """True when a match after a single "/" is a path segment of another host.
+
+    R7 counter-check: excluding every "/" also dropped "Termin/bit.ly/x" and
+    "/bit.ly/x", which a reader still opens as a shortener link.
+    """
+    if start == 0 or text[start - 1] != "/" or text[start - 2 : start] == "//":
+        return False
+    token_start = start
+    while token_start > 0 and not text[token_start - 1].isspace():
+        token_start -= 1
+    token = _SCHEME_RE.sub("", text[token_start:start])
+    return bool(_HOST_SEGMENT_RE.match(token.split("/", 1)[0]))
+
+
 def shortener_findings(text: str) -> list[dict[str, Any]]:
     """Every shortener host at a host boundary, also glued to a word."""
     found = []
-    for match in _GLUED_SHORTENER_RE.finditer(text or ""):
+    text = text or ""
+    for match in _GLUED_SHORTENER_RE.finditer(text):
+        if _in_foreign_path(text, match.start()):
+            continue
         url = match.group(0).rstrip(".,;:!?")
         found.append({"code": "link_shortener", "url": url})
     return found

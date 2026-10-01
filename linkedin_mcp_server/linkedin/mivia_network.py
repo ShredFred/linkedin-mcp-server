@@ -812,6 +812,9 @@ class MiviaNetworkReader:
             "pages_read": pages_read,
             "next_page": None if exhausted or repeated else page + 1,
             "complete": exhausted and not dropped,
+            # The list ended; only slug-less cards lowered "complete". The
+            # daily scan reads this raw result (not project_attendees).
+            "list_end": exhausted,
             "count": len(attendees),
             "attendees": attendees,
             **({"warnings": warnings} if warnings else {}),

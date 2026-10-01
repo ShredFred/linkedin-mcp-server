@@ -352,13 +352,19 @@ async def _send_and_verify(
         # at "attempted". The send had already answered sent=True, so the row
         # is closed as unverified -- blocking and counted, never not_sent.
         # Synchronous append: an await here would be cancelled again at once.
-        ledger.append(
-            {
-                "attempt": attempt,
-                "status": "unverified",
-                "detail": "read-back interrupted",
-            }
-        )
+        # A final row already written (verified) is never downgraded.
+        try:
+            done = ledger.latest_by_attempt().get(attempt, {}).get("status")
+        except Exception:
+            done = None
+        if done not in ("verified", "unverified"):
+            ledger.append(
+                {
+                    "attempt": attempt,
+                    "status": "unverified",
+                    "detail": "read-back interrupted",
+                }
+            )
         raise
 
 

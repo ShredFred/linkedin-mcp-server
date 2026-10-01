@@ -447,6 +447,7 @@ class Collector:
             known = set(ev.get("attendees") or [])
             attendees: list[dict[str, Any]] = []
             page_no, last_read, finished = start, start - 1, False
+            empty_page: int | None = None
             if pages:
                 end = start + pages - 1
                 # One page per call, booked when read (as in harvest): booking
@@ -474,11 +475,28 @@ class Collector:
                         finished = bool(chunk["complete"]) or (
                             chunk.get("list_end") is True
                         )
+                        # R7: an empty page before the counted last page is a
+                        # glitch as often as the end (page not loaded, list
+                        # shrunk): finishing on it would leave the rest unread
+                        # until the next full scan. Only a second empty read of
+                        # the same page in a row closes the event.
+                        if (
+                            finished
+                            and not chunk.get("attendees")
+                            and page_no < total_pages
+                        ):
+                            if ev.get("empty_page") != page_no:
+                                finished = False
+                                empty_page = page_no
                         break
                     if chunk["next_page"] <= page_no:
                         break  # no progress: never read the same page twice
                     page_no = chunk["next_page"]
                 finished = finished or (failure is None and last_read >= total_pages)
+            if empty_page is not None:
+                ev["empty_page"] = empty_page
+            else:
+                ev.pop("empty_page", None)
             new = [
                 a
                 for a in attendees
@@ -510,7 +528,13 @@ class Collector:
                     .isoformat(timespec="seconds"),
                 )
             else:
-                ev["resume_page"] = last_read + 1 if last_read >= start else start
+                ev["resume_page"] = (
+                    empty_page
+                    if empty_page is not None
+                    else last_read + 1
+                    if last_read >= start
+                    else start
+                )
         ev["count"] = count
         state.setdefault("events", {})[event_id] = ev
         self._save_state(state)
