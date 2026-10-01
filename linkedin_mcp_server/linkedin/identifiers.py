@@ -501,13 +501,19 @@ def normalize_profile_urn(value: str) -> str:
 def landed_identity_mismatch(
     landed_url: object, kind: str, requested: str
 ) -> dict[str, str] | None:
-    """Return a redirect note when ``landed_url`` names another /kind/ slug."""
+    """Return a redirect note when ``landed_url`` names another /kind/ slug.
+
+    An opaque id (a numeric company id, an ACo... profile id) always lands on
+    the vanity slug; that is resolution, not a redirect, and is not reported."""
     if not isinstance(landed_url, str) or not landed_url:
+        return None
+    req = unquote(str(requested or ""))
+    if req.isdigit() or (kind == "in" and re.match(r"^AC[a-zA-Z]", req)):
         return None
     parts = [p for p in urlparse(landed_url).path.split("/") if p]
     if len(parts) < 2 or parts[0] != kind:
         # A company slug that LinkedIn moves to a school or showcase page.
-        if kind == "company" and parts and parts[0] in ("school", "showcase"):
+        if kind == "company" and len(parts) >= 2 and parts[0] in ("school", "showcase"):
             landed = "/".join(parts[:2])
             return {"requested": requested, "landed": landed, "landed_url": landed_url}
         return None
