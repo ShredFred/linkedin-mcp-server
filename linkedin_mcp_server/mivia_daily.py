@@ -112,6 +112,27 @@ def company_posts_url(slug: str) -> str:
     return f"https://www.linkedin.com/company/{slug}/posts/?viewAsMember=true"
 
 
+_EVENT_ID_RE = re.compile(r"\d{10,25}")
+
+
+def age_days(stamp: str | None) -> int | None:
+    """Whole days since an ISO stamp; None when missing or unreadable.
+
+    A naive stamp (older state files, hand edits) is read as local time --
+    subtracting it from an aware ``now`` raised TypeError and killed the part
+    every day until someone edited the file.
+    """
+    if not stamp:
+        return None
+    try:
+        then = datetime.fromisoformat(str(stamp))
+    except ValueError:
+        return None
+    if then.tzinfo is None:
+        then = then.astimezone()
+    return (datetime.now().astimezone() - then).days
+
+
 def has_hashtag(text: str, hashtags: list[str]) -> bool:
     low = (text or "").lower()
     return any(("#" + h.lower().lstrip("#")) in low for h in hashtags)
@@ -133,8 +154,28 @@ class Collector:
     # -- helpers ---------------------------------------------------------------
 
     def _state(self) -> dict[str, Any]:
-        if self.state_path.exists():
-            return json.loads(self.state_path.read_text(encoding="utf-8"))
+        """Read the state; a broken file is set aside, not fatal.
+
+        Before, a truncated or hand-broken file raised on every run and the
+        event and scout parts never ran again. The broken copy is kept as
+        ``.corrupt`` for inspection; starting empty is safe because an event
+        without known attendees runs as a baseline (nothing reported as new).
+        """
+        if not self.state_path.exists():
+            return {}
+        try:
+            state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            state, reason = None, f"{type(exc).__name__}: {exc}"[:200]
+        else:
+            reason = "not a JSON object"
+        if isinstance(state, dict):
+            return state
+        aside = self.state_path.with_suffix(".corrupt")
+        self.state_path.replace(aside)
+        self.errors.append(
+            {"part": "state", "error": "state_file_corrupt", "detail": reason}
+        )
         return {}
 
     def _save_state(self, state: dict[str, Any]) -> None:
@@ -336,6 +377,8 @@ class Collector:
         return out
 
     async def event(self, event_id: str, spec: dict[str, Any]) -> dict[str, Any]:
+        if not _EVENT_ID_RE.fullmatch(event_id):
+            raise ValueError(f"bad event_id: {event_id[:40]!r}")
         state = self._state()
         ev = (state.get("events") or {}).get(event_id) or {}
         await self._goto(f"https://www.linkedin.com/events/{event_id}/")
@@ -347,18 +390,15 @@ class Collector:
             "full_scan": False,
         }
         last_scan = ev.get("last_full_scan")
-        days = (
-            (datetime.now().astimezone() - datetime.fromisoformat(last_scan)).days
-            if last_scan
-            else None
-        )
+        days = age_days(last_scan)
         grew = (
             count is not None
             and ev.get("scanned_count") is not None
             and count - ev["scanned_count"] >= int(spec.get("full_scan_growth", 10))
         )
-        due = last_scan is None or grew or days >= int(spec.get("full_scan_days", 7))
+        due = days is None or grew or days >= int(spec.get("full_scan_days", 7))
         resume = int(ev.get("resume_page") or 0)
+        failure: BaseException | None = None
         if (due or resume) and count:
             total_pages = (count + 9) // 10
             start = resume or 1
@@ -372,19 +412,32 @@ class Collector:
             attendees: list[dict[str, Any]] = []
             page_no, last_read, finished = start, start - 1, False
             if pages:
-                self._take("search", pages)
                 end = start + pages - 1
+                # One page per call, booked when read (as in harvest): booking
+                # all pages up front charged pages a stop or failure never read,
+                # and a failure lost the pages already read with the state.
                 while page_no <= end:
-                    chunk = await self.actions.get_event_attendees(
-                        event_id, page_no, min(10, end - page_no + 1)
-                    )
+                    if page_no > start:
+                        await self.session.delay(random.uniform(3.0, 6.0))
+                    try:
+                        self._take("search", 1)
+                        chunk = await self.actions.get_event_attendees(
+                            event_id, page_no, 1
+                        )
+                    except outreach.PaceExceeded:
+                        break
+                    except Exception as exc:  # keep what was read, then report
+                        failure = exc
+                        break
                     attendees += chunk["attendees"]
-                    last_read = page_no + chunk["pages_read"] - 1
+                    last_read = page_no
                     if chunk["complete"] or not chunk["next_page"]:
                         finished = bool(chunk["complete"])
                         break
+                    if chunk["next_page"] <= page_no:
+                        break  # no progress: never read the same page twice
                     page_no = chunk["next_page"]
-                finished = finished or last_read >= total_pages
+                finished = finished or (failure is None and last_read >= total_pages)
             new = [
                 a
                 for a in attendees
@@ -420,6 +473,8 @@ class Collector:
         ev["count"] = count
         state.setdefault("events", {})[event_id] = ev
         self._save_state(state)
+        if failure is not None:
+            raise failure
         return result
 
     async def viewers(self) -> dict[str, Any]:
@@ -452,7 +507,14 @@ class Collector:
             return {"enabled": False}
         store_key = f"followers:{spec['page_id']}"
         known_keys = self.seen.keys(store_key)
-        known_hrefs = {k.split(":", 2)[1] for k in known_keys if k.count(":") >= 2}
+        # Keys are 'follower:<href>:'. An absolute href carries colons itself
+        # ('https://...'), so splitting on ':' yielded 'https' and every
+        # follower was reported as new on every run.
+        known_hrefs = {
+            k[len("follower:") : -1]
+            for k in known_keys
+            if k.startswith("follower:") and k.endswith(":")
+        }
         self._take("page_read")
         res = await self.events.page_followers(
             str(spec["page_id"]), known=known_hrefs, limit=int(spec.get("limit", 60))
@@ -498,14 +560,10 @@ class Collector:
         cursor = int(scout.get("cursor") or 0)
         last = scout.get("last_run")
         every = int(spec.get("every_days", 7))
-        if (
-            cursor == 0
-            and last
-            and (datetime.now().astimezone() - datetime.fromisoformat(last)).days
-            < every
-        ):
+        age = age_days(last)
+        if cursor == 0 and age is not None and age < every:
             return {"enabled": True, "due": False, "last_run": last}
-        if cursor >= len(queries):
+        if not 0 <= cursor < len(queries):
             cursor = 0
         left = self.pacer.state("search")["left"] - int(spec.get("search_reserve", 5))
         take = max(0, min(len(queries) - cursor, left))
@@ -604,8 +662,13 @@ class Collector:
             if not re.fullmatch(r"\d{19}", event_id):
                 results.append({"event_id": event_id, "error": "bad_event_id"})
                 continue
-            start = max(1, int(order.get("start_page") or 1))
-            want = max(1, min(int(order.get("pages") or 1), cap))
+            try:
+                start = max(1, int(order.get("start_page") or 1))
+                want = max(1, min(int(order.get("pages") or 1), cap))
+            except (TypeError, ValueError):
+                # One malformed order must not drop every other order of the run.
+                results.append({"event_id": event_id, "error": "bad_order"})
+                continue
             attendees: list[dict[str, Any]] = []
             page_no, last_read, complete = start, start - 1, False
             error: str | None = None

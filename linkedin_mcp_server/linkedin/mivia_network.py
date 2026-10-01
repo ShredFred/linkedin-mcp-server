@@ -378,6 +378,7 @@ def project_attendees(
     keep = ATTENDEE_FIELDS_CARD if fields == "card" else ATTENDEE_FIELDS_MINIMAL
     people = [a for a in result.get("attendees") or [] if a.get("action") != "self"]
     cut = limit is not None and len(people) > limit
+    resume_at = people[limit].get("page") if cut else None
     if limit is not None:
         people = people[:limit]
     out = {
@@ -387,6 +388,10 @@ def project_attendees(
     }
     if cut:
         out["complete"] = False
+        # The cut people sit on a page already read: continuing at the old
+        # next_page would skip them for good.
+        if resume_at is not None:
+            out["next_page"] = resume_at
     first_empty = result.get("start_page") == 1 and not result.get("attendees")
     out.update(
         readable=not (first_empty and result.get("pages_read", 0) >= 1),
@@ -401,9 +406,35 @@ def project_attendees(
     return out
 
 
+MAX_LIST_LIMIT = 1000
+MAX_ATTENDEE_PAGES = 100
+
+
+def _check_limit(limit: int, name: str = "limit", top: int = MAX_LIST_LIMIT) -> int:
+    """A limit below 1 read nothing yet reported a list; above *top* it scrolls
+    for hours. Both are refused instead of silently clamped."""
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= top:
+        raise ValueError(f"{name} must be an integer between 1 and {top}")
+    return limit
+
+
+def _dedupe_cards(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One card per slug: nested list items render the same person twice."""
+    seen: set[str] = set()
+    out = []
+    for card in cards:
+        if card["slug"] in seen:
+            continue
+        seen.add(card["slug"])
+        out.append(card)
+    return out
+
+
 def event_attendees_url(event_id: str, page: int) -> str:
-    if not _EVENT_ID_RE.match(event_id):
+    if not isinstance(event_id, str) or not _EVENT_ID_RE.match(event_id):
         raise ValueError("event_id must be the numeric LinkedIn event id")
+    if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+        raise ValueError("page must be an integer >= 1")
     base = (
         "https://www.linkedin.com/search/results/people/"
         f"?eventAttending=%5B%22{event_id}%22%5D&origin=EVENT_PAGE_CANONICAL"
@@ -439,17 +470,28 @@ class MiviaNetworkReader:
     async def _scroll_until(
         self, *, limit: int, stop: Any = None, max_rounds: int = 200
     ) -> list[dict[str, Any]]:
-        """Scroll the list until it stops growing, reaches *limit*, or *stop* says so."""
+        """Scroll the list until it stops growing, reaches *limit*, or *stop* says so.
+
+        ``self.last_scroll_end`` names why it stopped: ``limit``, ``stop``,
+        ``end`` (no growth for three rounds) or ``max_rounds`` -- the last one is
+        a truncation, not the end of the list.
+        """
         stale = 0
         previous = -1
         cards: list[dict[str, Any]] = []
+        self.last_scroll_end = "max_rounds"
         for _ in range(max_rounds):
-            cards = await self._cards()
-            if len(cards) >= limit or (stop is not None and stop(cards)):
+            cards = _dedupe_cards(await self._cards())
+            if len(cards) >= limit:
+                self.last_scroll_end = "limit"
+                break
+            if stop is not None and stop(cards):
+                self.last_scroll_end = "stop"
                 break
             if len(cards) == previous:
                 stale += 1
                 if stale >= 3:
+                    self.last_scroll_end = "end"
                     break
             else:
                 stale = 0
@@ -459,6 +501,7 @@ class MiviaNetworkReader:
         return cards
 
     async def list_connections(self, since: date | None, limit: int) -> dict[str, Any]:
+        _check_limit(limit)
         await self._navigator._navigate_to_page(CONNECTIONS_URL)
         await self._session.check_rate_limit()
         await self._wait_for_cards()
@@ -503,13 +546,21 @@ class MiviaNetworkReader:
             "count": len(connections),
             "connections": connections,
         }
+        # Complete means: nothing newer than *since* was left unread. A stop at
+        # *limit* or at the scroll cap may have cut the list.
+        end = getattr(self, "last_scroll_end", "end")
+        result["complete"] = len(connections) < limit and end in ("end", "stop")
+        warnings = []
         if undated:
-            result["warnings"] = [
-                f"{undated} card(s) without a parseable connection date"
-            ]
+            warnings.append(f"{undated} card(s) without a parseable connection date")
+        if end == "max_rounds":
+            warnings.append("scroll cap reached before the list ended")
+        if warnings:
+            result["warnings"] = warnings
         return result
 
     async def list_sent_invitations(self, limit: int) -> dict[str, Any]:
+        _check_limit(limit)
         await self._navigator._navigate_to_page(SENT_INVITATIONS_URL)
         await self._session.check_rate_limit()
         await self._wait_for_cards()
@@ -539,7 +590,9 @@ class MiviaNetworkReader:
         }
         if header_total and header_total.replace(".", "").replace(",", "").isdigit():
             total = int(header_total.replace(".", "").replace(",", ""))
-            result["complete"] = len(invitations) >= min(total, limit)
+            # Complete only when every invitation the header counts was read;
+            # stopping at *limit* is a cut, not the whole list.
+            result["complete"] = len(invitations) >= total
         return result
 
     async def _wait_for_actions(self, timeout: float = 10.0) -> dict[str, int]:
@@ -586,6 +639,14 @@ class MiviaNetworkReader:
     async def get_event_attendees(
         self, event_id: str, start_page: int, max_pages: int
     ) -> dict[str, Any]:
+        event_attendees_url(event_id, 1)  # validates the id before any page
+        if (
+            isinstance(start_page, bool)
+            or not isinstance(start_page, int)
+            or start_page < 1
+        ):
+            raise ValueError("start_page must be an integer >= 1")
+        _check_limit(max_pages, "max_pages", MAX_ATTENDEE_PAGES)
         attendees: list[dict[str, Any]] = []
         seen: set[str] = set()
         warnings: list[str] = []
