@@ -723,6 +723,13 @@ class Collector:
             else "search_budget_spent"
         )
         results: list[dict[str, Any]] = []
+        # R9: the one piece of state harvest keeps -- which page of an event
+        # was read empty last time. Like the event path (R7), an empty page is
+        # a glitch as often as the end; only a second empty read of the same
+        # page in a row closes the event. The planner owns everything else.
+        state = self._state()
+        empties: dict[str, int] = dict(state.get("harvest_empty") or {})
+        empties_before = dict(empties)
         for order in orders:
             if cap <= 0:
                 # Said, not swallowed: the report shows the budget as the reason.
@@ -749,6 +756,11 @@ class Collector:
             page_no, last_read, complete = start, start - 1, False
             error: str | None = None
             stop_all = False
+            empty_page: int | None = None
+            try:
+                total_pages = int(order.get("total_pages") or 0)
+            except (TypeError, ValueError):
+                total_pages = 0
             # One page per call, booked when it is read: a failure on page 3
             # keeps pages 1-2 (read and paid) instead of losing them.
             while page_no < start + want:
@@ -780,6 +792,18 @@ class Collector:
                     # No next page without complete is a stop, not the end
                     # (a repeated page): that event stays open for the next run.
                     complete = bool(chunk["complete"])
+                    # R9: an empty page is not trusted as the end on the first
+                    # read (unless the planner's count says it is the last
+                    # page). The report then resumes at exactly this page.
+                    if (
+                        complete
+                        and not chunk.get("attendees")
+                        and not (total_pages and page_no >= total_pages)
+                        and empties.get(event_id) != page_no
+                    ):
+                        complete = False
+                        empty_page = page_no
+                        last_read = page_no - 1
                     break
                 if chunk["next_page"] <= page_no:
                     break  # no progress: never read and book the same page twice
@@ -793,8 +817,13 @@ class Collector:
                 "complete": complete and not error,
                 "attendees": [a for a in attendees if a.get("action") != "self"],
             }
+            if empty_page is not None:
+                row["empty_page"] = empty_page
+                empties[event_id] = empty_page
+            elif last_read >= start:
+                empties.pop(event_id, None)
             limits = ("search_budget_spent", "monthly_search_limit")
-            if error in limits and last_read < start:
+            if error in limits and last_read < start and empty_page is None:
                 row = {k: row[k] for k in ("event_id", "register_id")} | {
                     "deferred": error
                 }
@@ -805,6 +834,13 @@ class Collector:
             results.append(row)
             if stop_all:
                 cap = 0
+        if empties != empties_before:
+            state = self._state()
+            if empties:
+                state["harvest_empty"] = empties
+            else:
+                state.pop("harvest_empty", None)
+            self._save_state(state)
         return results
 
     async def employer_lookup(self) -> list[dict[str, Any]]:
