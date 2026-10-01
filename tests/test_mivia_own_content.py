@@ -14,6 +14,7 @@ from fastmcp import Client, FastMCP
 
 from linkedin_mcp_server import mivia_outreach as outreach
 from linkedin_mcp_server.linkedin import mivia_own_content as oc
+from linkedin_mcp_server.tools.mivia_own_content import check_text, resolve_target
 
 ACT = "7123456789012345678"
 CID = "7123456789012340001"
@@ -683,3 +684,37 @@ def test_post_card_fallback_only_for_a_single_focus_card():
     from linkedin_mcp_server.linkedin import mivia_own_content as m
 
     assert "focus.length === 1 ? focus[0] : null" in m._POST_CARD_JS
+
+
+# -- Haertung 2026-10-01 --------------------------------------------------------
+def test_lone_surrogate_is_refused_not_raised():
+    assert check_text("Hallo \ud800", 100)["status"] == "invalid_text"
+
+
+@pytest.mark.parametrize("bad", ["a\u202eb", "a\tb", "a\rb", "a\x85b", "a\u2066b"])
+def test_control_and_bidi_refused(bad):
+    assert check_text(bad, 100)["status"] == "invalid_text"
+
+
+def test_two_different_comment_urns_refused():
+    other = "7123456789012340002"
+    ref = (
+        f"urn:li:comment:(activity:{ACT},{CID}) urn:li:comment:(activity:{ACT},{other})"
+    )
+    with pytest.raises(ValueError):
+        oc.parse_comment_ref(ref)
+    _, _, bad = resolve_target(POST, ref)
+    assert bad["status"] == "invalid_comment"
+
+
+def test_same_comment_urn_twice_is_fine():
+    ref = f"urn:li:comment:(activity:{ACT},{CID})"
+    assert oc.parse_comment_ref(ref + " " + ref) == (ACT, CID)
+
+
+def test_comment_with_two_menu_buttons_clicks_nothing():
+    card = {**_own_comment(), "menu_count": 2}
+    page = _Page(posts=[_own_post()], comments=[card])
+    out = _run(_content(page).delete(ACT, CID, confirm=True))
+    assert out["status"] == "menu_unavailable" and out["done"] is False
+    assert page.clicks == []

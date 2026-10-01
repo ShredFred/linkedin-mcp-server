@@ -47,10 +47,16 @@ def _now() -> str:
 
 def check_text(text: str, limit: int) -> dict[str, Any] | None:
     """Browser-free refusal for a new text; None when it may proceed."""
+    try:
+        units = len(text.encode("utf-16-le")) // 2
+    except UnicodeEncodeError:
+        # A lone surrogate (valid in JSON "\ud800") cannot be typed: refuse
+        # instead of raising through the tool.
+        units = limit + 1
     if (
         not text
         or not text.strip()
-        or len(text.encode("utf-16-le")) // 2 > limit
+        or units > limit
         or any((ord(c) < 32 and c != "\n") or is_invisible_control(c) for c in text)
     ):
         return {

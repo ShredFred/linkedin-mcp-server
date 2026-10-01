@@ -83,12 +83,14 @@ def parse_comment_ref(comment: str) -> tuple[str | None, str]:
     raw = unquote(unquote((comment or "").strip()))
     if re.fullmatch(r"\d{10,22}", raw):
         return None, raw
-    match = _COMMENT_URN_RE.search(raw)
-    if not match:
+    found = {m.groups() for m in _COMMENT_URN_RE.finditer(raw)}
+    if len(found) != 1:
+        # None, or two different comments in one reference: no guess which.
         raise ValueError(
-            "comment_id must be the numeric comment id or a urn:li:comment:(activity:A,C)"
+            "comment_id must be the numeric comment id or exactly one urn:li:comment:(activity:A,C)"
         )
-    return match.group(1), match.group(2)
+    activity, cid = found.pop()
+    return activity, cid
 
 
 def slug_of(href: str | None) -> str | None:
@@ -195,7 +197,7 @@ _COMMENT_CARD_JS = (
   const label = /optionen|options|weitere|more/i;
   const menus = [...card.querySelectorAll('button')]
       .filter(b => vis(b) && own(b) && label.test(b.getAttribute('aria-label') || ''));
-  if (menus.length) menus[0].setAttribute('data-mivia-own', 'comment-menu');
+  if (menus.length === 1) menus[0].setAttribute('data-mivia-own', 'comment-menu');
   return {count: 1, actor_href: actor ? actor.getAttribute('href') : null,
           lines: text.split('\n').map(s => s.trim()).filter(Boolean),
           menu_count: menus.length};
@@ -374,8 +376,10 @@ class MiviaOwnContent(MiviaActions):
                 "status": "not_own_comment",
                 "author": slug_of(card["actor_href"]) or card["actor_href"],
             }
-        if not card.get("menu_count"):
-            return {"status": "menu_unavailable", "menu_count": 0}
+        if card.get("menu_count") != 1:
+            # Two option-like buttons in one own card: no guess which opens
+            # the comment menu (same rule as the post card).
+            return {"status": "menu_unavailable", "menu_count": card.get("menu_count")}
         text = split_comment_lines(card.get("lines") or []).get("text")
         return {"status": "ok", "own": own, "text": text, "menu": "comment-menu"}
 
