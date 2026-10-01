@@ -932,3 +932,9 @@ def register_mivia_tools(
     from linkedin_mcp_server.tools.mivia_inmail import register_mivia_inmail_tools
 
     register_mivia_inmail_tools(raw_mcp, tool_timeout=tool_timeout)
+
+    from linkedin_mcp_server.tools.mivia_own_content import (
+        register_mivia_own_content_tools,
+    )
+
+    register_mivia_own_content_tools(raw_mcp, tool_timeout=tool_timeout)

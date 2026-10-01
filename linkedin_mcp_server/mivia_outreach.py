@@ -266,6 +266,12 @@ PACE_BUDGETS: dict[str, dict[str, int]] = {
     # InMail spends a paid credit and reaches a stranger (2026-09-30): low caps.
     "inmail": {"day": 5, "week": 20},
     "message_edit": {"day": 10, "week": 40},
+    # Taking back an own post or comment (2026-10-01): rare by design, and a
+    # burst of deletions looks like account clean-up to LinkedIn.
+    "post_delete": {"day": 3, "week": 10},
+    "post_edit": {"day": 5, "week": 20},
+    "comment_delete": {"day": 5, "week": 20},
+    "comment_edit": {"day": 5, "week": 20},
 }
 # Everything that is visible to another member counts against one total.
 PACE_WRITE_KINDS = {
@@ -277,13 +283,27 @@ PACE_WRITE_KINDS = {
     "withdraw",
     "inmail",
     "message_edit",
+    "post_delete",
+    "post_edit",
+    "comment_delete",
+    "comment_edit",
 }
 PACE_WRITE_TOTAL_PER_DAY = 150
 # LinkedIn's own event-invitation ceiling per organiser account and week.
 EVENT_INVITES_PLATFORM_PER_WEEK = 1000
 
 # Kinds whose attempt row is the pacer booking (no separate pace row).
-_LEDGER_KINDS = {"message", "invite", "inmail", "message_edit", "comment"}
+_LEDGER_KINDS = {
+    "message",
+    "invite",
+    "inmail",
+    "message_edit",
+    "comment",
+    "post_delete",
+    "post_edit",
+    "comment_delete",
+    "comment_edit",
+}
 
 
 @contextmanager

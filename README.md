@@ -11,6 +11,10 @@
 > - `comment_on_post` — Comment on a post.
 > - `connect_guarded` — connect_with_person behind the ledger: refuses once today's invite cap (default 20, max 25) or the rolling 7-day cap (100) is reached, and never invites the same person twice.
 > - `create_post` — Compose a post on the signed-in member's personal profile.
+> - `delete_own_comment` — Delete one of your own comments under a post (comment_id: the numeric id from get_post_engagers, or urn:li:comment:(activity:A,C)).
+> - `delete_own_post` — Delete one of your own posts (post URL, activity URN or id; create_post returns activity_id).
+> - `edit_own_comment` — Replace the text of one of your own comments.
+> - `edit_own_post` — Replace the text of one of your own posts.
 > - `edit_sent_message` — Edit one of your own sent messages in a thread (URL or thread id).
 > - `find_events` — Find LinkedIn events by keyword (event search, upcoming only) and by organiser page (company slug; its "Events" tab, upcoming and with include_past also past ones).
 > - `follow_up_list` — Who answered which ledger message, and who is due for a follow-up.

@@ -246,6 +246,10 @@ def test_fork_tools_are_registered_and_tagged():
         "send_inmail",
         "inmail_credits",
         "edit_sent_message",
+        "delete_own_post",
+        "edit_own_post",
+        "delete_own_comment",
+        "edit_own_comment",
         "outreach_selftest",
     }
     assert all("mivia" in t.tags for t in tools)
