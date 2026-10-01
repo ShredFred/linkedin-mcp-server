@@ -180,7 +180,9 @@ def test_batch_exception_keeps_earlier_verified_sends(monkeypatch):
     )
     calls = []
 
-    async def fake_send(ex, ledger, username, message, *, campaign, allow_repeat=False):
+    async def fake_send(
+        ex, ledger, username, message, *, campaign, allow_repeat=False, **kw
+    ):
         calls.append(username)
         if len(calls) == 2:
             raise RuntimeError("rate limited")
@@ -203,3 +205,12 @@ def test_batch_exception_keeps_earlier_verified_sends(monkeypatch):
     assert [r["status"] for r in out["results"]] == ["verified", "unknown"]
     assert out["remaining"] == ["carl"]
     assert calls == ["anna", "bert"]
+
+
+def test_message_content_allows_bare_www_but_not_http():
+    import linkedin_mcp_server.tools.mivia as m
+
+    assert m.check_message_content("Mehr unter www.mivia.ai, gerne melden.") is None
+    refused = m.check_message_content("Mehr unter http://mivia.ai")
+    assert refused and refused["status"] == "content_check_failed"
+    assert m.check_message_content("Hallo {{vorname}}, kurz zu MiViA.")

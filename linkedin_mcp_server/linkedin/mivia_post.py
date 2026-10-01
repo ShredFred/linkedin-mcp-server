@@ -12,6 +12,7 @@ the page, so nothing is published and no draft is left behind.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -41,8 +42,10 @@ _DISCARD_JS = r"""(arg) => {
   const buttons = () => [...document.querySelectorAll('[role="dialog"] button, dialog button')]
     .filter(visible);
   const steps = [];
-  const close = buttons().filter(b => arg.close.includes(norm(b.getAttribute('aria-label'))));
-  if (close.length) { close[close.length - 1].click(); steps.push('closed'); }
+  if (!arg.discard_only) {
+    const close = buttons().filter(b => arg.close.includes(norm(b.getAttribute('aria-label'))));
+    if (close.length) { close[close.length - 1].click(); steps.push('closed'); }
+  }
   const discard = buttons().filter(b => arg.discard.includes(norm(b.innerText))
     && !arg.post.includes(norm(b.innerText)));
   if (discard.length === 1) { discard[0].click(); steps.push('discarded'); }
@@ -154,14 +157,22 @@ class MiviaPostComposer:
     async def _discard(self, result: dict[str, Any]) -> None:
         """Fail-safe cleanup: errors are recorded, never raised."""
         try:
-            result["cleanup"] = await self._page.evaluate(
-                _DISCARD_JS,
-                {
-                    "close": _CLOSE_LABELS,
-                    "discard": _DISCARD_WORDS,
-                    "post": _POST_WORDS,
-                },
+            arg = {
+                "close": _CLOSE_LABELS,
+                "discard": _DISCARD_WORDS,
+                "post": _POST_WORDS,
+                "discard_only": False,
+            }
+            steps = await self._page.evaluate(_DISCARD_JS, arg)
+            # The discard prompt only mounts after the close click; a second
+            # pass that clicks nothing but the discard button confirms it.
+            await asyncio.sleep(1.0)
+            second = await self._page.evaluate(
+                _DISCARD_JS, {**arg, "discard_only": True}
             )
+            if second != "nothing_to_close":
+                steps = f"{steps}+{second}"
+            result["cleanup"] = steps
             await self._page.goto(
                 "https://www.linkedin.com/feed/", wait_until="domcontentloaded"
             )

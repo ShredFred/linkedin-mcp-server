@@ -635,9 +635,16 @@ class ConnectionActions:
                 btn_count = await buttons.count()
                 if btn_count >= 2:
                     # Meant to be "Add a note", but an unknown button layout
-                    # can misdirect it onto Send: count it as a send click.
-                    self.send_clicked = True
-                    await buttons.nth(btn_count - 2).click()
+                    # can misdirect it onto Send. Marking it up front blocked
+                    # a person for good when only the note quota was spent,
+                    # so it counts as a send click only when it may have
+                    # been one: it raised, or the dialog vanished without a
+                    # note editor.
+                    try:
+                        await buttons.nth(btn_count - 2).click()
+                    except BaseException:
+                        self.send_clicked = True
+                        raise
                     textarea_appeared = True
                     try:
                         await self._session.page.wait_for_selector(
@@ -648,6 +655,15 @@ class ConnectionActions:
                     except PlaywrightTimeoutError:
                         logger.debug("Note textarea did not appear")
                         textarea_appeared = False
+                    if not textarea_appeared:
+                        try:
+                            dialog_left = await self._session.page.locator(
+                                f"{_DIALOG_SELECTOR} >> visible=true"
+                            ).count()
+                        except Exception:
+                            dialog_left = 0
+                        if not dialog_left:
+                            self.send_clicked = True
                     # ponytail: LinkedIn now renders a persistent Premium
                     # nudge banner on this step even when quota is NOT
                     # exhausted (observed: "3 personalized invitations

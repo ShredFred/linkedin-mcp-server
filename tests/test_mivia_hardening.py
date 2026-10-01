@@ -521,13 +521,13 @@ def _attempted(kind):
 
 def _first_two_checks_free(monkeypatch):
     """Every pre-lock check passes, as when two calls race; only the re-check
-    under the pacer lock (called from the duplicate lambda) is real."""
+    under the pacer lock (called from the duplicate callback) is real."""
     import sys
 
     real = outreach.Ledger.already_contacted
 
     def check(self, kind, recipient, sha):
-        if sys._getframe(1).f_code.co_name != "<lambda>":
+        if sys._getframe(1).f_code.co_name not in ("<lambda>", "duplicate"):
             return None
         return real(self, kind, recipient, sha)
 
@@ -1377,3 +1377,68 @@ def test_allow_repeat_only_for_the_canary():
         },
     )
     assert ok["status"] == "dry_run"
+
+
+# -- review 2026-10-01: campaign day quota re-read under the pacer lock --------
+
+
+def test_campaign_quota_rechecked_under_lock_against_parallel_batch(monkeypatch):
+    """A second batch books between our quota read and our next booking: the
+    campaign's messages_per_day must hold, not only the global pacer."""
+    import linkedin_mcp_server.tools.mivia as m
+
+    monkeypatch.setattr(m, "_pace", lambda *a, **k: None)
+    monkeypatch.setattr(m, "SEND_GAP", (0.0, 0.0))
+    monkeypatch.setattr(
+        outreach.Ledger, "canary_verified", lambda self, sha, canary: True
+    )
+    sends = []
+
+    class _Parallel:
+        async def send_message(self, username, message, confirm_send):
+            sends.append(username)
+            # The other batch books its own attempt while ours is in flight.
+            outreach.Ledger.default().append(
+                {
+                    "attempt": f"other-{len(sends)}",
+                    "kind": "message",
+                    "recipient": f"other{len(sends)}",
+                    "text_sha": "x",
+                    "campaign": "parallel",
+                    "status": "attempted",
+                    "started_at": __import__("datetime")
+                    .datetime.now()
+                    .astimezone()
+                    .isoformat(timespec="seconds"),
+                }
+            )
+            return {"sent": False, "retry_safe": False}
+
+    async def verified(ex, ledger, username, message, **kw):
+        return await orig(ex, ledger, username, message, **kw) | {"verified": True}
+
+    orig = m._send_and_verify
+    monkeypatch.setattr(m, "_send_and_verify", verified)
+    out = _call(
+        "send_campaign_batch",
+        {
+            "message": "Hallo, kurze Frage zu Ihrem Labor.",
+            "recipients": ["anna", "bert", "carl"],
+            "campaign": "c",
+            "confirm_send": True,
+            "batch_size": 3,
+            "messages_per_day": 2,
+        },
+        extractor=_Parallel(),
+        monkeypatch=monkeypatch,
+    )
+    assert out["status"] == "campaign_quota_reached"
+    assert sends == ["anna"]
+    assert out["remaining"] == ["bert", "carl"]
+    assert out["quota"]["messages_left_today"] == 0
+    booked = [
+        r["recipient"]
+        for r in outreach.Ledger.default().rows()
+        if r.get("campaign") == "c" and r.get("status") == "attempted"
+    ]
+    assert booked == ["anna"]

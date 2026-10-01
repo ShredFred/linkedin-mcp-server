@@ -196,11 +196,16 @@ class ImagePage(FakePage):
 
     async def evaluate(self, script: str, arg: Any = None) -> Any:
         if script is mivia_post._DISCARD_JS:
-            self.discards += 1
             assert "posten" in arg["post"]
             if self.discard_raises:
+                self.discards += 1
                 raise RuntimeError("dialog gone")
-            return "closed+discarded"
+            # Like the real page: the discard prompt only exists after the
+            # close click, so only the second pass can confirm it.
+            if arg["discard_only"]:
+                self.discards += 1
+                return "discarded"
+            return "closed"
         if script is mivia_post._FIND_BUTTON_JS and arg["tag"] == "media":
             return {"count": self.media_count, "disabled": False}
         if script.startswith("(words) =>"):
@@ -237,6 +242,7 @@ async def test_media_button_unavailable_discards_editor(image_file: str) -> None
     assert result["status"] == "media_button_unavailable"
     assert page.discards == 1
     assert result["cleanup"] == "closed+discarded"
+    assert page.discards == 1
     assert not page.clicked
 
 

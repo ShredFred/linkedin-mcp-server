@@ -20,6 +20,7 @@ import random
 import re
 import uuid
 from datetime import date, datetime, timedelta
+from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context, FastMCP
@@ -182,6 +183,12 @@ def check_message_content(message: str) -> dict[str, Any] | None:
         f
         for f in check_message(message, None)
         if not f["code"].startswith("salutation")
+        # "www.mivia.ai" without a scheme is ordinary prose in a direct
+        # message; only an explicit http:// link is refused here.
+        and not (
+            f["code"] == "link_not_https"
+            and str(f.get("url", "")).lower().startswith("www.")
+        )
     ]
     if findings:
         return {"status": "content_check_failed", "findings": findings}
@@ -241,6 +248,7 @@ async def _send_and_verify(
     *,
     campaign: str | None,
     allow_repeat: bool = False,
+    quota_check: Callable[[], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """One send with a ledger row before and after, then a conversation read-back.
 
@@ -262,14 +270,25 @@ async def _send_and_verify(
         "status": "attempted",
         "started_at": started,
     }
+
+    def duplicate() -> dict[str, Any] | None:
+        # Runs under the pacer lock, right before the attempt row is written:
+        # the campaign's own day quota is re-read here, so a parallel batch
+        # that booked in between is counted (BATCH_QUOTA_RACE).
+        if quota_check is not None:
+            over = quota_check()
+            if over is not None:
+                raise _CampaignQuotaReached(over)
+        if allow_repeat:
+            return None
+        return ledger.already_contacted("message", username, sha)
+
     refused = _book_attempt(
         ledger,
         "message",
         row,
         tool="send_message_verified",
-        duplicate=None
-        if allow_repeat
-        else (lambda: ledger.already_contacted("message", username, sha)),
+        duplicate=duplicate,
     )
     if refused:
         return {"recipient": username, "verified": False, **refused}
@@ -343,6 +362,14 @@ async def _send_and_verify(
     return {"recipient": username, "status": status, "send": sent, "verified": verified}
 
 
+class _CampaignQuotaReached(Exception):
+    """The batch's own messages_per_day is spent, read under the pacer lock."""
+
+    def __init__(self, quota: dict[str, Any]) -> None:
+        super().__init__("campaign quota reached")
+        self.quota = quota
+
+
 def _book_attempt(
     ledger: outreach.Ledger,
     kind: str,
@@ -358,6 +385,8 @@ def _book_attempt(
         return {"status": "duplicate", "previous": dup.previous}
     except outreach.PaceExceeded as over:
         return {"status": "pace_budget_spent", "pace": over.state}
+    except _CampaignQuotaReached as spent:
+        return {"status": "campaign_quota_reached", "quota": spent.quota}
     except TimeoutError as busy:
         return pace_lock_busy(busy)
     return None
@@ -890,13 +919,30 @@ def register_mivia_tools(
                     "status": "done" if not targets else "daily_cap_reached",
                     "results": [],
                 }
+
+            def quota_check() -> dict[str, Any] | None:
+                # q above was read before the lock; a parallel batch may have
+                # booked since. Re-counted under the pacer lock per recipient.
+                now = outreach.quota(
+                    ledger,
+                    messages_per_day=messages_per_day,
+                    invites_per_day=0,
+                    canary=canary_key,
+                )
+                return now if now["messages_left_today"] <= 0 else None
+
             results = []
             for index, username in enumerate(targets[:take]):
                 if index:
                     await asyncio.sleep(random.uniform(*SEND_GAP))
                 try:
                     outcome = await _send_and_verify(
-                        ex, ledger, username, message, campaign=campaign
+                        ex,
+                        ledger,
+                        username,
+                        message,
+                        campaign=campaign,
+                        quota_check=quota_check,
                     )
                 except outreach.LedgerCorrupt:
                     raise
@@ -917,6 +963,15 @@ def register_mivia_tools(
                         "status": "stopped_on_failure",
                         "results": results,
                         "remaining": targets[index + 1 :],
+                    }
+                if outcome.get("status") == "campaign_quota_reached":
+                    # Nothing was booked or sent for this recipient.
+                    return {
+                        **plan,
+                        "status": "campaign_quota_reached",
+                        "quota": outcome["quota"],
+                        "results": results,
+                        "remaining": targets[index:],
                     }
                 results.append(outcome)
                 if not outcome["verified"]:
