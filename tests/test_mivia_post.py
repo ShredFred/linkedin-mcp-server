@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 
-from linkedin_mcp_server.scraping import mivia_post
-from linkedin_mcp_server.scraping.mivia_post import MiviaPostComposer
+from linkedin_mcp_server.linkedin import mivia_post
+from linkedin_mcp_server.linkedin.mivia_post import MiviaPostComposer
 
 
 class FakePage:
