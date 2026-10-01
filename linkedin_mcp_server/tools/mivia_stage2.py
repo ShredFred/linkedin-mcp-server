@@ -35,6 +35,7 @@ from linkedin_mcp_server.tools.mivia import (
     TAG,
     _book_attempt,
     _GuardedMcp,
+    _hidden_format_char,
     _pace,
     _peek,
     _recipient,
@@ -50,6 +51,14 @@ def _engagement(extractor: Any) -> MiviaEngagementReader:
 
 def _actions(extractor: Any) -> MiviaActions:
     return MiviaActions(extractor._mivia_session, extractor._mivia_navigator)
+
+
+def _activity(post_url: str) -> tuple[str | None, dict[str, Any] | None]:
+    """The activity id, or a clear refusal instead of an exception."""
+    try:
+        return parse_activity_id(post_url), None
+    except (ValueError, AttributeError) as bad:
+        return None, {"status": "invalid_post_url", "message": str(bad)[:300]}
 
 
 def register_mivia_stage2_tools(
@@ -97,7 +106,9 @@ def register_mivia_stage2_tools(
         Leads from this list are a professional activity signal only: company
         first, suppression check and the cadence tracker decide what is used.
         """
-        activity_id = parse_activity_id(post_url)
+        activity_id, bad = _activity(post_url)
+        if bad:
+            return bad
         # Worst case: the analytics list plus the post page, which is read even
         # without include_comments when the reactor list is unavailable.
         pages = int(include_reactors) + int(include_comments or include_reactors)
@@ -170,7 +181,23 @@ def register_mivia_stage2_tools(
         10 posts per call; posts without analytics (anyone else's, and page
         posts where LinkedIn shows none) come back available=false.
         """
-        ids = [parse_activity_id(u) for u in post_urls][:10]
+        if not post_urls:
+            return {"status": "invalid_post_url", "message": "post_urls is empty"}
+        # More than 10 is refused, not cut: a silently shortened list reads
+        # as "all requested posts" to the caller.
+        if len(post_urls) > 10:
+            return {
+                "status": "too_many_posts",
+                "max": 10,
+                "requested": len(post_urls),
+            }
+        ids: list[str] = []
+        for url in post_urls:
+            activity_id, bad = _activity(url)
+            if bad:
+                return {**bad, "post_url": url[:300]}
+            if activity_id not in ids:
+                ids.append(activity_id)
         refusal = _pace("page_read", max(len(ids), 1), tool="get_post_analytics")
         if refusal:
             return refusal
@@ -182,7 +209,11 @@ def register_mivia_stage2_tools(
                 if index:
                     await asyncio.sleep(random.uniform(3.0, 6.0))
                 posts.append(await reader.read_post_summary(activity_id))
-            return {"count": len(posts), "posts": posts}
+            return {
+                "count": len(posts),
+                "requested": len(post_urls),
+                "posts": posts,
+            }
 
         return await _run(ctx, "get_post_analytics", body)
 
@@ -227,13 +258,21 @@ def register_mivia_stage2_tools(
         page was available on 2026-09-29 -- so even for an organiser this
         returns status dialog_not_measured instead of clicking blind.
         """
-        event_id = event_id.strip().strip("/").rsplit("/", 1)[-1]
-        targets = []
+        event_id = event_id.strip().split("?")[0].strip("/").rsplit("/", 1)[-1]
+        if not re.fullmatch(r"\d{1,25}", event_id):
+            return {
+                "status": "invalid_event_id",
+                "message": "event_id must be the numeric id or the event URL",
+            }
+        if not usernames:
+            return {"event_id": event_id, "status": "no_recipients"}
+        targets: list[str] = []
         for raw in usernames:
             username, bad = _recipient(raw)
             if bad:
                 return {"event_id": event_id, **bad}
-            targets.append(username)
+            if username not in targets:
+                targets.append(username)
         state = outreach.Pacer(outreach.Ledger.default()).state("event_invite")
         if state["left"] < len(targets):
             return {
@@ -540,18 +579,30 @@ def register_mivia_stage2_tools(
         username, bad = _recipient(linkedin_username)
         if bad:
             return bad
-        if note is not None and len(note) > NOTE_MAX:
+        # UTF-16 units like every other text limit in the fork; bidi and other
+        # Cf format characters hide or reorder what follow_up_list shows.
+        if note is not None and _utf16_len(note) > NOTE_MAX:
             return {"recipient": username, "status": "note_too_long", "max": NOTE_MAX}
         if note is not None and any(
-            (ord(c) < 32 and c != "\n") or ord(c) == 127 for c in note
+            (ord(c) < 32 and c != "\n") or ord(c) == 127 or _hidden_format_char(c)
+            for c in note
         ):
             return {
                 "recipient": username,
                 "status": "invalid_note",
                 "detail": "no control characters except LF",
             }
-        if tags is not None and any(len(t) > TAG_MAX for t in tags):
+        if tags is not None and any(_utf16_len(t) > TAG_MAX for t in tags):
             return {"recipient": username, "status": "tag_too_long", "max": TAG_MAX}
+        if tags is not None and any(
+            any(ord(c) < 32 or ord(c) == 127 or _hidden_format_char(c) for c in t)
+            for t in tags
+        ):
+            return {
+                "recipient": username,
+                "status": "invalid_tag",
+                "detail": "no control or invisible characters",
+            }
         try:
             entry = outreach.ContactNotes().set(
                 username, tags=tags, note=note, replace=replace
@@ -637,7 +688,9 @@ def register_mivia_stage2_tools(
                 "posted": False,
                 "message": "1-1250 UTF-16 units, LF allowed, no other control or invisible characters.",
             }
-        activity_id = parse_activity_id(post_url)
+        activity_id, bad = _activity(post_url)
+        if bad:
+            return {**bad, "posted": False}
         ledger = outreach.Ledger.default()
         sha = outreach.text_sha(text)
 
@@ -657,9 +710,32 @@ def register_mivia_stage2_tools(
                 None,
             )
 
+        # A second comment on the same post (other text) is refused as well
+        # while an earlier one may have posted: two comments from one account
+        # under one post read as spam and cannot be taken back here.
+        def same_post() -> dict[str, Any] | None:
+            return next(
+                (
+                    r
+                    for r in ledger.latest_by_attempt().values()
+                    if r.get("kind") == "comment"
+                    and r.get("activity") == activity_id
+                    and r.get("status")
+                    in {"attempted", "unknown", "posted", "unverified"}
+                ),
+                None,
+            )
+
         previous = repeat()
         if previous:
             return {"status": "duplicate_text", "posted": False, "previous": previous}
+        earlier = same_post()
+        if earlier and confirm:
+            return {
+                "status": "already_commented",
+                "posted": False,
+                "previous": earlier,
+            }
         if confirm:
             # Peek only: the attempt row below is the booking, written under
             # the pacer lock together with the repeated duplicate check, so
@@ -691,7 +767,7 @@ def register_mivia_stage2_tools(
                     .isoformat(timespec="seconds"),
                 },
                 tool="comment_on_post",
-                duplicate=repeat,
+                duplicate=lambda: repeat() or same_post(),
             )
             if refused:
                 if refused["status"] == "duplicate":
@@ -703,7 +779,18 @@ def register_mivia_stage2_tools(
                 ledger.append({"attempt": attempt, "status": "unknown"})
                 raise
             # Not posted (no editor, mismatch): release the text for a retry.
-            status = result.get("status") if result.get("posted") else "not_posted"
+            # posted must be literally True; an unknown status with posted=True
+            # is at most unverified, never a confirmed post.
+            if result.get("posted") is True:
+                status = (
+                    result.get("status")
+                    if result.get("status") in {"posted", "unverified"}
+                    else "unverified"
+                )
+                result = {**result, "status": status}
+            else:
+                status = "not_posted"
+                result = {**result, "posted": False}
             ledger.append({"attempt": attempt, "status": status})
             return {"activity_id": activity_id, **result}
 
@@ -802,11 +889,21 @@ def register_mivia_stage2_tools(
                 )
             # A run where every search failed (session expired, rate limit) is
             # not a run: keeping last_run would silence the next six days.
-            ok = any(r["status"] == "ok" for r in results)
-            store.record(new_ids, ran=ok)
+            # Only a run where every search answered counts as a run: a
+            # partly failed one would otherwise silence the failed searches
+            # for six days behind a "ran".
+            failed = [r for r in results if r["status"] != "ok"]
+            ok = len(failed) < len(results)
+            store.record(new_ids, ran=not failed)
             if not ok:
                 return {"status": "failed", "new_total": 0, "searches": results}
-            return {"status": "ran", "new_total": len(new_ids), "searches": results}
+            return {
+                "status": "partial" if failed else "ran",
+                "complete": not failed,
+                "failed_searches": len(failed),
+                "new_total": len(new_ids),
+                "searches": results,
+            }
 
         return await _run(ctx, "job_watch", body)
 

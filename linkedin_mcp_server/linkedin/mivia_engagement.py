@@ -157,12 +157,18 @@ def parse_activity_id(post: str) -> str:
     post = post.strip()
     if re.fullmatch(r"\d{16,22}", post):
         return post
-    match = _ACTIVITY_RE.search(post)
-    if not match:
+    found = set(_ACTIVITY_RE.findall(post))
+    if not found:
         raise ValueError(
             "post_url must contain an activity id (urn:li:activity:<id> or .../posts/...-activity-<id>-...)"
         )
-    return match.group(1)
+    # Two different ids (a share URL quoting the original, a pasted list) make
+    # "the first one" a guess -- and a comment on the wrong post is final.
+    if len(found) > 1:
+        raise ValueError(
+            "post_url contains more than one activity id: " + ", ".join(sorted(found))
+        )
+    return found.pop()
 
 
 def reaction_kind(icons: list[str], lines: list[str]) -> str:
