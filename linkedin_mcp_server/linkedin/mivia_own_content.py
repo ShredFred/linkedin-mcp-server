@@ -145,19 +145,28 @@ _POST_CARD_JS = (
     + r"""
   clearTag('post-menu');
   const urn = 'urn:li:activity:' + activityId;
+  // The focus wrapper carries no urn, so it is only trusted when it is the
+  // single card on the page: a second one may be another own post, which
+  // would pass the author check and get edited or deleted instead.
+  const focus = document.querySelectorAll('[componentkey^="update-card-focus"]');
   const card = document.querySelector('[data-urn="' + urn + '"], [data-id="' + urn + '"], [data-activity-urn="' + urn + '"]')
-            || document.querySelector('[componentkey^="update-card-focus"]');
+            || (focus.length === 1 ? focus[0] : null);
   if (!card) return null;
-  const actor = [...card.querySelectorAll('a[href*="/in/"], a[href*="/company/"]')]
-      .find(a => !inComment(a));
   const textEl = [...card.querySelectorAll(
       '[data-testid="expandable-text-box"], .update-components-text, .feed-shared-inline-show-more-text, .feed-shared-update-v2__description')]
       .find(e => !inComment(e));
+  // Every person/company link above the post text: a social-context header
+  // ("X hat das kommentiert") or a bare repost puts a second name there.
+  const before = a => !textEl || !!(a.compareDocumentPosition(textEl) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const actors = [...card.querySelectorAll('a[href*="/in/"], a[href*="/company/"]')]
+      .filter(a => !inComment(a) && !(textEl && textEl.contains(a)) && before(a));
+  const actor = actors[0];
   const label = /steuerungsmen|kontrollmen|control menu|weitere aktionen|more actions|optionen f(ü|u)r|options for/i;
   const menus = [...card.querySelectorAll('button')]
       .filter(b => vis(b) && !inComment(b) && label.test(b.getAttribute('aria-label') || ''));
   if (menus.length === 1) menus[0].setAttribute('data-mivia-own', 'post-menu');
   return {actor_href: actor ? actor.getAttribute('href') : null,
+          actor_hrefs: actors.map(a => a.getAttribute('href')),
           text: textEl ? (textEl.innerText || '').trim() : null,
           menu_count: menus.length};
 }"""
@@ -173,7 +182,8 @@ _COMMENT_CARD_JS = (
   clearTag('comment-menu');
   const cards = [...document.querySelectorAll('[componentkey^="replaceableComment_urn:li:comment:"]')]
       .filter(c => (c.getAttribute('componentkey') || '').endsWith(',' + commentId + ')'));
-  if (cards.length !== 1) return {count: cards.length};
+  if (cards.length !== 1) return {count: cards.length,
+      total: document.querySelectorAll('[componentkey^="replaceableComment_urn:li:comment:"]').length};
   const card = cards[0];
   const own = el => inComment(el) === card;
   const actor = [...card.querySelectorAll('a[href*="/in/"], a[href*="/company/"]')].find(own);
@@ -330,6 +340,9 @@ class MiviaOwnContent(MiviaActions):
         if comment_id is None:
             if not post.get("actor_href"):
                 return {"status": "author_unknown"}
+            authors = {slug_of(h) or h for h in (post.get("actor_hrefs") or []) if h}
+            if len(authors) > 1:
+                return {"status": "author_ambiguous", "authors": sorted(authors)}
             if not same_member(post["actor_href"], own):
                 return {
                     "status": "not_own_post",
@@ -446,12 +459,22 @@ class MiviaOwnContent(MiviaActions):
             if not post:
                 return False
             card = await self._page.evaluate(_COMMENT_CARD_JS, comment_id)
-            return bool(card) and card.get("count") == 0
+            # Zero cards in total means the comment list did not render
+            # (collapsed, lazy): absence proves nothing then.
+            return (
+                bool(card)
+                and card.get("count") == 0
+                and int(card.get("total") or 0) > 0
+            )
         if post:
             return False
         text = await self._page.evaluate(_PAGE_TEXT_JS)
-        moved = activity_id not in (self._page.url or url)
-        return bool(_GONE_RE.search(text or "")) or moved
+        # Only a redirect to the feed itself counts; a login wall or checkpoint
+        # also "moves" the page and proves nothing about the post.
+        moved = re.fullmatch(
+            r"https://www\.linkedin\.com/feed/?(?:\?.*)?", self._page.url or url
+        )
+        return bool(_GONE_RE.search(text or "")) or bool(moved)
 
     async def _cancel_dialog(self) -> None:
         try:

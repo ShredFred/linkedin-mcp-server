@@ -357,12 +357,15 @@ class TestComment:
     def test_delete_verified_only_when_post_loaded(self):
         page = _Page(
             posts=[_own_post(), _own_post()],
-            comments=[_own_comment(), {"count": 0}],
+            comments=[_own_comment(), {"count": 0, "total": 3}],
         )
         assert (
             _run(_content(page).delete(ACT, CID, confirm=True))["status"] == "verified"
         )
-        page = _Page(posts=[_own_post(), None], comments=[_own_comment(), {"count": 0}])
+        page = _Page(
+            posts=[_own_post(), None],
+            comments=[_own_comment(), {"count": 0, "total": 3}],
+        )
         assert (
             _run(_content(page).delete(ACT, CID, confirm=True))["status"]
             == "unverified"
@@ -597,3 +600,86 @@ class TestTools:
         assert orig["text_sha"] == outreach.text_sha("Alter Kommentar")
         edit_row = outreach.Ledger.default().latest_by_attempt()[out["attempt"]]
         assert edit_row["old_sha"] == outreach.text_sha("Alter Kommentar")
+
+
+# -- review 2026-10-01: regressions ----------------------------------------------
+
+
+class TestReviewRegressions:
+    def test_social_context_header_is_not_ownership(self):
+        # "Jessica hat das kommentiert" above a foreign post: first link is us.
+        post = {
+            "actor_href": f"/in/{ME}/",
+            "actor_hrefs": [f"/in/{ME}/", "/in/fremde-person/"],
+            "text": "Fremder Beitrag",
+            "menu_count": 1,
+        }
+        page = _Page(posts=[post])
+        out = _run(_content(page).delete(ACT, None, confirm=True))
+        assert out["status"] == "author_ambiguous"
+        assert page.clicks == []
+
+    def test_same_author_twice_is_not_ambiguous(self):
+        post = {**_own_post(), "actor_hrefs": [f"/in/{ME}/", f"/in/{ME}"]}
+        page = _Page(posts=[post])
+        out = _run(_content(page).delete(ACT, None, confirm=False))
+        assert out["status"] == "dry_run"
+
+    def test_login_redirect_is_not_deletion(self):
+        page = _Page(posts=[_own_post(), None], page_text="Anmelden")
+        c = _content(page)
+        goto = c._goto
+        visits = []
+
+        async def redirecting(url):
+            await goto(url)
+            visits.append(url)
+            if len(visits) == 3:
+                page.url = "https://www.linkedin.com/authwall?trk=x"
+
+        c._goto = redirecting
+        out = _run(c.delete(ACT, None, confirm=True))
+        assert out["status"] == "unverified"
+
+    def test_feed_redirect_counts_as_deleted(self):
+        page = _Page(posts=[_own_post(), None], page_text="")
+        c = _content(page)
+        goto = c._goto
+        visits = []
+
+        async def redirecting(url):
+            await goto(url)
+            visits.append(url)
+            if len(visits) == 3:
+                page.url = "https://www.linkedin.com/feed/"
+
+        c._goto = redirecting
+        assert _run(c.delete(ACT, None, confirm=True))["status"] == "verified"
+
+    def test_unrendered_comment_list_is_not_deletion(self):
+        page = _Page(
+            posts=[_own_post(), _own_post()],
+            comments=[_own_comment(), {"count": 0, "total": 0}],
+        )
+        out = _run(_content(page).delete(ACT, CID, confirm=True))
+        assert out["status"] == "unverified" and out["done"] is True
+
+    @pytest.mark.parametrize("code", [0x200B, 0x2028, 0x85, 0xFEFF, 0x0D, 0x7F])
+    def test_invisible_controls_refused(self, code):
+        from linkedin_mcp_server.tools.mivia_own_content import check_text
+
+        assert check_text("a" + chr(code) + "b", 100)["status"] == "invalid_text"
+
+    def test_length_counts_utf16_units(self):
+        from linkedin_mcp_server.tools.mivia_own_content import check_text
+
+        assert check_text(chr(0x1F600) * 3, 6) is None
+        assert check_text(chr(0x1F600) * 4, 6)["status"] == "invalid_text"
+
+
+def test_post_card_fallback_only_for_a_single_focus_card():
+    # Without the urn the focus wrapper is a guess; two of them may both be
+    # own posts, and the author check would let the wrong one be deleted.
+    from linkedin_mcp_server.linkedin import mivia_own_content as m
+
+    assert "focus.length === 1 ? focus[0] : null" in m._POST_CARD_JS

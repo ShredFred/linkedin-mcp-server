@@ -22,6 +22,7 @@ from fastmcp import Context, FastMCP
 
 from linkedin_mcp_server import mivia_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
+from linkedin_mcp_server.linkedin.contracts import is_invisible_control
 from linkedin_mcp_server.linkedin.mivia_engagement import parse_activity_id
 from linkedin_mcp_server.linkedin.mivia_own_content import (
     MiviaOwnContent,
@@ -49,12 +50,12 @@ def check_text(text: str, limit: int) -> dict[str, Any] | None:
     if (
         not text
         or not text.strip()
-        or len(text) > limit
-        or any((ord(c) < 32 and c != "\n") or ord(c) == 127 for c in text)
+        or len(text.encode("utf-16-le")) // 2 > limit
+        or any((ord(c) < 32 and c != "\n") or is_invisible_control(c) for c in text)
     ):
         return {
             "status": "invalid_text",
-            "message": f"1-{limit} characters, LF allowed, no other control characters.",
+            "message": f"1-{limit} UTF-16 units, LF allowed, no control or invisible characters.",
         }
     return None
 
@@ -245,7 +246,7 @@ def register_mivia_own_content_tools(
         post -- verified only when the post is gone.
 
         Status codes: dry_run, verified, unverified, not_own_post,
-        author_unknown, own_identity_unknown, post_not_found, menu_unavailable,
+        author_unknown, author_ambiguous, own_identity_unknown, post_not_found, menu_unavailable,
         menu_item_missing, menu_item_ambiguous, confirm_dialog_missing,
         already_attempted, pace_budget_spent (post_delete: 3/day).
         """
