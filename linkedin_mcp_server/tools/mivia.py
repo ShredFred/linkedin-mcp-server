@@ -18,12 +18,10 @@ import logging
 import os
 import random
 import re
-import unicodedata
 import uuid
 from datetime import date, datetime, timedelta
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
-from urllib.parse import urlsplit
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
@@ -35,11 +33,16 @@ from linkedin_mcp_server.core.exceptions import (
     AuthenticationError,
     InvalidReferenceError,
 )
-from linkedin_mcp_server.mivia_message_checks import CALENDLY_ACCOUNT, check_message
+from linkedin_mcp_server.mivia_message_checks import (
+    MESSAGE_MAX_UTF16,
+    check_message,
+    check_outgoing,
+    hidden_format_char,
+    utf16_len,
+)
 from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_error
 from linkedin_mcp_server.error_handler import raise_tool_error
 from linkedin_mcp_server.linkedin.contracts import (
-    is_invisible_control,
     refuse_an_invalid_message,
 )
 from linkedin_mcp_server.linkedin.identifiers import normalize_person_identifier
@@ -143,9 +146,36 @@ class _GuardedMcp:
         return getattr(self._mcp, name)
 
 
-def _utf16_len(text: str) -> int:
-    """Length as LinkedIn's composer counts it: an emoji outside the BMP is 2."""
-    return len(text.encode("utf-16-le")) // 2
+# One source for the content rules: mivia_message_checks. The underscore
+# names stay as aliases because mivia_stage2/inmail and tests import them.
+_utf16_len = utf16_len
+_hidden_format_char = hidden_format_char
+
+
+_CLICK_DECIDES = frozenset(
+    {"follow_only", "unavailable", "connect_unavailable", "custom_note_limit_reached"}
+)
+
+
+def _event_id(value: str) -> tuple[str | None, dict[str, Any] | None]:
+    """Normalised event id, or a refusal before anything is booked: the
+    reader rejects a non-numeric id only after _pace had charged the budget."""
+    from linkedin_mcp_server.linkedin.mivia_network import _EVENT_ID_RE
+
+    event_id = str(value or "").strip().strip("/").rsplit("/", 1)[-1]
+    if not _EVENT_ID_RE.match(event_id):
+        return None, {
+            "status": "invalid_input",
+            "field": "event_id",
+            "detail": "numeric event id from linkedin.com/events/<id>/",
+        }
+    return event_id, None
+
+
+def _int_in(value: Any, low: int, high: int) -> bool:
+    return (
+        isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+    )
 
 
 def check_invite_note(note: str | None) -> dict[str, Any] | None:
@@ -173,78 +203,16 @@ def check_invite_note(note: str | None) -> dict[str, Any] | None:
     return None
 
 
-_BARE_WWW = re.compile(r"(?<![\w/.:@-])www\.", re.IGNORECASE)
-# A bare "bit.ly/x" or "calendly.com/mivia" is linkified by LinkedIn just like
-# one with a scheme, but check_message's URL pattern only sees https?:// and
-# www. -- a shortener or a foreign Calendly account went through unchecked.
-_BARE_HOST = re.compile(
-    r"(?<![\w/.:@-])(?=(?:[a-z0-9-]+\.)+(?:ly|com|co|gl|in|link|me|io|to|gd|is|cc)\b/)",
-    re.IGNORECASE,
-)
-# LinkedIn's message limit, counted in UTF-16 units like the composer.
-MESSAGE_MAX_UTF16 = 8000
-
-
-def _hidden_format_char(character: str) -> bool:
-    """Unicode format characters (Cf) the contracts list does not name: the
-    Arabic letter mark, word joiner, soft hyphen, invisible operators. They
-    hide or reorder text like the bidi controls. ZWNJ/ZWJ and the emoji tag
-    characters stay allowed: emojis are built from them."""
-    if is_invisible_control(character):
-        return True
-    if unicodedata.category(character) != "Cf":
-        return False
-    code = ord(character)
-    return not (code in (0x200C, 0x200D) or 0xE0020 <= code <= 0xE007F)
-
-
-def _calendly_findings(text: str) -> list[dict[str, Any]]:
-    """check_message accepts any URL that merely contains the account string
-    (calendly.com.evil.example/mivia_jessica-schneider, ?r=calendly.com/...,
-    /mivia_jessica-schneider-x). Here the host must be calendly.com and the
-    first path segment exactly the booking account."""
-    account = CALENDLY_ACCOUNT.split("/", 1)[1].lower()
-    found = []
-    for match in re.finditer(r"https://[^\s<>()\"']+", text, re.IGNORECASE):
-        url = match.group(0).rstrip(".,;:!?")
-        if "calendly" not in url.lower():
-            continue
-        parts = urlsplit(url)
-        host = (parts.hostname or "").lower()
-        segment = parts.path.lstrip("/").split("/", 1)[0].lower()
-        if host not in ("calendly.com", "www.calendly.com") or segment != account:
-            found.append({"code": "calendly_wrong_account", "url": url})
-    return found
-
-
 def check_message_content(message: str) -> dict[str, Any] | None:
     """Browser-free content refusal for a direct message; None when it may go.
 
-    Same rules as the invite note and the InMail: an unfilled template
-    ({{vorname}}, [Name], <Firma>), a non-https link, a shortener or a foreign
-    Calendly account stops the send before anything is booked. The salutation
-    is not checked here: the recipient's display name is not known yet.
+    Same rules as the invite note and the InMail (mivia_message_checks.
+    check_outgoing): hidden characters, length, an unfilled template, a
+    non-https link, a shortener or a foreign Calendly account -- bare
+    "www.x" / "bit.ly/x" included -- stop the send before anything is booked.
+    The salutation is not checked here: the recipient is not known yet.
     """
-    if any(_hidden_format_char(c) for c in message):
-        return {
-            "status": "invalid_message",
-            "detail": "invisible or direction-changing characters are refused",
-        }
-    if _utf16_len(message) > MESSAGE_MAX_UTF16:
-        return {"status": "message_too_long", "max": MESSAGE_MAX_UTF16}
-    # "www.mivia.ai" without a scheme is ordinary prose in a direct
-    # message. It is checked as https so the shortener and Calendly rules
-    # still run on it; exempting the finding instead let www.bit.ly and a
-    # foreign www.calendly.com account through unchecked.
-    probe = _BARE_HOST.sub("https://", _BARE_WWW.sub("https://www.", message))
-    findings = [
-        f for f in check_message(probe, None) if not f["code"].startswith("salutation")
-    ]
-    seen = {f.get("url") for f in findings}
-    findings += [f for f in _calendly_findings(probe) if f["url"] not in seen]
-    if findings:
-        return {"status": "content_check_failed", "findings": findings}
-    return None
+    return check_outgoing(message, max_utf16=MESSAGE_MAX_UTF16)
 
 
 def _peek(action: str, count: int = 1) -> dict[str, Any] | None:
@@ -516,7 +484,12 @@ def register_mivia_tools(
             Dict with count and connections [{name, slug, profile_url,
             profile_urn, headline, connected_on (ISO date or null)}].
         """
-        since_date = date.fromisoformat(since) if since else None
+        try:
+            since_date = date.fromisoformat(since) if since else None
+        except (TypeError, ValueError):
+            return {"status": "invalid_input", "field": "since", "detail": "YYYY-MM-DD"}
+        if not _int_in(limit, 1, 1000):
+            return {"status": "invalid_input", "field": "limit"}
         refusal = _pace("page_read", tool="list_connections")
         if refusal:
             return refusal
@@ -561,7 +534,19 @@ def register_mivia_tools(
                 opens a profile. "readable": false means the first page was
                 empty -- usually the account has not RSVP'd.
         """
-        event_id = event_id.strip().strip("/").rsplit("/", 1)[-1]
+        event_id, bad = _event_id(event_id)
+        if bad:
+            return bad
+        # Validated before the booking: a call the reader rejects must not
+        # spend search budget (start_page >= 1, max_pages 1-100 there).
+        if not _int_in(start_page, 1, 100):
+            return {"status": "invalid_input", "field": "start_page"}
+        if not _int_in(max_pages, 1, 15):
+            return {"status": "invalid_input", "field": "max_pages"}
+        if limit is not None and not _int_in(limit, 1, 150):
+            return {"status": "invalid_input", "field": "limit"}
+        if fields not in ("minimal", "card"):
+            return {"status": "invalid_input", "field": "fields"}
         if limit is not None:
             max_pages = min(max_pages, -(-limit // 10))
         refusal = _pace("search", max_pages, tool="get_event_attendees")
@@ -601,7 +586,9 @@ def register_mivia_tools(
             Dict with event_id and attendee_count (null when the page shows no
             total, e.g. the event is gone or the layout changed).
         """
-        event_id = event_id.strip().strip("/").rsplit("/", 1)[-1]
+        event_id, bad = _event_id(event_id)
+        if bad:
+            return bad
         refusal = _pace("page_read", tool="get_event_attendee_count")
         if refusal:
             return refusal
@@ -630,7 +617,9 @@ def register_mivia_tools(
             gone (page missing or redirected away from /events/) and
             cancelled (LinkedIn's cancelled banner as its own line).
         """
-        event_id = event_id.strip().strip("/").rsplit("/", 1)[-1]
+        event_id, bad = _event_id(event_id)
+        if bad:
+            return bad
         refusal = _pace("page_read", tool="get_event_status")
         if refusal:
             return refusal
@@ -660,6 +649,8 @@ def register_mivia_tools(
             profile_url, headline, sent_text}]. sent_text is LinkedIn's relative
             wording ("Vor 18 Stunden gesendet"), kept as rendered.
         """
+        if not _int_in(limit, 1, 1000):
+            return {"status": "invalid_input", "field": "limit"}
         refusal = _pace("page_read", tool="list_sent_invitations")
         if refusal:
             return refusal
@@ -961,6 +952,9 @@ def register_mivia_tools(
         }
         if not confirm_send:
             return {**plan, "status": "dry_run"}
+        if plan["canary_verified"] and not targets:
+            # Nothing left to send: answered without charging the pacer.
+            return {**plan, "status": "done", "results": []}
         refusal = _pace("message", tool="send_campaign_batch")
         if refusal:
             return {**plan, **refusal}
@@ -1163,24 +1157,17 @@ def register_mivia_tools(
                 "accepted": "sent",
                 "pending": "skipped",
                 "already_connected": "skipped",
-                "follow_only": "not_sent",
-                # Returned before the invite dialog's Send was ever clicked:
-                # the profile could not be read, or the note quota upsell
-                # replaced the note editor. Booking these as unknown blocked
-                # the person for good although no invitation left.
-                "unavailable": "not_sent",
                 "send_failed": "unknown",
-                # connect_unavailable and custom_note_limit_reached both come
-                # before any send click and after one (the upsell can follow
-                # the Enter fallback or a dialog that closes slowly); the
-                # click marker decides, see below.
                 # Anything unrecognised may have sent: blocking, not retry-safe.
             }.get(raw, "unknown")
-            if (
-                raw in ("connect_unavailable", "custom_note_limit_reached")
-                and not clicked
-            ):
-                status = "not_sent"
+            # follow_only, unavailable, connect_unavailable and
+            # custom_note_limit_reached normally come before any send click,
+            # but can follow one (Enter fallback, a dialog that closes slowly,
+            # a button that turned into Follow after the click). Only the
+            # click marker can tell: not clicked -> not_sent and retry-safe;
+            # possibly clicked -> unknown, which blocks a second invitation.
+            if raw in _CLICK_DECIDES:
+                status = "unknown" if clicked else "not_sent"
             ledger.append({"attempt": attempt, "status": status, "detail": raw})
             return {
                 "recipient": username,
@@ -1232,6 +1219,10 @@ def register_mivia_tools(
         not-connected profile (may open its More menu, never clicks an item).
         Sends nothing, invites nobody. ok=false lists the problems.
         """
+        if connect_probe_username is not None:
+            connect_probe_username, bad = _recipient(connect_probe_username)
+            if bad:
+                return {**bad, "field": "connect_probe_username"}
         pages = 2 if connect_probe_username else 1
         refusal = _pace("page_read", pages, tool="outreach_selftest")
         if refusal:

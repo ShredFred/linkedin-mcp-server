@@ -25,6 +25,8 @@ import unicodedata
 from typing import Any
 from urllib.parse import urlsplit
 
+from linkedin_mcp_server.linkedin.contracts import is_invisible_control
+
 CALENDLY_ACCOUNT = "calendly.com/mivia_jessica-schneider"
 _URL_RE = re.compile(r"\b((?:https?://|www\.)[^\s<>()\"']+)", re.IGNORECASE)
 # Matched against the URL host (exact or as a parent domain), never as a
@@ -75,9 +77,13 @@ def utf16_len(text: str) -> int:
 
 def hidden_format_char(character: str) -> bool:
     """A Unicode format character (Cf) or C1/bidi control that hides or
-    reorders text. ZWNJ/ZWJ and the emoji tag characters stay allowed."""
+    reorders text. ZWNJ/ZWJ and the emoji tag characters stay allowed.
+
+    The single source since 2026-10-01: tools/mivia.py kept its own copy that
+    also refused the invisible separators of contracts.is_invisible_control
+    (U+2028/2029 etc.); this one only knew DEL and C1. The union is kept."""
     code = ord(character)
-    if 0x7F <= code <= 0x9F:
+    if 0x7F <= code <= 0x9F or is_invisible_control(character):
         return True
     if unicodedata.category(character) != "Cf":
         return False
@@ -102,7 +108,8 @@ def calendly_ok(url: str) -> bool:
         parts = urlsplit(url)
     except ValueError:
         return False
-    host = (parts.hostname or "").lower().rstrip(".")
+    # No rstrip("."): "calendly.com./..." is not the booking page we checked.
+    host = (parts.hostname or "").lower()
     segment = parts.path.lstrip("/").split("/", 1)[0].lower()
     return host in _CALENDLY_HOSTS and segment == CALENDLY_ACCOUNT.split("/", 1)[1]
 
@@ -131,6 +138,17 @@ def bare_links_as_https(text: str) -> str:
     return _BARE_HOST.sub("https://", _BARE_WWW.sub("https://www.", text or ""))
 
 
+def calendly_findings(text: str) -> list[dict[str, Any]]:
+    """Every https:// run that mentions calendly, also glued to a preceding
+    word ("xhttps://calendly.com.evil/...") where _URL_RE's \b misses it."""
+    found = []
+    for match in re.finditer(r"https://[^\s<>()\"']+", text or "", re.IGNORECASE):
+        url = match.group(0).rstrip(".,;:!?")
+        if "calendly" in url.lower() and not calendly_ok(url):
+            found.append({"code": "calendly_wrong_account", "url": url})
+    return found
+
+
 def check_outgoing(text: str, *, max_utf16: int) -> dict[str, Any] | None:
     """Browser-free refusal shared by InMail body/subject and message edit:
     hidden format characters, length, links (bare ones too), placeholders.
@@ -142,7 +160,11 @@ def check_outgoing(text: str, *, max_utf16: int) -> dict[str, Any] | None:
         }
     if utf16_len(text) > max_utf16:
         return {"status": "message_too_long", "max": max_utf16}
-    findings = check_links(bare_links_as_https(text)) + check_placeholders(text)
+    probe = bare_links_as_https(text)
+    findings = check_links(probe)
+    seen = {f.get("url") for f in findings}
+    findings += [f for f in calendly_findings(probe) if f["url"] not in seen]
+    findings += check_placeholders(probe)
     if findings:
         return {"status": "content_check_failed", "findings": findings}
     return None
