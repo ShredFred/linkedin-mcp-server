@@ -713,15 +713,31 @@ def register_mivia_stage2_tools(
         # A second comment on the same post (other text) is refused as well
         # while an earlier one may have posted: two comments from one account
         # under one post read as spam and cannot be taken back here.
+        # A comment removed afterwards by a verified delete_own_comment on the
+        # same post no longer blocks it: otherwise one deleted comment locked
+        # the post forever. Only a verified delete counts; the same text stays
+        # refused through repeat() regardless.
         def same_post() -> dict[str, Any] | None:
+            rows = list(ledger.latest_by_attempt().values())
+            deleted_at = max(
+                (
+                    str(r.get("started_at") or "")
+                    for r in rows
+                    if r.get("kind") == "comment_delete"
+                    and r.get("activity") == activity_id
+                    and r.get("status") == "verified"
+                ),
+                default="",
+            )
             return next(
                 (
                     r
-                    for r in ledger.latest_by_attempt().values()
+                    for r in rows
                     if r.get("kind") == "comment"
                     and r.get("activity") == activity_id
                     and r.get("status")
                     in {"attempted", "unknown", "posted", "unverified"}
+                    and not (deleted_at and str(r.get("started_at") or "") < deleted_at)
                 ),
                 None,
             )
