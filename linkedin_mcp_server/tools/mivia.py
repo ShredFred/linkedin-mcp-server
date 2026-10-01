@@ -18,10 +18,12 @@ import logging
 import os
 import random
 import re
+import unicodedata
 import uuid
 from datetime import date, datetime, timedelta
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
@@ -33,7 +35,7 @@ from linkedin_mcp_server.core.exceptions import (
     AuthenticationError,
     InvalidReferenceError,
 )
-from linkedin_mcp_server.mivia_message_checks import check_message
+from linkedin_mcp_server.mivia_message_checks import CALENDLY_ACCOUNT, check_message
 from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_error
 from linkedin_mcp_server.error_handler import raise_tool_error
 from linkedin_mcp_server.linkedin.contracts import (
@@ -155,7 +157,7 @@ def check_invite_note(note: str | None) -> dict[str, Any] | None:
             "status": "invalid_note",
             "detail": "note is empty; pass null for no note",
         }
-    if any(ord(c) < 32 or is_invisible_control(c) for c in note):
+    if any(ord(c) < 32 or _hidden_format_char(c) for c in note):
         return {
             "status": "invalid_note",
             "detail": "no control characters or line breaks",
@@ -172,6 +174,47 @@ def check_invite_note(note: str | None) -> dict[str, Any] | None:
 
 
 _BARE_WWW = re.compile(r"(?<![\w/.:@-])www\.", re.IGNORECASE)
+# A bare "bit.ly/x" or "calendly.com/mivia" is linkified by LinkedIn just like
+# one with a scheme, but check_message's URL pattern only sees https?:// and
+# www. -- a shortener or a foreign Calendly account went through unchecked.
+_BARE_HOST = re.compile(
+    r"(?<![\w/.:@-])(?=(?:[a-z0-9-]+\.)+(?:ly|com|co|gl|in|link|me|io|to|gd|is|cc)\b/)",
+    re.IGNORECASE,
+)
+# LinkedIn's message limit, counted in UTF-16 units like the composer.
+MESSAGE_MAX_UTF16 = 8000
+
+
+def _hidden_format_char(character: str) -> bool:
+    """Unicode format characters (Cf) the contracts list does not name: the
+    Arabic letter mark, word joiner, soft hyphen, invisible operators. They
+    hide or reorder text like the bidi controls. ZWNJ/ZWJ and the emoji tag
+    characters stay allowed: emojis are built from them."""
+    if is_invisible_control(character):
+        return True
+    if unicodedata.category(character) != "Cf":
+        return False
+    code = ord(character)
+    return not (code in (0x200C, 0x200D) or 0xE0020 <= code <= 0xE007F)
+
+
+def _calendly_findings(text: str) -> list[dict[str, Any]]:
+    """check_message accepts any URL that merely contains the account string
+    (calendly.com.evil.example/mivia_jessica-schneider, ?r=calendly.com/...,
+    /mivia_jessica-schneider-x). Here the host must be calendly.com and the
+    first path segment exactly the booking account."""
+    account = CALENDLY_ACCOUNT.split("/", 1)[1].lower()
+    found = []
+    for match in re.finditer(r"https://[^\s<>()\"']+", text, re.IGNORECASE):
+        url = match.group(0).rstrip(".,;:!?")
+        if "calendly" not in url.lower():
+            continue
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        segment = parts.path.lstrip("/").split("/", 1)[0].lower()
+        if host not in ("calendly.com", "www.calendly.com") or segment != account:
+            found.append({"code": "calendly_wrong_account", "url": url})
+    return found
 
 
 def check_message_content(message: str) -> dict[str, Any] | None:
@@ -182,15 +225,23 @@ def check_message_content(message: str) -> dict[str, Any] | None:
     Calendly account stops the send before anything is booked. The salutation
     is not checked here: the recipient's display name is not known yet.
     """
+    if any(_hidden_format_char(c) for c in message):
+        return {
+            "status": "invalid_message",
+            "detail": "invisible or direction-changing characters are refused",
+        }
+    if _utf16_len(message) > MESSAGE_MAX_UTF16:
+        return {"status": "message_too_long", "max": MESSAGE_MAX_UTF16}
+    # "www.mivia.ai" without a scheme is ordinary prose in a direct
+    # message. It is checked as https so the shortener and Calendly rules
+    # still run on it; exempting the finding instead let www.bit.ly and a
+    # foreign www.calendly.com account through unchecked.
+    probe = _BARE_HOST.sub("https://", _BARE_WWW.sub("https://www.", message))
     findings = [
-        f
-        # "www.mivia.ai" without a scheme is ordinary prose in a direct
-        # message. It is checked as https so the shortener and Calendly rules
-        # still run on it; exempting the finding instead let www.bit.ly and a
-        # foreign www.calendly.com account through unchecked.
-        for f in check_message(_BARE_WWW.sub("https://www.", message), None)
-        if not f["code"].startswith("salutation")
+        f for f in check_message(probe, None) if not f["code"].startswith("salutation")
     ]
+    seen = {f.get("url") for f in findings}
+    findings += [f for f in _calendly_findings(probe) if f["url"] not in seen]
     if findings:
         return {"status": "content_check_failed", "findings": findings}
     return None
@@ -295,7 +346,22 @@ async def _send_and_verify(
         return {"recipient": username, "verified": False, **refused}
     try:
         sent = await extractor.send_message(username, message, confirm_send=True)
+    except Exception as exc:
+        # message_sender's contract: once the submit may have been dispatched
+        # it returns send_unconfirmed instead of raising, so an Exception that
+        # gets here was raised before the click. Booking it as unknown blocked
+        # the person for good over a page that merely failed to load.
+        ledger.append(
+            {
+                "attempt": attempt,
+                "status": "not_sent",
+                "detail": f"exception before send: {type(exc).__name__}",
+            }
+        )
+        exc.mivia_send_status = "not_sent"  # type: ignore[attr-defined]
+        raise
     except BaseException:
+        # Cancellation (tool timeout): the click may have happened.
         ledger.append(
             {"attempt": attempt, "status": "unknown", "detail": "exception during send"}
         )
@@ -361,6 +427,10 @@ async def _send_and_verify(
         }
     )
     return {"recipient": username, "status": status, "send": sent, "verified": verified}
+
+
+# _send_and_verify outcomes after which nothing reached the recipient.
+_NOTHING_LEFT = {"not_sent", "pace_budget_spent", "pace_lock_busy"}
 
 
 class _CampaignQuotaReached(Exception):
@@ -636,7 +706,7 @@ def register_mivia_tools(
                 "message": "Company-page posting is not implemented; it requires page admin rights and stays manual.",
             }
         if not text.strip() or any(
-            (ord(c) < 32 and c != "\n") or is_invisible_control(c) for c in text
+            (ord(c) < 32 and c != "\n") or _hidden_format_char(c) for c in text
         ):
             return {
                 "status": "invalid_text",
@@ -953,13 +1023,15 @@ def register_mivia_tools(
                 except outreach.LedgerCorrupt:
                     raise
                 except Exception as exc:
-                    # The ledger already holds this attempt as unknown. Raising
-                    # here dropped the verified sends before it from the
-                    # report, and the caller read the whole batch as failed.
+                    # The ledger already holds this attempt (not_sent before the
+                    # click, unknown otherwise). Raising here dropped the
+                    # verified sends before it from the report, and the caller
+                    # read the whole batch as failed.
+                    status = getattr(exc, "mivia_send_status", "unknown")
                     results.append(
                         {
                             "recipient": username,
-                            "status": "unknown",
+                            "status": status,
                             "verified": False,
                             "error": f"{type(exc).__name__}: {exc}"[:300],
                         }
@@ -968,7 +1040,9 @@ def register_mivia_tools(
                         **plan,
                         "status": "stopped_on_failure",
                         "results": results,
-                        "remaining": targets[index + 1 :],
+                        "remaining": targets[
+                            index if status in _NOTHING_LEFT else index + 1 :
+                        ],
                     }
                 if outcome.get("status") == "campaign_quota_reached":
                     # Nothing was booked or sent for this recipient.
@@ -981,11 +1055,15 @@ def register_mivia_tools(
                     }
                 results.append(outcome)
                 if not outcome["verified"]:
+                    # A recipient nothing left for (not_sent, a pacer refusal,
+                    # a busy lock) is still open; dropping it from remaining
+                    # reported a person as handled who never got the text.
+                    still_open = outcome.get("status") in _NOTHING_LEFT
                     return {
                         **plan,
                         "status": "stopped_on_failure",
                         "results": results,
-                        "remaining": targets[index + 1 :],
+                        "remaining": targets[index if still_open else index + 1 :],
                     }
             return {
                 **plan,
