@@ -68,6 +68,7 @@ def register_mivia_inmail_tools(
     mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
 ) -> None:
     from linkedin_mcp_server.tools.mivia import (
+        _book_attempt,
         _GuardedMcp,
         _pace,
         _peek,
@@ -172,14 +173,17 @@ def register_mivia_inmail_tools(
                 "status": "attempted",
                 "started_at": _now(),
             }
-            try:
-                outreach.Pacer(ledger).take("inmail", tool="send_inmail", row=row)
-            except outreach.PaceExceeded as over:
-                return {
-                    "recipient": username,
-                    "status": "pace_budget_spent",
-                    "pace": over.state,
-                }
+            refused = _book_attempt(
+                ledger,
+                "inmail",
+                row,
+                tool="send_inmail",
+                duplicate=None
+                if allow_repeat
+                else (lambda: ledger.already_contacted("inmail", username, None)),
+            )
+            if refused:
+                return {"recipient": username, **refused}
             try:
                 result = await reader.inmail(target, subject, body, confirm=True)
             except BaseException:
@@ -321,12 +325,11 @@ def register_mivia_inmail_tools(
                 "status": "attempted",
                 "started_at": _now(),
             }
-            try:
-                outreach.Pacer(ledger).take(
-                    "message_edit", tool="edit_sent_message", row=row
-                )
-            except outreach.PaceExceeded as over:
-                return {**base, "status": "pace_budget_spent", "pace": over.state}
+            refused = _book_attempt(
+                ledger, "message_edit", row, tool="edit_sent_message"
+            )
+            if refused:
+                return {**base, **refused}
             try:
                 result = await reader.edit(url, message, new_text, confirm=True)
             except BaseException:

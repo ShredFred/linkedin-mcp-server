@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 LEDGER_ENV = "MIVIA_LINKEDIN_LEDGER"
 
@@ -72,6 +72,19 @@ class LedgerCorrupt(ValueError):
         self.line = line
 
 
+def _ends_torn(path: Path) -> bool:
+    """True when *path* is non-empty and its last byte is not a newline."""
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                return False
+            handle.seek(-1, os.SEEK_END)
+            return handle.read(1) != b"\n"
+    except FileNotFoundError:
+        return False
+
+
 @dataclass
 class Ledger:
     path: Path
@@ -99,13 +112,23 @@ class Ledger:
                 # and a pacer that skipped it would under-count -- refuse.
                 if number == len(lines) and not raw.endswith("\n"):
                     continue
+                # append() seals such a fragment with a newline before the
+                # next row, so it can also sit in the middle: a line that
+                # opens an object and never closes it is the same torn write.
+                if line.startswith("{") and not line.endswith("}"):
+                    continue
                 raise LedgerCorrupt(self.path, number) from bad
         return rows
 
     def append(self, row: dict[str, Any]) -> dict[str, Any]:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         row = {"at": datetime.now().astimezone().isoformat(timespec="seconds"), **row}
+        torn = _ends_torn(self.path)
         with self.path.open("a", encoding="utf-8") as handle:
+            if torn:
+                # A crash left a last line without its newline; without this
+                # the new row would be glued onto the fragment and lost.
+                handle.write("\n")
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -271,13 +294,19 @@ def _file_lock(path: Path, timeout: float = 15.0, stale_after: float = 60.0):
         try:
             fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             break
-        except FileExistsError:
+        except (FileExistsError, PermissionError):
+            # PermissionError: Windows refuses O_EXCL on a file that is being
+            # deleted -- the lock is still taken, wait like for an existing one.
             try:
                 if time.time() - path.stat().st_mtime > stale_after:
                     path.unlink(missing_ok=True)
                     continue
             except FileNotFoundError:
                 continue
+            except PermissionError:
+                # Windows: another process holds or is deleting the stale
+                # file. Not ours to fail on -- keep waiting until the deadline.
+                pass
             if time.monotonic() > deadline:
                 raise TimeoutError(f"pacer lock {path} held too long")
             time.sleep(0.05)
@@ -286,6 +315,14 @@ def _file_lock(path: Path, timeout: float = 15.0, stale_after: float = 60.0):
     finally:
         os.close(fd)
         path.unlink(missing_ok=True)
+
+
+class AlreadyContacted(Exception):
+    """Raised by :meth:`Pacer.take` when the duplicate re-check under the lock hits."""
+
+    def __init__(self, previous: dict[str, Any]):
+        super().__init__("recipient already contacted")
+        self.previous = previous
 
 
 class PaceExceeded(Exception):
@@ -419,16 +456,23 @@ class Pacer:
         *,
         tool: str | None = None,
         row: dict[str, Any] | None = None,
+        duplicate: Callable[[], dict[str, Any] | None] | None = None,
     ) -> dict[str, Any]:
         """Reserve *count* units or raise :class:`PaceExceeded`.
 
         Messages and invites are recorded by their own attempt rows; for them
         this only checks. Everything else is booked here, before the action,
-        because an action that may have happened must count.
+        because an action that may have happened must count. *duplicate* is
+        re-run under the lock before *row* is written; a row it returns raises
+        :class:`AlreadyContacted` (two parallel calls, one send).
         """
         # Check and book under one lock: two tool calls in parallel must not
         # both pass the check before either books.
         with _file_lock(self.ledger.path.with_suffix(".lock")):
+            if duplicate is not None:
+                previous = duplicate()
+                if previous:
+                    raise AlreadyContacted(previous)
             state = self.state(action)
             if state["left"] < count:
                 raise PaceExceeded({**state, "requested": count})

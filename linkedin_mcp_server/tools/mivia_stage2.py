@@ -36,6 +36,7 @@ from linkedin_mcp_server.tools.mivia import (
     _pace,
     _recipient,
     _run,
+    pace_lock_busy,
 )
 
 
@@ -344,6 +345,9 @@ def register_mivia_stage2_tools(
                             "pace": spent.state,
                         }
                     )
+                    break
+                except TimeoutError as busy:
+                    results.append({"slug": inv["slug"], **pace_lock_busy(busy)})
                     break
                 if index:
                     await asyncio.sleep(random.uniform(8.0, 20.0))

@@ -466,3 +466,328 @@ def test_every_tool_maps_ledger_corrupt_to_status(name):
 
     out = asyncio.run(m._ledger_guard(boom)())
     assert out["status"] == "ledger_corrupt" and out["line"] == 7
+
+
+# -- 2026-10-01: six review findings ------------------------------------------
+
+
+def test_append_after_torn_last_line_starts_a_new_line():
+    ledger = outreach.Ledger.default()
+    ledger.append({"kind": "pace", "action": "page_read", "count": 1})
+    with ledger.path.open("a", encoding="utf-8") as h:
+        h.write('{"kind": "pace", "act')
+    ledger.append({"kind": "pace", "action": "search", "count": 1})
+    assert [r["action"] for r in ledger.rows()] == ["page_read", "search"]
+    # real corruption in the middle still refuses
+    with ledger.path.open("a", encoding="utf-8") as h:
+        h.write("garbage\n")
+    ledger.append({"kind": "pace", "action": "like", "count": 1})
+    with pytest.raises(outreach.LedgerCorrupt):
+        ledger.rows()
+
+
+def _register(monkeypatch, extractor):
+    import linkedin_mcp_server.tools.mivia as m
+
+    async def fake_run(ctx, tool, body):
+        return await body(extractor)
+
+    async def no_sleep(*a, **k):
+        return None
+
+    monkeypatch.setattr(m, "_run", fake_run)
+    monkeypatch.setattr(m.asyncio, "sleep", no_sleep)
+    mcp = FastMCP("t")
+    m.register_mivia_tools(mcp)
+    return mcp
+
+
+def _gather(mcp, name, args, n=2):
+    async def go():
+        async with Client(mcp) as c:
+            outs = await asyncio.gather(*(c.call_tool(name, args) for _ in range(n)))
+            return [o.structured_content for o in outs]
+
+    return asyncio.run(go())
+
+
+def _attempted(kind):
+    return [
+        r
+        for r in outreach.Ledger.default().rows()
+        if r.get("kind") == kind and r.get("status") == "attempted"
+    ]
+
+
+def _first_two_checks_free(monkeypatch):
+    """Every pre-lock check passes, as when two calls race; only the re-check
+    under the pacer lock (called from the duplicate lambda) is real."""
+    import sys
+
+    real = outreach.Ledger.already_contacted
+
+    def check(self, kind, recipient, sha):
+        if sys._getframe(1).f_code.co_name != "<lambda>":
+            return None
+        return real(self, kind, recipient, sha)
+
+    monkeypatch.setattr(outreach.Ledger, "already_contacted", check)
+
+
+class _Sender:
+    def __init__(self):
+        self.sends = 0
+        self._mivia_session = type("S", (), {"page": None})()
+
+    async def send_message(self, username, message, confirm_send):
+        self.sends += 1
+        return {"sent": True, "url": "https://www.linkedin.com/messaging/thread/T1/"}
+
+    async def get_conversation(self, **kw):
+        return {"sections": {"conversation": "Hallo Dieter"}}
+
+
+def test_parallel_message_sends_once(monkeypatch):
+    ex = _Sender()
+    mcp = _register(monkeypatch, ex)
+    _first_two_checks_free(monkeypatch)
+    outs = _gather(
+        mcp,
+        "send_message_verified",
+        {
+            "linkedin_username": "dieter",
+            "message": "Hallo Dieter",
+            "confirm_send": True,
+        },
+    )
+    assert sorted(o["status"] for o in outs) == ["duplicate", "verified"]
+    assert len(_attempted("message")) == 1
+    assert ex.sends == 1
+
+
+class _Connector:
+    def __init__(self, raw="connected"):
+        self.calls = 0
+        self.raw = raw
+
+    async def connect_with_person(self, username, note=None):
+        self.calls += 1
+        return {"status": self.raw}
+
+
+def test_parallel_invites_send_once(monkeypatch):
+    ex = _Connector()
+    mcp = _register(monkeypatch, ex)
+    _first_two_checks_free(monkeypatch)
+    outs = _gather(
+        mcp, "connect_guarded", {"linkedin_username": "dieter", "confirm_send": True}
+    )
+    assert sorted(o.get("status", "sent") for o in outs) == ["duplicate", "sent"]
+    assert len(_attempted("invite")) == 1
+    assert ex.calls == 1
+
+
+def test_connect_unknown_raw_status_blocks(monkeypatch):
+    out = _call(
+        "connect_guarded",
+        {"linkedin_username": "dieter", "confirm_send": True},
+        extractor=_Connector(raw="weird_new_state"),
+        monkeypatch=monkeypatch,
+    )
+    assert out["result"]["status"] == "weird_new_state"
+    previous = outreach.Ledger.default().already_contacted("invite", "dieter", None)
+    assert previous["status"] == "unknown"
+
+
+class _InboxGuess:
+    """Send without thread URL; the newest inbox thread belongs to *partner*."""
+
+    def __init__(self, partner):
+        self.partner = partner
+        self._mivia_session = type("S", (), {"page": None})()
+
+    async def send_message(self, username, message, confirm_send):
+        return {"sent": True, "url": "https://www.linkedin.com/messaging/compose/"}
+
+    async def get_inbox(self, limit):
+        thread = "https://www.linkedin.com/messaging/thread/A1/"
+        return {"references": {"inbox": [{"kind": "conversation", "url": thread}]}}
+
+    async def get_conversation(self, thread_id=None, linkedin_username=None):
+        if linkedin_username:
+            raise RuntimeError("lookup by name failed")
+        return {
+            "sections": {
+                "conversation": "Profil von Ich anzeigen\nHallo Bernd, wie geht es?"
+            },
+            "references": {
+                "conversation": [
+                    {
+                        "kind": "person",
+                        "url": f"https://www.linkedin.com/in/{self.partner}/",
+                    }
+                ]
+            },
+        }
+
+
+@pytest.mark.parametrize(
+    "partner,status", [("anna", "unverified"), ("bernd", "verified")]
+)
+def test_inbox_fallback_checks_partner(monkeypatch, partner, status):
+    _register(monkeypatch, None)  # patches asyncio.sleep
+    out = _call(
+        "send_message_verified",
+        {
+            "linkedin_username": "bernd",
+            "message": "Hallo Bernd, wie geht es?",
+            "confirm_send": True,
+        },
+        extractor=_InboxGuess(partner),
+        monkeypatch=monkeypatch,
+    )
+    assert out["status"] == status
+
+
+class _Loc:
+    """Minimal locator stand-in for MiviaInmail.inmail."""
+
+    def __init__(self, page):
+        self.page = page
+        self.value = ""
+
+    first = property(lambda self: self)
+    last = property(lambda self: self)
+
+    def locator(self, *a, **k):
+        return self
+
+    def filter(self, *a, **k):
+        return self
+
+    async def count(self):
+        return 1
+
+    async def wait_for(self, **k):
+        return None
+
+    async def click(self):
+        if self is self.page.send:
+            self.page.clicked = True
+
+    async def is_disabled(self):
+        return False
+
+    async def fill(self, value):
+        self.value = value
+
+    async def input_value(self):
+        return self.value
+
+    async def inner_text(self):
+        if self.page.clicked:
+            raise TimeoutError("read-back timed out")
+        return "Header"
+
+
+class _Page:
+    def __init__(self):
+        self.clicked = False
+        self.url = "https://www.linkedin.com/sales/inbox/x"
+        self.send = _Loc(self)
+        self.subject = _Loc(self)
+        self.body = _Loc(self)
+        self.dialog = _Loc(self)
+
+    def locator(self, sel, *a, **k):
+        return self.body if "textarea" in str(sel) else self.dialog
+
+    async def evaluate(self, *a, **k):
+        return "2nd"
+
+
+def _fake_inmail_reader(monkeypatch):
+    import linkedin_mcp_server.scraping.mivia_inmail as sm
+
+    page = _Page()
+    reader = sm.MiviaInmail.__new__(sm.MiviaInmail)
+
+    async def noop(*a, **k):
+        return None
+
+    async def fake_first(scope, chain, *, last=False):
+        return page.send if last else page.subject
+
+    reader._wait = noop
+    reader._goto = noop
+    monkeypatch.setattr(sm.MiviaInmail, "_page", property(lambda s: page))
+    monkeypatch.setattr(sm, "first_match", fake_first)
+    monkeypatch.setattr(sm, "parse_degree", lambda t: 2)
+    monkeypatch.setattr(
+        sm,
+        "parse_credits",
+        lambda t: {"free": False, "none_left": False, "cost": 1, "remaining": 5},
+    )
+    return reader
+
+
+def test_inmail_readback_error_after_click_is_unverified(monkeypatch):
+    reader = _fake_inmail_reader(monkeypatch)
+    target = {"status": "ok", "name": "Dieter Maier", "sales_url": "https://x/"}
+
+    class _Wrap:
+        async def inmail_target(self, username):
+            return target
+
+        async def inmail(self, target, subject, body, confirm):
+            return await reader.inmail(target, subject, body, confirm=confirm)
+
+    out = _inmail(monkeypatch, _Wrap())
+    assert out["status"] == "unverified"
+    assert out["sent"] is True
+    assert "TimeoutError" in out["verify_error"]
+    rows = [r for r in outreach.Ledger.default().rows() if r.get("attempt")]
+    assert [r["status"] for r in rows] == ["attempted", "unverified"]
+
+
+def test_pace_lock_busy_is_a_status(monkeypatch):
+    import linkedin_mcp_server.tools.mivia as m
+
+    ledger = outreach.Ledger.default()
+    lock = ledger.path.with_suffix(".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("held", encoding="utf-8")  # fresh, so not stale
+    real = outreach._file_lock
+    monkeypatch.setattr(
+        outreach, "_file_lock", lambda path, **k: real(path, timeout=0.1)
+    )
+    assert m._pace("page_read", tool="t")["status"] == "pace_lock_busy"
+    out = m._book_attempt(
+        ledger, "message", {"attempt": "a", "kind": "message"}, tool="t"
+    )
+    assert out["status"] == "pace_lock_busy"
+    assert ledger.rows() == []
+
+
+def test_stale_lock_unlink_permission_error_keeps_waiting(tmp_path, monkeypatch):
+    import os
+    import time
+
+    lock = tmp_path / "x.lock"
+    lock.write_text("old", encoding="utf-8")
+    old = time.time() - 3600
+    os.utime(lock, (old, old))
+    calls = {"n": 0}
+    real_unlink = type(lock).unlink
+
+    def flaky_unlink(self, missing_ok=False):
+        if self == lock and calls["n"] == 0:
+            calls["n"] += 1
+            raise PermissionError("in use")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(type(lock), "unlink", flaky_unlink)
+    with outreach._file_lock(lock, timeout=2.0):
+        assert lock.exists()
+    assert calls["n"] == 1
+    assert not lock.exists()

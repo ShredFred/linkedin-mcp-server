@@ -375,11 +375,29 @@ class MiviaInmail(MiviaActions):
             await body_field.fill("")
             return await discard("dry_run", composer_verified=True)
         await send.click()
-        await self._wait(4.0, 6.0)
-        after = canon(await dialog.inner_text()) if await dialog.count() else ""
-        delivered = canon(body)[:150] in after
-        sent_url = self._page.url
-        credits_after = await self.inmail_credits()
+        # From here the InMail may have left: a failing read-back is
+        # "unverified", never an exception that would leave the ledger at
+        # "unknown" for a send that most likely happened.
+        delivered = False
+        sent_url = None
+        credits_after: dict[str, Any] = {}
+        try:
+            await self._wait(4.0, 6.0)
+            after = canon(await dialog.inner_text()) if await dialog.count() else ""
+            delivered = canon(body)[:150] in after
+            sent_url = self._page.url
+            credits_after = await self.inmail_credits()
+        except Exception as exc:
+            logger.warning("InMail read-back after send failed", exc_info=True)
+            return {
+                **base,
+                "status": "verified" if delivered else "unverified",
+                "sent": True,
+                "delivered_in_dialog": delivered,
+                "credits_after": credits_after,
+                "url": sent_url,
+                "verify_error": f"{type(exc).__name__}: {exc}",
+            }
         spent = (
             credits["remaining"] is not None
             and credits_after.get("remaining") is not None
@@ -509,9 +527,19 @@ class MiviaInmail(MiviaActions):
             await self._wait(0.8, 1.4)
             return {"status": "dry_run", "edited": False, "editor_verified": True}
         await save.click()
-        await self._wait(3.0, 5.0)
-        reread = await self.thread_messages(url)
-        found = edit_landed(reread.get("messages", []), message, new_text)
+        # The edit may have landed: a failing read-back is "unverified".
+        try:
+            await self._wait(3.0, 5.0)
+            reread = await self.thread_messages(url)
+            found = edit_landed(reread.get("messages", []), message, new_text)
+        except Exception as exc:
+            logger.warning("edit read-back after save failed", exc_info=True)
+            return {
+                "status": "unverified",
+                "edited": True,
+                "verified": False,
+                "verify_error": f"{type(exc).__name__}: {exc}",
+            }
         return {
             "status": "verified" if found else "unverified",
             "edited": True,

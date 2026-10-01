@@ -63,7 +63,17 @@ def _pace(action: str, count: int = 1, *, tool: str) -> dict[str, Any] | None:
         outreach.Pacer(outreach.Ledger.default()).take(action, count, tool=tool)
     except outreach.PaceExceeded as spent:
         return {"status": "pace_budget_spent", "pace": spent.state}
+    except TimeoutError as busy:
+        return pace_lock_busy(busy)
     return None
+
+
+def pace_lock_busy(exc: BaseException) -> dict[str, Any]:
+    """One status for a pacer lock that stayed held past its timeout."""
+    return {
+        "status": "pace_lock_busy",
+        "detail": f"{exc}; nothing was sent or booked, try again shortly",
+    }
 
 
 def _recipient(value: str | None) -> tuple[str | None, dict[str, Any] | None]:
@@ -158,6 +168,8 @@ def _peek(action: str, count: int = 1) -> dict[str, Any] | None:
         outreach.Pacer(outreach.Ledger.default()).peek(action, count)
     except outreach.PaceExceeded as spent:
         return {"status": "pace_budget_spent", "pace": spent.state}
+    except TimeoutError as busy:
+        return pace_lock_busy(busy)
     return None
 
 
@@ -188,23 +200,38 @@ async def _send_and_verify(
     message: str,
     *,
     campaign: str | None,
+    allow_repeat: bool = False,
 ) -> dict[str, Any]:
-    """One send with a ledger row before and after, then a conversation read-back."""
+    """One send with a ledger row before and after, then a conversation read-back.
+
+    The attempted row is written by the pacer under its lock, after the
+    duplicate check is repeated there: two parallel calls for the same person
+    and text both pass the check outside the lock, only one may send.
+    """
     sha = outreach.text_sha(message)
     attempt = uuid.uuid4().hex
     started = datetime.now().astimezone().isoformat(timespec="seconds")
-    ledger.append(
-        {
-            "attempt": attempt,
-            "kind": "message",
-            "recipient": outreach.recipient_key(username),
-            "text_sha": sha,
-            "text_head": outreach.text_head(message),
-            "campaign": campaign,
-            "status": "attempted",
-            "started_at": started,
-        }
+    row = {
+        "attempt": attempt,
+        "kind": "message",
+        "recipient": outreach.recipient_key(username),
+        "text_sha": sha,
+        "text_head": outreach.text_head(message),
+        "campaign": campaign,
+        "status": "attempted",
+        "started_at": started,
+    }
+    refused = _book_attempt(
+        ledger,
+        "message",
+        row,
+        tool="send_message_verified",
+        duplicate=None
+        if allow_repeat
+        else (lambda: ledger.already_contacted("message", username, sha)),
     )
+    if refused:
+        return {"recipient": username, "verified": False, **refused}
     try:
         sent = await extractor.send_message(username, message, confirm_send=True)
     except BaseException:
@@ -235,6 +262,9 @@ async def _send_and_verify(
         str(getattr(extractor._mivia_session.page, "url", ""))
     )
     lookups: list[dict[str, str]] = []
+    # A thread taken from the inbox is a guess: the newest thread may belong to
+    # someone who just wrote to us. It only counts when checked (see below).
+    guessed: set[str] = set()
     if thread:
         lookups.append({"thread_id": thread.group(1)})
     else:
@@ -245,6 +275,7 @@ async def _send_and_verify(
                 if ref.get("kind") == "conversation" and match:
                     thread = match
                     lookups.append({"thread_id": match.group(1)})
+                    guessed.add(match.group(1))
                     break
         except Exception:
             logger.warning("inbox read for read-back failed", exc_info=True)
@@ -256,6 +287,8 @@ async def _send_and_verify(
             logger.warning("read-back via %s failed", lookup, exc_info=True)
             continue
         verified = outreach.delivered_in_conversation(message, conversation)
+        if verified and lookup.get("thread_id") in guessed:
+            verified = _thread_belongs_to(conversation, username, message)
         if verified:
             break
     status = "verified" if verified else "unverified"
@@ -267,6 +300,49 @@ async def _send_and_verify(
         }
     )
     return {"recipient": username, "status": status, "send": sent, "verified": verified}
+
+
+def _book_attempt(
+    ledger: outreach.Ledger,
+    kind: str,
+    row: dict[str, Any],
+    *,
+    tool: str,
+    duplicate: Any = None,
+) -> dict[str, Any] | None:
+    """Write an attempted row through the pacer lock; refusal dict or None."""
+    try:
+        outreach.Pacer(ledger).take(kind, tool=tool, row=row, duplicate=duplicate)
+    except outreach.AlreadyContacted as dup:
+        return {"status": "duplicate", "previous": dup.previous}
+    except outreach.PaceExceeded as over:
+        return {"status": "pace_budget_spent", "pace": over.state}
+    except TimeoutError as busy:
+        return pace_lock_busy(busy)
+    return None
+
+
+def _thread_belongs_to(
+    conversation: dict[str, Any], username: str, message: str
+) -> bool:
+    """A thread guessed from the inbox counts only when it is the recipient's
+    and our message is the newest block in it.
+
+    Partner: a person reference in the thread points at the recipient's slug.
+    Newest: nobody else wrote after our text (reply_after finds no later block).
+    """
+    key = outreach.recipient_key(username)
+    partner = any(
+        f"/in/{key}/" in str(ref.get("url", "")).lower() + "/"
+        for refs in (conversation.get("references") or {}).values()
+        for ref in (refs or [])
+        if isinstance(ref, dict)
+    )
+    if not partner:
+        return False
+    text = "\n".join(str(v) for v in (conversation.get("sections") or {}).values())
+    after = outreach.reply_after(text, message)
+    return bool(after.get("found")) and after.get("replied") is False
 
 
 def register_mivia_tools(
@@ -553,7 +629,9 @@ def register_mivia_tools(
         return await _run(
             ctx,
             "send_message_verified",
-            lambda ex: _send_and_verify(ex, ledger, username, message, campaign=None),
+            lambda ex: _send_and_verify(
+                ex, ledger, username, message, campaign=None, allow_repeat=allow_repeat
+            ),
         )
 
     @mcp.tool(
@@ -644,8 +722,14 @@ def register_mivia_tools(
 
         async def body(ex: Any) -> dict[str, Any]:
             if not plan["canary_verified"]:
+                # The canary may be retried after a failed read-back.
                 outcome = await _send_and_verify(
-                    ex, ledger, canary_key, message, campaign=campaign
+                    ex,
+                    ledger,
+                    canary_key,
+                    message,
+                    campaign=campaign,
+                    allow_repeat=True,
                 )
                 status = "canary_verified" if outcome["verified"] else "canary_failed"
                 return {
@@ -708,11 +792,13 @@ def register_mivia_tools(
         """
         connect_with_person behind the ledger: refuses once today's invite cap
         (default 20, max 25) or the rolling 7-day cap (100) is reached, and never
-        invites the same person twice. Records every attempt. The invite budget
-        is booked before the browser opens, on purpose: an attempt that dies
-        mid-dialog may still have sent, so it must count. The note is limited
-        to 200 characters (free account) unless MIVIA_INVITE_NOTE_MAX raises it
-        to at most 300 (Premium).
+        invites the same person twice. The attempted row is the booking: it is
+        written under the pacer lock, after the duplicate check is repeated
+        there, and before connect_with_person runs -- an attempt that dies
+        mid-dialog may still have sent, so it must count. An unrecognised result
+        is recorded as unknown, which blocks a retry. The note is limited to 200
+        characters (free account) unless MIVIA_INVITE_NOTE_MAX raises it to at
+        most 300 (Premium).
         """
         username, bad = _recipient(linkedin_username)
         if bad:
@@ -735,17 +821,22 @@ def register_mivia_tools(
 
         async def body(ex: Any) -> dict[str, Any]:
             attempt = uuid.uuid4().hex
-            ledger.append(
-                {
-                    "attempt": attempt,
-                    "kind": "invite",
-                    "recipient": outreach.recipient_key(username),
-                    "status": "attempted",
-                    "started_at": datetime.now()
-                    .astimezone()
-                    .isoformat(timespec="seconds"),
-                }
+            row = {
+                "attempt": attempt,
+                "kind": "invite",
+                "recipient": outreach.recipient_key(username),
+                "status": "attempted",
+                "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            }
+            refused = _book_attempt(
+                ledger,
+                "invite",
+                row,
+                tool="connect_guarded",
+                duplicate=lambda: ledger.already_contacted("invite", username, None),
             )
+            if refused:
+                return {"recipient": username, **refused}
             try:
                 res = await ex.connect_with_person(username, note=note)
             except BaseException:
@@ -762,7 +853,8 @@ def register_mivia_tools(
                 "already_connected": "skipped",
                 "follow_only": "not_sent",
                 "send_failed": "unknown",
-            }.get(raw, "not_sent")
+                # Anything unrecognised may have sent: blocking, not retry-safe.
+            }.get(raw, "unknown")
             ledger.append({"attempt": attempt, "status": status, "detail": raw})
             return {
                 "recipient": username,
