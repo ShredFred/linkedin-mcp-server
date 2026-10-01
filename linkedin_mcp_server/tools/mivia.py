@@ -35,13 +35,13 @@ from linkedin_mcp_server.core.exceptions import (
 from linkedin_mcp_server.mivia_message_checks import check_message
 from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_error
 from linkedin_mcp_server.error_handler import raise_tool_error
-from linkedin_mcp_server.scraping.contracts import refuse_an_invalid_message
-from linkedin_mcp_server.scraping.identifiers import normalize_person_identifier
-from linkedin_mcp_server.scraping.mivia_network import (
+from linkedin_mcp_server.linkedin.contracts import refuse_an_invalid_message
+from linkedin_mcp_server.linkedin.identifiers import normalize_person_identifier
+from linkedin_mcp_server.linkedin.mivia_network import (
     MiviaNetworkReader,
     project_attendees,
 )
-from linkedin_mcp_server.scraping.mivia_post import MiviaPostComposer
+from linkedin_mcp_server.linkedin.mivia_post import MiviaPostComposer
 
 logger = logging.getLogger(__name__)
 
@@ -355,7 +355,7 @@ def register_mivia_tools(
         timeout=tool_timeout,
         title="List Connections",
         annotations={"readOnlyHint": True, "openWorldHint": True},
-        tags={TAG, "network", "scraping"},
+        tags={TAG, "network"},
     )
     async def list_connections(
         ctx: Context,
@@ -389,7 +389,7 @@ def register_mivia_tools(
         timeout=tool_timeout,
         title="Get Event Attendees",
         annotations={"readOnlyHint": True, "openWorldHint": True},
-        tags={TAG, "network", "search", "scraping"},
+        tags={TAG, "network", "search"},
     )
     async def get_event_attendees(
         event_id: str,
@@ -428,7 +428,7 @@ def register_mivia_tools(
             return refusal
 
         async def body(ex: Any) -> dict[str, Any]:
-            from linkedin_mcp_server.scraping.mivia_network import SearchLimitReached
+            from linkedin_mcp_server.linkedin.mivia_network import SearchLimitReached
 
             try:
                 raw = await _network(ex).get_event_attendees(
@@ -448,7 +448,7 @@ def register_mivia_tools(
         timeout=tool_timeout,
         title="Get Event Attendee Count",
         annotations={"readOnlyHint": True, "openWorldHint": True},
-        tags={TAG, "network", "scraping"},
+        tags={TAG, "network"},
     )
     async def get_event_attendee_count(event_id: str, ctx: Context) -> dict[str, Any]:
         """
@@ -474,7 +474,7 @@ def register_mivia_tools(
         timeout=tool_timeout,
         title="Get Event Status",
         annotations={"readOnlyHint": True, "openWorldHint": True},
-        tags={TAG, "network", "scraping"},
+        tags={TAG, "network"},
     )
     async def get_event_status(event_id: str, ctx: Context) -> dict[str, Any]:
         """
@@ -503,7 +503,7 @@ def register_mivia_tools(
         timeout=tool_timeout,
         title="List Sent Invitations",
         annotations={"readOnlyHint": True, "openWorldHint": True},
-        tags={TAG, "network", "scraping"},
+        tags={TAG, "network"},
     )
     async def list_sent_invitations(
         ctx: Context,
@@ -910,7 +910,7 @@ def register_mivia_tools(
         refusal = _pace("page_read", pages, tool="outreach_selftest")
         if refusal:
             return refusal
-        from linkedin_mcp_server.scraping.mivia_selftest import (
+        from linkedin_mcp_server.linkedin.mivia_selftest import (
             outreach_selftest as run_selftest,
         )
 

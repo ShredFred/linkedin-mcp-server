@@ -21,9 +21,9 @@ from pydantic import Field
 
 from linkedin_mcp_server import mivia_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
-from linkedin_mcp_server.scraping.mivia_actions import MiviaActions, parse_group_id
-from linkedin_mcp_server.scraping.mivia_events import MiviaEventFinder, event_summary
-from linkedin_mcp_server.scraping.mivia_engagement import (
+from linkedin_mcp_server.linkedin.mivia_actions import MiviaActions, parse_group_id
+from linkedin_mcp_server.linkedin.mivia_events import MiviaEventFinder, event_summary
+from linkedin_mcp_server.linkedin.mivia_engagement import (
     MiviaEngagementReader,
     SeenStore,
     engager_key,
@@ -59,7 +59,7 @@ def register_mivia_stage2_tools(
         timeout=tool_timeout,
         title="Get Post Engagers",
         annotations={"readOnlyHint": True, "openWorldHint": True},
-        tags={TAG, "post", "scraping"},
+        tags={TAG, "post"},
     )
     async def get_post_engagers(
         post_url: str,
@@ -156,7 +156,7 @@ def register_mivia_stage2_tools(
         timeout=tool_timeout,
         title="Get Post Analytics",
         annotations={"readOnlyHint": True, "openWorldHint": True},
-        tags={TAG, "post", "scraping"},
+        tags={TAG, "post"},
     )
     async def get_post_analytics(
         post_urls: list[str],
@@ -392,7 +392,7 @@ def register_mivia_stage2_tools(
         timeout=BATCH_TIMEOUT_SECONDS,
         title="Follow Up List",
         annotations={"readOnlyHint": True, "openWorldHint": True},
-        tags={TAG, "messaging", "scraping"},
+        tags={TAG, "messaging"},
     )
     async def follow_up_list(
         ctx: Context,
@@ -537,7 +537,7 @@ def register_mivia_stage2_tools(
         timeout=tool_timeout,
         title="Get Profile Viewers",
         annotations={"readOnlyHint": True, "openWorldHint": True},
-        tags={TAG, "network", "scraping"},
+        tags={TAG, "network"},
     )
     async def get_profile_viewers(
         ctx: Context,
@@ -600,6 +600,7 @@ def register_mivia_stage2_tools(
         activity_id = parse_activity_id(post_url)
         ledger = outreach.Ledger.default()
         sha = outreach.text_sha(text)
+
         # Any attempt that may have posted blocks the same text again: an
         # attempt row without outcome counts as posted (repeated text is a
         # restriction trigger).
@@ -674,7 +675,7 @@ def register_mivia_stage2_tools(
         timeout=BATCH_TIMEOUT_SECONDS,
         title="Job Watch",
         annotations={"readOnlyHint": True, "openWorldHint": True},
-        tags={TAG, "job", "scraping"},
+        tags={TAG, "job"},
     )
     async def job_watch(
         ctx: Context,
@@ -775,7 +776,7 @@ def register_mivia_stage2_tools(
         timeout=tool_timeout,
         title="List Groups",
         annotations={"readOnlyHint": True, "openWorldHint": True},
-        tags={TAG, "network", "scraping"},
+        tags={TAG, "network"},
     )
     async def list_groups(ctx: Context) -> dict[str, Any]:
         """The account's LinkedIn groups with id, name and member count."""
@@ -788,7 +789,7 @@ def register_mivia_stage2_tools(
         timeout=tool_timeout,
         title="Get Group Members",
         annotations={"readOnlyHint": True, "openWorldHint": True},
-        tags={TAG, "network", "scraping"},
+        tags={TAG, "network"},
     )
     async def get_group_members(
         group: str,
@@ -816,7 +817,7 @@ def register_mivia_stage2_tools(
         timeout=BATCH_TIMEOUT_SECONDS,
         title="Find Events",
         annotations={"readOnlyHint": True, "openWorldHint": True},
-        tags={TAG, "search", "scraping"},
+        tags={TAG, "search"},
     )
     async def find_events(
         ctx: Context,
@@ -877,7 +878,7 @@ def register_mivia_stage2_tools(
         timeout=tool_timeout,
         title="Search Events",
         annotations={"readOnlyHint": True, "openWorldHint": True},
-        tags={TAG, "search", "scraping"},
+        tags={TAG, "search"},
     )
     async def search_events(
         ctx: Context, keywords: str, limit: int = 10
@@ -908,7 +909,7 @@ def register_mivia_stage2_tools(
         timeout=tool_timeout,
         title="Get Company Events",
         annotations={"readOnlyHint": True, "openWorldHint": True},
-        tags={TAG, "company", "scraping"},
+        tags={TAG, "company"},
     )
     async def get_company_events(
         ctx: Context, company_slug: str, include_past: bool = False
@@ -936,7 +937,7 @@ def register_mivia_stage2_tools(
         timeout=tool_timeout,
         title="Get Page Followers",
         annotations={"readOnlyHint": True, "openWorldHint": True},
-        tags={TAG, "network", "scraping"},
+        tags={TAG, "network"},
     )
     async def get_page_followers(
         page_id: str,

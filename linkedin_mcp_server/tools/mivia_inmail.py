@@ -18,11 +18,11 @@ from fastmcp import Context, FastMCP
 from linkedin_mcp_server import mivia_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.mivia_message_checks import check_message
-from linkedin_mcp_server.scraping.contracts import (
+from linkedin_mcp_server.linkedin.contracts import (
     is_invisible_control,
     refuse_an_invalid_message,
 )
-from linkedin_mcp_server.scraping.mivia_inmail import (
+from linkedin_mcp_server.linkedin.mivia_inmail import (
     MiviaInmail,
     canon,
     pick_own_message,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from linkedin_mcp_server.scraping.mivia_events import (
+from linkedin_mcp_server.linkedin.mivia_events import (
     _DATE_RE,
     attendee_count,
     event_id,
@@ -83,7 +83,7 @@ def test_urls():
 
 
 def test_current_position_single_and_grouped():
-    from linkedin_mcp_server.scraping.mivia_events import parse_current_position
+    from linkedin_mcp_server.linkedin.mivia_events import parse_current_position
 
     single = {
         "lines": [
@@ -145,7 +145,7 @@ def test_follower_lines():
 
 
 def test_event_summary_drops_person_names_and_extra_fields():
-    from linkedin_mcp_server.scraping.mivia_events import event_summary
+    from linkedin_mcp_server.linkedin.mivia_events import event_summary
 
     lines = [
         "HK Heat Treatment Congress",
@@ -190,7 +190,7 @@ def test_parse_event_card_skips_result_counter():
 
 
 def test_place_facts_from_cards():
-    from linkedin_mcp_server.scraping.mivia_events import event_summary, place_facts
+    from linkedin_mcp_server.linkedin.mivia_events import event_summary, place_facts
 
     card = parse_event_card(
         [
@@ -219,7 +219,7 @@ def _card_fixtures():
     import json
     from pathlib import Path
 
-    p = Path(__file__).parent / "fixtures" / "scraping" / "mivia_event_cards.json"
+    p = Path(__file__).parent / "fixtures" / "linkedin" / "mivia_event_cards.json"
     return json.loads(p.read_text(encoding="utf-8"))
 
 

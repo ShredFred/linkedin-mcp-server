@@ -6,17 +6,26 @@ recipient because the top-card page URL now carries this query.
 
 import pytest
 
-from linkedin_mcp_server.scraping import message_sender as ms
+from linkedin_mcp_server.linkedin import message_sender as ms
 
 
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
-        ("https://www.linkedin.com/in/frederikstadler/?isSelfProfile=false", "/in/frederikstadler/"),
+        (
+            "https://www.linkedin.com/in/frederikstadler/?isSelfProfile=false",
+            "/in/frederikstadler/",
+        ),
         ("https://www.linkedin.com/in/frederikstadler/", "/in/frederikstadler/"),
         ("https://www.linkedin.com/in/frederikstadler/?isSelfProfile=true", None),
-        ("https://www.linkedin.com/in/frederikstadler/?isSelfProfile=false&trk=x", "/in/frederikstadler/"),
-        ("https://www.linkedin.com/in/frederikstadler/?trk=profile", "/in/frederikstadler/"),
+        (
+            "https://www.linkedin.com/in/frederikstadler/?isSelfProfile=false&trk=x",
+            "/in/frederikstadler/",
+        ),
+        (
+            "https://www.linkedin.com/in/frederikstadler/?trk=profile",
+            "/in/frederikstadler/",
+        ),
         ("https://www.linkedin.com/in/frederikstadler/?miniProfileUrn=x", None),
         ("https://www.linkedin.com/in/frederikstadler/edit/?isSelfProfile=false", None),
     ],
@@ -33,7 +42,8 @@ def test_current_compose_href_resolves_one_recipient():
     )
     assert (
         ms._profile_urn_from_compose_url(
-            href, base="https://www.linkedin.com/in/frederikstadler/?isSelfProfile=false"
+            href,
+            base="https://www.linkedin.com/in/frederikstadler/?isSelfProfile=false",
         )
         == "ACoAAtest123"
     )

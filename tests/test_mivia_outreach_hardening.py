@@ -21,15 +21,15 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from patchright.async_api import Page, async_playwright
 
-from linkedin_mcp_server.scraping import message_sender as ms
-from linkedin_mcp_server.scraping import mivia_urls
-from linkedin_mcp_server.scraping.connection import (
+from linkedin_mcp_server.linkedin import message_sender as ms
+from linkedin_mcp_server.linkedin import mivia_urls
+from linkedin_mcp_server.linkedin.connection import (
     ActionSignals,
     detect_connection_state,
 )
-from linkedin_mcp_server.scraping.connection_actions import ConnectionActions
-from linkedin_mcp_server.scraping.navigation import PageNavigator
-from linkedin_mcp_server.scraping.session import ScrapingSession
+from linkedin_mcp_server.linkedin.connection_actions import ConnectionActions
+from linkedin_mcp_server.linkedin.navigation import PageNavigator
+from linkedin_mcp_server.linkedin.session import PageSession
 
 USER = "dieter-könig-1b0000000"
 USER_HREF = "dieter-k%C3%B6nig-1b0000000"
@@ -209,7 +209,7 @@ def _dom_actions(page: Any) -> ConnectionActions:
     async def unreachable(_username: str) -> dict[str, Any]:
         raise AssertionError("not read")
 
-    session = ScrapingSession(cast(Page, page))
+    session = PageSession(cast(Page, page))
     return ConnectionActions(session, PageNavigator(session), unreachable)
 
 
@@ -226,7 +226,7 @@ async def test_recorded_2026_top_cards(dom_page, name: str) -> None:
 @pytest.mark.browser_dom
 @pytest.mark.xdist_group("browser_runtime")
 async def test_more_opener_found_without_message_anchor(dom_page) -> None:
-    from linkedin_mcp_server.scraping.connection_actions import OPEN_MORE_BUTTON_JS
+    from linkedin_mcp_server.linkedin.connection_actions import OPEN_MORE_BUTTON_JS
 
     await dom_page.set_content(_page(_top(_TOP_CONNECT, _SALES_NAV, _MORE)) + "")
     await dom_page.evaluate(
@@ -264,7 +264,7 @@ def _flow_actions(mock_page: Any, texts: list[str]) -> ConnectionActions:
         if len(pages) > 1
         else AsyncMock(return_value=pages[0])
     )
-    session = ScrapingSession(mock_page)
+    session = PageSession(mock_page)
     return ConnectionActions(session, PageNavigator(session), read)
 
 
@@ -379,10 +379,10 @@ def test_pending_key_beats_a_stale_invite_anchor() -> None:
 async def _selftest(
     mock_page: Any, page_url: str, resolution: Any, signals: ActionSignals
 ) -> dict[str, Any]:
-    from linkedin_mcp_server.scraping import mivia_selftest
+    from linkedin_mcp_server.linkedin import mivia_selftest
 
     mock_page.url = page_url
-    session = ScrapingSession(mock_page)
+    session = PageSession(mock_page)
     with (
         patch.object(PageNavigator, "_navigate_to_page", new_callable=AsyncMock),
         patch.object(
@@ -485,7 +485,7 @@ async def test_stale_connect_with_pending_in_menu_sends_nothing(mock_page) -> No
 @pytest.mark.browser_dom
 @pytest.mark.xdist_group("browser_runtime")
 async def test_menu_pending_peek_reads_only_the_menu(dom_page) -> None:
-    from linkedin_mcp_server.scraping.connection_actions import MENU_PENDING_JS
+    from linkedin_mcp_server.linkedin.connection_actions import MENU_PENDING_JS
 
     await dom_page.set_content(_page(_top(_COMPOSE, _MORE) + _OTHER_CONNECT))
     assert await dom_page.evaluate(MENU_PENDING_JS) is False
@@ -522,7 +522,7 @@ async def test_send_refuses_a_redirect_to_another_slug(mock_page) -> None:
             "S",
         ),
     )
-    session = ScrapingSession(mock_page)
+    session = PageSession(mock_page)
     sender = ms.MessageSender(session, PageNavigator(session))
     with (
         patch.object(PageNavigator, "_navigate_to_page", new_callable=AsyncMock),

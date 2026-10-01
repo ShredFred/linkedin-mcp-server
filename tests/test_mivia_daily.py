@@ -88,7 +88,14 @@ def test_event_scout_spreads_over_days_within_the_search_budget(tmp_path, monkey
     c.events = Finder()
     # Only 2 searches left today.
     ledger = outreach.Ledger(tmp_path / "ledger.jsonl")
-    ledger.append({"kind": "pace", "action": "search", "count": outreach.PACE_BUDGETS["search"]["day"] - 2, "tool": "t"})
+    ledger.append(
+        {
+            "kind": "pace",
+            "action": "search",
+            "count": outreach.PACE_BUDGETS["search"]["day"] - 2,
+            "tool": "t",
+        }
+    )
     first = asyncio.run(c.event_scout())
     assert first["deferred"] and first["progress"] == "2/5"
     # Next day: budget again (simulate by clearing the ledger).
@@ -284,10 +291,16 @@ def test_harvest_reads_only_ordered_pages_within_budget(tmp_path, monkeypatch):
     class Actions:
         async def get_event_attendees(self, eid, page, pages):
             calls.append((eid, page, pages))
-            people = [{"slug": f"{eid[-2:]}-{page}-{i}", "name": "X"} for i in range(pages)]
+            people = [
+                {"slug": f"{eid[-2:]}-{page}-{i}", "name": "X"} for i in range(pages)
+            ]
             people.append({"slug": "me", "action": "self"})
-            return {"attendees": people, "pages_read": pages, "complete": False,
-                    "next_page": page + pages}
+            return {
+                "attendees": people,
+                "pages_read": pages,
+                "complete": False,
+                "next_page": page + pages,
+            }
 
     c.actions = Actions()
     res = asyncio.run(c.harvest())
@@ -299,7 +312,14 @@ def test_harvest_reads_only_ordered_pages_within_budget(tmp_path, monkeypatch):
     assert res[2]["last_page"] == 1
     # Budget spent: nothing is read.
     ledger = outreach.Ledger(tmp_path / "ledger.jsonl")
-    ledger.append({"kind": "pace", "action": "search", "count": outreach.PACE_BUDGETS["search"]["day"], "tool": "t"})
+    ledger.append(
+        {
+            "kind": "pace",
+            "action": "search",
+            "count": outreach.PACE_BUDGETS["search"]["day"],
+            "tool": "t",
+        }
+    )
     calls.clear()
     spent = asyncio.run(c.harvest())
     assert [r for r in spent if "attendees" in r] == []
@@ -320,20 +340,33 @@ def _harvest_collector(tmp_path, monkeypatch, orders, max_pages=10):
         _mivia_session = Session()
         _mivia_navigator = object()
 
-    cfg = {"harvest": {"enabled": True, "max_pages": max_pages, "search_reserve": 0, "orders": orders}}
+    cfg = {
+        "harvest": {
+            "enabled": True,
+            "max_pages": max_pages,
+            "search_reserve": 0,
+            "orders": orders,
+        }
+    }
     return mivia_daily.Collector(Ex(), cfg, tmp_path)
 
 
 def test_harvest_keeps_pages_read_before_a_failure(tmp_path, monkeypatch):
     eid = "7286622235937701888"
-    c = _harvest_collector(tmp_path, monkeypatch, [{"event_id": eid, "start_page": 1, "pages": 4}])
+    c = _harvest_collector(
+        tmp_path, monkeypatch, [{"event_id": eid, "start_page": 1, "pages": 4}]
+    )
 
     class Actions:
         async def get_event_attendees(self, e, page, pages):
             if page == 3:
                 raise TimeoutError("page did not load")
-            return {"attendees": [{"slug": f"p{page}", "name": "X"}], "pages_read": 1,
-                    "complete": False, "next_page": page + 1}
+            return {
+                "attendees": [{"slug": f"p{page}", "name": "X"}],
+                "pages_read": 1,
+                "complete": False,
+                "next_page": page + 1,
+            }
 
     c.actions = Actions()
     (row,) = asyncio.run(c.harvest())
@@ -344,11 +377,17 @@ def test_harvest_keeps_pages_read_before_a_failure(tmp_path, monkeypatch):
     assert c.pacer.state("search")["today"] == 3
 
 
-def test_harvest_pace_limit_mid_run_keeps_partial_and_defers_rest(tmp_path, monkeypatch):
+def test_harvest_pace_limit_mid_run_keeps_partial_and_defers_rest(
+    tmp_path, monkeypatch
+):
     from linkedin_mcp_server import mivia_outreach as outreach
 
     a, b = "7286622235937701888", "7457346711301214208"
-    c = _harvest_collector(tmp_path, monkeypatch, [{"event_id": a, "pages": 3}, {"event_id": b, "pages": 2}])
+    c = _harvest_collector(
+        tmp_path,
+        monkeypatch,
+        [{"event_id": a, "pages": 3}, {"event_id": b, "pages": 2}],
+    )
     taken = []
     real_take = c._take
 
@@ -362,37 +401,60 @@ def test_harvest_pace_limit_mid_run_keeps_partial_and_defers_rest(tmp_path, monk
 
     class Actions:
         async def get_event_attendees(self, e, page, pages):
-            return {"attendees": [{"slug": f"{e[-1]}{page}", "name": "X"}], "pages_read": 1,
-                    "complete": False, "next_page": page + 1}
+            return {
+                "attendees": [{"slug": f"{e[-1]}{page}", "name": "X"}],
+                "pages_read": 1,
+                "complete": False,
+                "next_page": page + 1,
+            }
 
     c.actions = Actions()
     res = asyncio.run(c.harvest())
     assert res[0]["partial"] == "search_budget_spent" and res[0]["last_page"] == 1
     assert len(res[0]["attendees"]) == 1
-    assert res[1] == {"event_id": b, "register_id": None, "deferred": "search_budget_spent"}
+    assert res[1] == {
+        "event_id": b,
+        "register_id": None,
+        "deferred": "search_budget_spent",
+    }
 
 
-def test_monthly_search_limit_stops_harvest_without_marking_complete(tmp_path, monkeypatch):
-    from linkedin_mcp_server.scraping.mivia_network import SearchLimitReached, is_search_limit_text
+def test_monthly_search_limit_stops_harvest_without_marking_complete(
+    tmp_path, monkeypatch
+):
+    from linkedin_mcp_server.linkedin.mivia_network import (
+        SearchLimitReached,
+        is_search_limit_text,
+    )
 
     assert is_search_limit_text("You've reached the monthly limit for profile searches")
     assert is_search_limit_text("Sie haben das monatliche Limit für Suchen erreicht")
     assert not is_search_limit_text("Keine Ergebnisse gefunden")
     a, b = "7286622235937701888", "7457346711301214208"
-    c = _harvest_collector(tmp_path, monkeypatch, [{"event_id": a, "pages": 3}, {"event_id": b, "pages": 2}])
+    c = _harvest_collector(
+        tmp_path,
+        monkeypatch,
+        [{"event_id": a, "pages": 3}, {"event_id": b, "pages": 2}],
+    )
 
     class Actions:
         async def get_event_attendees(self, e, page, pages):
             if page == 2:
                 raise SearchLimitReached("limit")
-            return {"attendees": [{"slug": "p1", "name": "X"}], "pages_read": 1,
-                    "complete": False, "next_page": page + 1}
+            return {
+                "attendees": [{"slug": "p1", "name": "X"}],
+                "pages_read": 1,
+                "complete": False,
+                "next_page": page + 1,
+            }
 
     c.actions = Actions()
     res = asyncio.run(c.harvest())
     assert res[0]["partial"] == "monthly_search_limit" and res[0]["complete"] is False
     assert res[0]["last_page"] == 1
-    assert res[1]["deferred"] == "search_budget_spent"  # rest of the run is not attempted
+    assert (
+        res[1]["deferred"] == "search_budget_spent"
+    )  # rest of the run is not attempted
 
 
 def test_limit_hit_blocks_searches_until_the_monthly_reset(tmp_path, monkeypatch):
@@ -414,21 +476,34 @@ def test_limit_hit_blocks_searches_until_the_monthly_reset(tmp_path, monkeypatch
     # A hit from last month no longer blocks.
     last_month = outreach.month_start_pst() - timedelta(days=2)
     (tmp_path / "ledger.jsonl").write_text(
-        json.dumps({"kind": "limit_hit", "action": "search", "at": last_month.isoformat()}) + "\n",
-        encoding="utf-8")
+        json.dumps(
+            {"kind": "limit_hit", "action": "search", "at": last_month.isoformat()}
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     assert pacer.state("search")["left"] > 0
-    assert outreach.month_start_pst(datetime(2026, 10, 1, 7, 30, tzinfo=timezone.utc)).month == 9
+    assert (
+        outreach.month_start_pst(
+            datetime(2026, 10, 1, 7, 30, tzinfo=timezone.utc)
+        ).month
+        == 9
+    )
 
 
-def test_harvest_after_a_limit_hit_defers_with_the_monthly_reason(tmp_path, monkeypatch):
-    c = _harvest_collector(tmp_path, monkeypatch, [{"event_id": "7286622235937701888", "pages": 2}])
+def test_harvest_after_a_limit_hit_defers_with_the_monthly_reason(
+    tmp_path, monkeypatch
+):
+    c = _harvest_collector(
+        tmp_path, monkeypatch, [{"event_id": "7286622235937701888", "pages": 2}]
+    )
     c.pacer.record_limit_hit("search")
     (row,) = asyncio.run(c.harvest())
     assert row["deferred"] == "monthly_search_limit"
 
 
 def test_any_part_hitting_the_monthly_limit_sets_the_pacer_lock(tmp_path, monkeypatch):
-    from linkedin_mcp_server.scraping.mivia_network import SearchLimitReached
+    from linkedin_mcp_server.linkedin.mivia_network import SearchLimitReached
 
     c = _harvest_collector(tmp_path, monkeypatch, [])
 
@@ -437,4 +512,7 @@ def test_any_part_hitting_the_monthly_limit_sets_the_pacer_lock(tmp_path, monkey
 
     assert asyncio.run(c._part("radar", radar())) is None
     assert c.errors[-1]["error"] == "monthly_search_limit"
-    assert c.pacer.state("search")["left"] == 0 and c.pacer.state("search")["month_limit_hit"]
+    assert (
+        c.pacer.state("search")["left"] == 0
+        and c.pacer.state("search")["month_limit_hit"]
+    )

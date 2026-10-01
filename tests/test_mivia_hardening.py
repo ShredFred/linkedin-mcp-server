@@ -707,7 +707,7 @@ class _Page:
 
 
 def _fake_inmail_reader(monkeypatch):
-    import linkedin_mcp_server.scraping.mivia_inmail as sm
+    import linkedin_mcp_server.linkedin.mivia_inmail as sm
 
     page = _Page()
     reader = sm.MiviaInmail.__new__(sm.MiviaInmail)
@@ -799,7 +799,7 @@ def test_stale_lock_unlink_permission_error_keeps_waiting(tmp_path, monkeypatch)
 def test_edit_landed_refuses_truncated_old_text():
     # Fix 1: the old text must not verify a new text that is only its start;
     # only LinkedIn's edit marker is ignored.
-    from linkedin_mcp_server.scraping.mivia_inmail import edit_landed
+    from linkedin_mcp_server.linkedin.mivia_inmail import edit_landed
 
     target = {"index": 0, "own": True}
     old = [{"index": 0, "own": True, "text": "Danke für Ihr Interesse"}]
@@ -945,7 +945,7 @@ def test_comment_duplicate_rechecked_under_lock(monkeypatch):
 
 def test_edit_menu_item_selectors_are_visible_only():
     # Fix 4
-    from linkedin_mcp_server.scraping import mivia_inmail as sm
+    from linkedin_mcp_server.linkedin import mivia_inmail as sm
 
     for entry in sm._EDIT_MENU_ITEM:
         css = entry[0] if isinstance(entry, tuple) else entry
@@ -953,7 +953,7 @@ def test_edit_menu_item_selectors_are_visible_only():
 
 
 def test_edit_without_visible_menu_item_is_mismatch_not_click(monkeypatch):
-    from linkedin_mcp_server.scraping import mivia_inmail as sm
+    from linkedin_mcp_server.linkedin import mivia_inmail as sm
 
     reader = sm.MiviaInmail.__new__(sm.MiviaInmail)
     pressed = []
@@ -985,7 +985,7 @@ def test_edit_without_visible_menu_item_is_mismatch_not_click(monkeypatch):
 
 def test_edit_marker_is_stripped_and_unchanged(monkeypatch):
     # Fix 5
-    from linkedin_mcp_server.scraping.mivia_inmail import (
+    from linkedin_mcp_server.linkedin.mivia_inmail import (
         mark_edited,
         pick_own_message,
         strip_edit_marker,
@@ -1019,7 +1019,7 @@ def test_edit_marker_is_stripped_and_unchanged(monkeypatch):
 
 
 def test_edit_prefill_ignores_marker(monkeypatch):
-    from linkedin_mcp_server.scraping import mivia_inmail as sm
+    from linkedin_mcp_server.linkedin import mivia_inmail as sm
 
     reader = sm.MiviaInmail.__new__(sm.MiviaInmail)
 
@@ -1133,11 +1133,9 @@ def test_inmail_lengths_in_utf16_units():
     assert precheck_inmail("dieter", "S", long_body)["status"] == "body_too_long"
 
 
-@pytest.mark.parametrize(
-    "ch", ["\x85", "\x9f", " ", " ", "​", "‎", "‏", "﻿"]
-)
+@pytest.mark.parametrize("ch", ["\x85", "\x9f", " ", " ", "​", "‎", "‏", "﻿"])
 def test_invisible_controls_refused(ch):
-    from linkedin_mcp_server.scraping.contracts import refuse_an_invalid_message
+    from linkedin_mcp_server.linkedin.contracts import refuse_an_invalid_message
     from linkedin_mcp_server.tools.mivia_inmail import precheck_inmail
 
     assert precheck_inmail("dieter", f"Betreff{ch}", "B")["status"] == "invalid_subject"
@@ -1146,8 +1144,8 @@ def test_invisible_controls_refused(ch):
 
 
 def test_legit_texts_still_pass():
-    from linkedin_mcp_server.scraping.contracts import refuse_an_invalid_message
-    from linkedin_mcp_server.scraping.mivia_inmail import canon
+    from linkedin_mcp_server.linkedin.contracts import refuse_an_invalid_message
+    from linkedin_mcp_server.linkedin.mivia_inmail import canon
 
     for text in ["Grüße aus Köln, Straße", "Top 👍🏽 👨‍👩‍👧 ❤️", "Zeile 1\nZeile 2"]:
         assert refuse_an_invalid_message("dieter", text) is None

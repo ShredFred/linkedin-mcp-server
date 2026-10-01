@@ -35,14 +35,14 @@ from pathlib import Path
 from typing import Any
 
 from linkedin_mcp_server import mivia_outreach as outreach
-from linkedin_mcp_server.scraping.mivia_engagement import (
+from linkedin_mcp_server.linkedin.mivia_engagement import (
     MiviaEngagementReader,
     SeenStore,
     engager_key,
 )
-from linkedin_mcp_server.scraping.mivia_actions import MiviaActions
-from linkedin_mcp_server.scraping.mivia_events import MiviaEventFinder
-from linkedin_mcp_server.scraping.mivia_network import (
+from linkedin_mcp_server.linkedin.mivia_actions import MiviaActions
+from linkedin_mcp_server.linkedin.mivia_events import MiviaEventFinder
+from linkedin_mcp_server.linkedin.mivia_network import (
     read_event_count,
     SearchLimitReached,
 )
@@ -722,7 +722,7 @@ async def _main(args: argparse.Namespace) -> int:
         get_or_create_browser,
         set_headless,
     )
-    from linkedin_mcp_server.scraping.extractor import LinkedInExtractor
+    from linkedin_mcp_server.linkedin.extractor import LinkedInExtractor
 
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
     out_path = Path(args.out)

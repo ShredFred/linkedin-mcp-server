@@ -50,7 +50,7 @@ def test_daily_event_waits_for_the_late_attendee_line(tmp_path, monkeypatch):
 
 def test_daily_event_gives_up_after_the_timeout(tmp_path, monkeypatch):
     monkeypatch.setenv("MIVIA_LINKEDIN_LEDGER", str(tmp_path / "ledger.jsonl"))
-    from linkedin_mcp_server.scraping import mivia_network
+    from linkedin_mcp_server.linkedin import mivia_network
 
     class Page:
         async def evaluate(self, *_a):

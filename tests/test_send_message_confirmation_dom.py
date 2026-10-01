@@ -16,18 +16,18 @@ import anyio
 import pytest
 from patchright.async_api import async_playwright
 
-from linkedin_mcp_server.scraping.message_sender import (
+from linkedin_mcp_server.linkedin.message_sender import (
     MessageSender,
     _ProfileMessageTarget,
     _ProfileMessageTargetResolution,
 )
-from linkedin_mcp_server.scraping.navigation import PageNavigator
-from linkedin_mcp_server.scraping.profile_page import ProfilePageReader
-from linkedin_mcp_server.scraping.session import ScrapingSession
+from linkedin_mcp_server.linkedin.navigation import PageNavigator
+from linkedin_mcp_server.linkedin.profile_page import ProfilePageReader
+from linkedin_mcp_server.linkedin.session import PageSession
 
 
 def _sender(page) -> MessageSender:
-    session = ScrapingSession(page)
+    session = PageSession(page)
     return MessageSender(session, PageNavigator(session))
 
 
@@ -468,7 +468,7 @@ async def send(
             return_value=_ProfileMessageTargetResolution("resolved", TARGET),
         ),
         patch(
-            "linkedin_mcp_server.scraping.message_sender._message_page_url_is_safe",
+            "linkedin_mcp_server.linkedin.message_sender._message_page_url_is_safe",
             return_value=True,
         ),
     ):
@@ -533,7 +533,7 @@ class TestProfileMessageTargetDom:
         # The reader borrows the facade's top-card read until the message
         # sender owns it, so wiring it here is what the facade does.
         reader = ProfilePageReader(
-            ScrapingSession(dom_page), sender._read_profile_message_target
+            PageSession(dom_page), sender._read_profile_message_target
         )
 
         resolution = await read_profile_target(dom_page, html)
@@ -1461,7 +1461,7 @@ class TestSendConfirmationDom:
                 return_value=_ProfileMessageTargetResolution("resolved", TARGET),
             ),
             patch(
-                "linkedin_mcp_server.scraping.message_sender._message_page_url_is_safe",
+                "linkedin_mcp_server.linkedin.message_sender._message_page_url_is_safe",
                 return_value=True,
             ),
             patch.object(sender, "_resolve_message_owner", side_effect=capture_owner),

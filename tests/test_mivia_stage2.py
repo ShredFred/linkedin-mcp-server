@@ -11,12 +11,12 @@ from datetime import datetime, timedelta
 import pytest
 
 from linkedin_mcp_server import mivia_outreach as outreach
-from linkedin_mcp_server.scraping.mivia_actions import (
+from linkedin_mcp_server.linkedin.mivia_actions import (
     group_member_lines,
     parse_group_id,
     sent_age_days,
 )
-from linkedin_mcp_server.scraping.mivia_engagement import (
+from linkedin_mcp_server.linkedin.mivia_engagement import (
     SeenStore,
     parse_activity_id,
     parse_person_ref,
@@ -25,7 +25,7 @@ from linkedin_mcp_server.scraping.mivia_engagement import (
     split_comment_lines,
     split_engager_lines,
 )
-from linkedin_mcp_server.scraping.mivia_network import split_person_lines
+from linkedin_mcp_server.linkedin.mivia_network import split_person_lines
 
 
 class TestEngagementParsing:
@@ -201,8 +201,17 @@ class TestPacer:
     def test_booked_kinds_count_and_refuse(self, tmp_path):
         pacer = outreach.Pacer(outreach.Ledger(tmp_path / "l.jsonl"))
         budget = outreach.PACE_BUDGETS["comment"]["day"]
-        for _ in range(budget):
-            pacer.take("comment", tool="t")
+        now = datetime.now().astimezone().isoformat()
+        # Comments are a ledger kind: posted attempt rows spend the budget.
+        for i in range(budget):
+            pacer.ledger.append(
+                {
+                    "attempt": str(i),
+                    "kind": "comment",
+                    "status": "posted",
+                    "started_at": now,
+                }
+            )
         with pytest.raises(outreach.PaceExceeded) as spent:
             pacer.take("comment", tool="t")
         assert spent.value.state["left"] == 0
@@ -230,7 +239,14 @@ class TestPacer:
         monkeypatch.setattr(outreach, "PACE_WRITE_TOTAL_PER_DAY", 3)
         pacer = outreach.Pacer(outreach.Ledger(tmp_path / "l.jsonl"))
         pacer.take("like", 2, tool="t")
-        pacer.take("comment", tool="t")
+        pacer.ledger.append(
+            {
+                "attempt": "c",
+                "kind": "comment",
+                "status": "posted",
+                "started_at": datetime.now().astimezone().isoformat(),
+            }
+        )
         assert pacer.state("event_invite")["left"] == 0
         # Reads are not visible actions and stay open.
         assert pacer.state("page_read")["left"] > 0
@@ -389,7 +405,7 @@ class TestReviewFixes:
         assert parse_post_summary("1.400\nImpressionen")["impressions"] == 1400
 
     def test_idless_engagers_keep_distinct_keys(self):
-        from linkedin_mcp_server.scraping.mivia_engagement import engager_key
+        from linkedin_mcp_server.linkedin.mivia_engagement import engager_key
 
         a = engager_key("reaction", None, "like", name="Anna A")
         b = engager_key("reaction", None, "like", name="Bert B")

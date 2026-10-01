@@ -77,7 +77,9 @@ def check_salutation(text: str, recipient_name: str | None) -> list[dict[str, An
     if not match:
         return []
     greeted = [
-        w for w in re.split(r"[ -]", _fold(match.group(1))) if w and w not in _TITLE_WORDS
+        w
+        for w in re.split(r"[ -]", _fold(match.group(1)))
+        if w and w not in _TITLE_WORDS
     ]
     if not recipient_name:
         return [{"code": "salutation_unverifiable", "greeted": match.group(1)}]

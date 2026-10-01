@@ -1,5 +1,5 @@
 """
-LinkedIn job scraping tools with search and detail extraction.
+LinkedIn job reading tools with search and detail extraction.
 
 Uses innerText extraction for resilient job data capture.
 """
@@ -15,7 +15,7 @@ from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.core.exceptions import AuthenticationError
 from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_error
 from linkedin_mcp_server.error_handler import raise_tool_error
-from linkedin_mcp_server.scraping.identifiers import normalize_job_id
+from linkedin_mcp_server.linkedin.identifiers import normalize_job_id
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +54,13 @@ def register_job_tools(
         try:
             job_id = normalize_job_id(job_id)
             extractor = await get_ready_extractor(ctx, tool_name="get_job_details")
-            logger.info("Scraping job: %s", job_id)
+            logger.info("Reading job: %s", job_id)
 
             await ctx.report_progress(
                 progress=0, total=100, message="Reading the job posting"
             )
 
-            result = await extractor.scrape_job(job_id)
+            result = await extractor.read_job(job_id)
 
             await ctx.report_progress(progress=100, total=100, message="Complete")
 

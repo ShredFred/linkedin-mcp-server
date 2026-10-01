@@ -74,7 +74,7 @@ class _Page(_Loc):
 
 
 def _editor(hits, menu=("Bearbeiten",)):
-    from linkedin_mcp_server.scraping.mivia_inmail import MiviaInmail
+    from linkedin_mcp_server.linkedin.mivia_inmail import MiviaInmail
 
     obj = object.__new__(MiviaInmail)
     obj._session = type("S", (), {"page": _Page(hits, list(menu))})()
@@ -167,7 +167,7 @@ class TestFirstMatch:
     def test_order_and_none(self):
         import asyncio
 
-        from linkedin_mcp_server.scraping.mivia_inmail import (
+        from linkedin_mcp_server.linkedin.mivia_inmail import (
             _SN_SEND,
             _SN_SUBJECT,
             first_match,
@@ -227,7 +227,7 @@ class TestMessageChecks:
 
 
 from linkedin_mcp_server import mivia_outreach as outreach  # noqa: E402
-from linkedin_mcp_server.scraping.mivia_inmail import (  # noqa: E402
+from linkedin_mcp_server.linkedin.mivia_inmail import (  # noqa: E402
     parse_credits,
     parse_degree,
     pick_own_message,
@@ -409,7 +409,7 @@ class TestHardening20260930:
         assert precheck_inmail("a", "Hallo Herr König", "Text") is None
 
     def test_edit_landed_only_on_target_index(self):
-        from linkedin_mcp_server.scraping.mivia_inmail import edit_landed
+        from linkedin_mcp_server.linkedin.mivia_inmail import edit_landed
 
         msgs = [
             {"index": 0, "own": True, "text": "Danke und bis bald"},
@@ -424,6 +424,6 @@ class TestHardening20260930:
         )
 
     def test_umlaut_and_nbsp_canon(self):
-        from linkedin_mcp_server.scraping.mivia_inmail import canon
+        from linkedin_mcp_server.linkedin.mivia_inmail import canon
 
         assert canon("Grüße  an  Jörg\n") == "Grüße an Jörg"

@@ -9,8 +9,8 @@ import pytest
 from fastmcp import FastMCP
 
 from linkedin_mcp_server import mivia_outreach as outreach
-from linkedin_mcp_server.scraping.contracts import refuse_an_invalid_message
-from linkedin_mcp_server.scraping.mivia_network import (
+from linkedin_mcp_server.linkedin.contracts import refuse_an_invalid_message
+from linkedin_mcp_server.linkedin.mivia_network import (
     classify_action,
     event_attendees_url,
     parse_connected_date,
@@ -276,38 +276,82 @@ class TestProjectAttendees:
         "next_page": 2,
         "complete": False,
         "attendees": [
-            {"name": "Ich", "slug": "me", "degree": 0, "action": "self",
-             "headline": "x", "location": "y", "profile_urn": "u0", "page": 1},
-            {"name": "A B", "slug": "a-b", "degree": 2, "action": "connect",
-             "headline": "Leiter Labor bei X", "location": "Bayern",
-             "profile_url": "https://www.linkedin.com/in/a-b/", "profile_urn": "u1", "page": 1},
-            {"name": "C D", "slug": "c-d", "degree": 1, "action": "message",
-             "headline": "QS", "location": "Wien", "profile_urn": "u2", "page": 1},
+            {
+                "name": "Ich",
+                "slug": "me",
+                "degree": 0,
+                "action": "self",
+                "headline": "x",
+                "location": "y",
+                "profile_urn": "u0",
+                "page": 1,
+            },
+            {
+                "name": "A B",
+                "slug": "a-b",
+                "degree": 2,
+                "action": "connect",
+                "headline": "Leiter Labor bei X",
+                "location": "Bayern",
+                "profile_url": "https://www.linkedin.com/in/a-b/",
+                "profile_urn": "u1",
+                "page": 1,
+            },
+            {
+                "name": "C D",
+                "slug": "c-d",
+                "degree": 1,
+                "action": "message",
+                "headline": "QS",
+                "location": "Wien",
+                "profile_urn": "u2",
+                "page": 1,
+            },
         ],
     }
 
     def test_minimal_keeps_four_fields_and_drops_self(self):
-        from linkedin_mcp_server.scraping.mivia_network import project_attendees
+        from linkedin_mcp_server.linkedin.mivia_network import project_attendees
 
         out = project_attendees(self.RAW)
         assert out["readable"] is True and out["count"] == 2
-        assert [set(a) for a in out["attendees"]] == [{"slug", "name", "headline", "degree"}] * 2
+        assert [set(a) for a in out["attendees"]] == [
+            {"slug", "name", "headline", "degree"}
+        ] * 2
         assert "profile_urn" not in str(out)
 
     def test_card_and_limit(self):
-        from linkedin_mcp_server.scraping.mivia_network import project_attendees
+        from linkedin_mcp_server.linkedin.mivia_network import project_attendees
 
         out = project_attendees(self.RAW, limit=1, fields="card")
         assert out["count"] == 1 and out["complete"] is False
-        assert set(out["attendees"][0]) == {"slug", "name", "headline", "degree", "location", "action", "page"}
+        assert set(out["attendees"][0]) == {
+            "slug",
+            "name",
+            "headline",
+            "degree",
+            "location",
+            "action",
+            "page",
+        }
 
     def test_empty_first_page_is_not_readable(self):
-        from linkedin_mcp_server.scraping.mivia_network import project_attendees
+        from linkedin_mcp_server.linkedin.mivia_network import project_attendees
 
-        out = project_attendees({"event_id": "1", "start_page": 1, "pages_read": 1,
-                                 "next_page": None, "complete": True, "attendees": []})
+        out = project_attendees(
+            {
+                "event_id": "1",
+                "start_page": 1,
+                "pages_read": 1,
+                "next_page": None,
+                "complete": True,
+                "attendees": [],
+            }
+        )
         assert out["readable"] is False and out["reason"].startswith("empty_first_page")
-        later = project_attendees({"start_page": 3, "pages_read": 1, "complete": True, "attendees": []})
+        later = project_attendees(
+            {"start_page": 3, "pages_read": 1, "complete": True, "attendees": []}
+        )
         assert later["readable"] is True
 
 
@@ -315,10 +359,18 @@ def test_event_attendees_tool_caps_pages_by_limit(monkeypatch):
     import linkedin_mcp_server.tools.mivia as m
 
     taken = []
-    monkeypatch.setattr(m, "_pace", lambda action, count=1, *, tool: taken.append(count) or {"status": "stop"})
+    monkeypatch.setattr(
+        m,
+        "_pace",
+        lambda action, count=1, *, tool: taken.append(count) or {"status": "stop"},
+    )
     mcp = FastMCP("t")
     register_mivia_tools(mcp)
-    res = asyncio.run(mcp.call_tool("get_event_attendees", {"event_id": "7449450258214014977", "limit": 25}))
+    res = asyncio.run(
+        mcp.call_tool(
+            "get_event_attendees", {"event_id": "7449450258214014977", "limit": 25}
+        )
+    )
     assert taken == [3]
     assert "stop" in str(res)
 
@@ -327,16 +379,30 @@ def test_event_attendee_count_tool_charges_one_page_read(monkeypatch):
     import linkedin_mcp_server.tools.mivia as m
 
     taken = []
-    monkeypatch.setattr(m, "_pace", lambda action, count=1, *, tool: taken.append((action, count)) or {"status": "stop"})
+    monkeypatch.setattr(
+        m,
+        "_pace",
+        lambda action, count=1, *, tool: (
+            taken.append((action, count)) or {"status": "stop"}
+        ),
+    )
     mcp = FastMCP("t")
     register_mivia_tools(mcp)
-    res = asyncio.run(mcp.call_tool("get_event_attendee_count", {"event_id": "https://www.linkedin.com/events/7449450258214014977/"}))
+    res = asyncio.run(
+        mcp.call_tool(
+            "get_event_attendee_count",
+            {"event_id": "https://www.linkedin.com/events/7449450258214014977/"},
+        )
+    )
     assert taken == [("page_read", 1)]
     assert "stop" in str(res)
 
 
 def test_event_attendee_count_waits_for_the_late_attendee_line():
-    from linkedin_mcp_server.scraping.mivia_network import EVENT_COUNT_JS, MiviaNetworkReader
+    from linkedin_mcp_server.linkedin.mivia_network import (
+        EVENT_COUNT_JS,
+        MiviaNetworkReader,
+    )
 
     answers = [None, None, 310]
     clock = [0.0]
@@ -362,7 +428,9 @@ def test_event_attendee_count_waits_for_the_late_attendee_line():
         async def _navigate_to_page(self, url):
             assert url == "https://www.linkedin.com/events/7457346711301214208/"
 
-    out = asyncio.run(MiviaNetworkReader(Session(), Nav()).event_attendee_count("7457346711301214208"))
+    out = asyncio.run(
+        MiviaNetworkReader(Session(), Nav()).event_attendee_count("7457346711301214208")
+    )
     assert out == {"event_id": "7457346711301214208", "attendee_count": 310}
 
 
@@ -370,31 +438,71 @@ def test_event_status_tool_charges_one_page_read(monkeypatch):
     import linkedin_mcp_server.tools.mivia as m
 
     taken = []
-    monkeypatch.setattr(m, "_pace", lambda action, count=1, *, tool: taken.append((action, count, tool)) or {"status": "stop"})
+    monkeypatch.setattr(
+        m,
+        "_pace",
+        lambda action, count=1, *, tool: (
+            taken.append((action, count, tool)) or {"status": "stop"}
+        ),
+    )
     mcp = FastMCP("t")
     register_mivia_tools(mcp)
-    res = asyncio.run(mcp.call_tool("get_event_status", {"event_id": "7449450258214014977"}))
+    res = asyncio.run(
+        mcp.call_tool("get_event_status", {"event_id": "7449450258214014977"})
+    )
     assert taken == [("page_read", 1, "get_event_status")]
     assert "stop" in str(res)
 
 
 def test_own_rsvp_from_page_probe():
-    from linkedin_mcp_server.scraping.mivia_network import own_rsvp_from
+    from linkedin_mcp_server.linkedin.mivia_network import own_rsvp_from
 
     assert own_rsvp_from({"networking_tab": True, "attend_button": None}) is True
-    assert own_rsvp_from({"networking_tab": False, "attend_button": {"text": "Teilnehmen", "disabled": False}}) is False
-    assert own_rsvp_from({"networking_tab": True, "attend_button": {"text": "Teilnehmen", "disabled": True}}) is False
+    assert (
+        own_rsvp_from(
+            {
+                "networking_tab": False,
+                "attend_button": {"text": "Teilnehmen", "disabled": False},
+            }
+        )
+        is False
+    )
+    assert (
+        own_rsvp_from(
+            {
+                "networking_tab": True,
+                "attend_button": {"text": "Teilnehmen", "disabled": True},
+            }
+        )
+        is False
+    )
     assert own_rsvp_from({}) is None
 
 
 def test_event_page_flags_gone_and_cancelled():
-    from linkedin_mcp_server.scraping.mivia_network import event_page_flags
+    from linkedin_mcp_server.linkedin.mivia_network import event_page_flags
 
     eid = "7286622235937701888"
-    assert event_page_flags(eid, f"/events/{eid}/", "HK 2025\n98 Teilnehmer") == {"gone": False, "cancelled": False}
+    assert event_page_flags(eid, f"/events/{eid}/", "HK 2025\n98 Teilnehmer") == {
+        "gone": False,
+        "cancelled": False,
+    }
     assert event_page_flags(eid, "/feed/", "Startseite")["gone"] is True
-    assert event_page_flags(eid, f"/events/{eid}/", "Diese Seite existiert nicht")["gone"] is True
-    assert event_page_flags(eid, f"/events/{eid}/", "Titel\nDieses Event wurde abgesagt\n")["cancelled"] is True
+    assert (
+        event_page_flags(eid, f"/events/{eid}/", "Diese Seite existiert nicht")["gone"]
+        is True
+    )
+    assert (
+        event_page_flags(
+            eid, f"/events/{eid}/", "Titel\nDieses Event wurde abgesagt\n"
+        )["cancelled"]
+        is True
+    )
     # "abgesagt" inside a sentence of the description is not the banner
-    assert event_page_flags(eid, f"/events/{eid}/", "Der Vortrag wurde abgesagt und verschoben")["cancelled"] is False
+    assert (
+        event_page_flags(
+            eid, f"/events/{eid}/", "Der Vortrag wurde abgesagt und verschoben"
+        )["cancelled"]
+        is False
+    )
     assert event_page_flags(eid, None, None) == {"gone": False, "cancelled": False}
