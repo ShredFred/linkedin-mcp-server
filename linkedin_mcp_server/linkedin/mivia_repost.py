@@ -63,7 +63,10 @@ _MENU_ITEMS_JS = r"""() => {
   // Review 2026-10-02: a lazily loaded comment's "Entfernen" or a toast is
   // new as well. Only candidates inside the smallest container of the
   // share/repost entries count; without such an entry there is no menu.
-  const share = cands.filter(e => /teilen|repost|share/i.test(e.innerText || ''));
+  // Anchored on the unmistakable share entries only (DOM test 2026-10-02: a
+  // loose /teilen/ let a comment's button stretch the container page-wide).
+  const share = cands.filter(e =>
+    /sofort|instantly|mit kommentar|gedanken|thoughts/i.test(e.innerText || ''));
   if (!share.length) return [];
   let root = share.length === 1 ? share[0].parentElement : share[0];
   while (root && !share.every(s => root.contains(s))) root = root.parentElement;
