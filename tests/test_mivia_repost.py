@@ -417,3 +417,11 @@ def test_is_share_menu_survives_junk():
     assert not rp.is_share_menu(None)
     assert not rp.is_share_menu([None, {"text": 3}])
     assert rp.is_share_menu([{"text": "Sofort teilen"}])
+
+
+def test_entry_without_index_clicks_nothing(monkeypatch):
+    page = _Page(menus=[[INSTANT_DE]])
+    r = _reposter(page)
+    monkeypatch.setattr(rp, "pick_entry", lambda items, wanted: ({"text": "x"}, False))
+    res = _run(r.repost(ACT, confirm=True))
+    assert res["status"] == "menu_unclear" and not r.repost_clicked

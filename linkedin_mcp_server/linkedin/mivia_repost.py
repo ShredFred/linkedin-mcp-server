@@ -228,10 +228,14 @@ class MiviaReposter(MiviaActions):
                 "menu": menu,
                 "would_click": entry.get("text"),
             }
+        try:
+            selector = f'[data-mivia-menu="{int(entry["index"])}"]'
+        except (KeyError, TypeError, ValueError):
+            await self._escape_quietly()
+            return {"status": "menu_unclear", "done": False, "menu": menu}
+        # Set right before the click: everything above clicked nothing.
         self.repost_clicked = True
-        await self._page.locator(
-            f'[data-mivia-menu="{int(entry["index"])}"]'
-        ).first.click()
+        await self._page.locator(selector).first.click()
         await self._session.delay(random.uniform(3.0, 5.0))
         try:
             present = await self._undo_present(activity_id)
