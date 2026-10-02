@@ -35,8 +35,10 @@ CARD = """
     document.getElementById('slot').appendChild(menu);
     // a comment loads in the same moment, with its own remove button
     document.getElementById('comments').innerHTML =
-      '<div><span>Kommentar</span><div role="button">Entfernen</div>' +
-      '<button>Teilen rückgängig machen</button></div>';
+      '<div componentkey="replaceableComment_urn:li:comment:9">' +
+      '<span>Kommentar</span><div role="button">Entfernen</div>' +
+      '<button>Teilen rückgängig machen</button></div>' +
+      '<div><button>Entfernen</button></div>';
   };
 </script>
 """
@@ -110,3 +112,21 @@ async def test_comment_repost_button_not_counted(page):
     )
     mark = await page.evaluate(rp._MARK_REPOST_BUTTON_JS)
     assert mark["count"] == 1
+
+
+WRAPPED_UNDO_MENU = (
+    '<ul><li><div role="button"><span>Mit Kommentar teilen</span></div></li>'
+    '<li><div role="button"><span>Repost rückgängig machen</span></div></li></ul>'
+)
+
+
+async def test_wrapped_entries_keep_the_undo(page):
+    items = await _open(page, WRAPPED_UNDO_MENU)
+    entry, has_undo = rp.pick_entry(items, "undo")
+    assert has_undo and entry["text"] == "Repost rückgängig machen"
+    assert all("Entfernen" not in i["text"] for i in items)
+
+
+async def test_undo_only_menu_recognised(page):
+    items = await _open(page, '<div role="button">Repost rückgängig machen</div>')
+    assert rp.pick_entry(items, "undo")[1]

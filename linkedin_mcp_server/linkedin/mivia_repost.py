@@ -57,6 +57,8 @@ _MENU_ITEMS_JS = r"""() => {
       '[role="menuitem"], [role="button"], .artdeco-dropdown__item, button')]
     .filter(e => {
       if (e.getAttribute('data-mivia-pre') === 'visible') return false;
+      // Never anything inside a comment card (its own buttons and menus).
+      if (e.closest('[componentkey^="replaceableComment_"]')) return false;
       const r = e.getBoundingClientRect();
       return r.width > 0 && r.height > 0 && (e.innerText || '').trim();
     });
@@ -66,9 +68,15 @@ _MENU_ITEMS_JS = r"""() => {
   // Anchored on the unmistakable share entries only (DOM test 2026-10-02: a
   // loose /teilen/ let a comment's button stretch the container page-wide).
   const share = cands.filter(e =>
-    /sofort|instantly|mit kommentar|gedanken|thoughts/i.test(e.innerText || ''));
+    /sofort|instantly|mit kommentar|gedanken|thoughts|rückgängig|undo/i.test(e.innerText || ''));
   if (!share.length) return [];
+  // A single anchor climbs until its container holds a second candidate
+  // (review: entries wrapped one per li would otherwise lose the undo entry).
   let root = share.length === 1 ? share[0].parentElement : share[0];
+  if (share.length === 1) {
+    for (let k = 0; k < 6 && root && cands.filter(e => root.contains(e)).length < 2; k++)
+      root = root.parentElement;
+  }
   while (root && !share.every(s => root.contains(s))) root = root.parentElement;
   if (!root) return [];
   const items = cands.filter(e => root.contains(e));
