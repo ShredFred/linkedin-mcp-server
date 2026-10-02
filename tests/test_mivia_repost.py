@@ -303,12 +303,12 @@ def test_done_must_be_literally_true(monkeypatch):
     assert res["done"] is False and _rows("repost")[0]["status"] == "not_done"
 
 
-def test_menu_missing_stays_unknown(monkeypatch):
+def test_menu_missing_releases(monkeypatch):
     _fake(monkeypatch, {"status": "menu_missing", "done": False})
     _call(confirm=True)
-    assert _rows("repost")[0]["status"] == "unknown"
+    assert _rows("repost")[0]["status"] == "not_done"
     calls = _fake(monkeypatch, {"status": "reposted", "done": True})
-    assert _call(confirm=True)["status"] == "already_reposted" and calls == []
+    assert _call(confirm=True)["status"] == "reposted" and len(calls) == 1
 
 
 def test_nothing_clicked_releases(monkeypatch):
@@ -385,3 +385,35 @@ def test_menu_missing_reports_new_lines():
     assert rp.new_lines(["a", "b"], ["a", "c", "c", "d"]) == ["c", "d"]
     assert rp.new_lines(None, "x") == []
     assert len(rp.new_lines([], [str(i) for i in range(99)])) == 40
+
+
+@pytest.mark.parametrize(
+    "text,want",
+    [
+        ("Löschen", None),
+        ("Entfernen", None),
+        ("Teilen rückgängig machen", "undo"),
+        ("Repost entfernen", "undo"),
+    ],
+)
+def test_undo_needs_share_context(text, want):
+    assert rp.classify_menu_entry(text) == want
+
+
+def test_undo_in_unrecognised_menu_clicks_nothing():
+    page = _Page(menus=[["Link kopieren"]])
+    r = _reposter(page)
+    res = _run(r.repost(ACT, undo=True, confirm=True))
+    assert res["status"] == "menu_unclear" and not r.repost_clicked
+
+
+def test_undo_readback_in_unrecognised_menu_is_unverified():
+    page = _Page(menus=[[UNDO_DE, THOUGHTS_DE], ["Link kopieren"]])
+    res = _run(_reposter(page).repost(ACT, undo=True, confirm=True))
+    assert res["status"] == "undo_unverified" and res["verified"] is False
+
+
+def test_is_share_menu_survives_junk():
+    assert not rp.is_share_menu(None)
+    assert not rp.is_share_menu([None, {"text": 3}])
+    assert rp.is_share_menu([{"text": "Sofort teilen"}])

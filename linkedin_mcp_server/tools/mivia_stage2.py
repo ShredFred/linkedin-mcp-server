@@ -916,7 +916,8 @@ def register_mivia_stage2_tools(
         again; nothing is shared. With confirm=true the menu entry is clicked
         and the post reloaded to read the state back. Each repost needs its own
         approval; never use in a loop. Budget: repost / repost_undo pacer
-        (3/day each).
+        (3/day each). After undo_unverified the post stays blocked for a new
+        repost (the undo wording is not measured): check it by hand.
 
         thoughts (repost with own text) is not implemented and is refused.
 
@@ -925,7 +926,7 @@ def register_mivia_stage2_tools(
         repeat), dry_run (menu lists the entries, would_click the one a confirm
         would click). Nothing clicked (done=false, safe to retry or check by
         hand): no_repost_button, repost_button_ambiguous, menu_missing (button
-        opened no menu: look at the post before retrying), menu_unclear (no
+        opened no recognised menu; new_lines shows what appeared), menu_unclear (no
         single matching entry), already_reposted (the page or the ledger shows
         an earlier repost), not_reposted (undo=true but nothing to take back).
         Refusals (done=false): not_supported (thoughts), invalid_post_url,
@@ -1031,8 +1032,8 @@ def register_mivia_stage2_tools(
                     }
                 )
                 raise
-            # done must be literally True; menu_missing may have been a direct
-            # repost by the button itself and stays unknown.
+            # done must be literally True. menu_missing is not_done: measured
+            # 2026-10-02, the button only opens the menu (nothing is shared).
             if result.get("done") is True:
                 done_ok = {"undone", "undo_unverified"} if undo else _REPOST_DONE
                 status = (
@@ -1041,9 +1042,6 @@ def register_mivia_stage2_tools(
                     else ("undo_unverified" if undo else "unverified")
                 )
                 result = {**result, "status": status}
-            elif result.get("status") == "menu_missing":
-                status = "unknown"
-                result = {**result, "done": False}
             else:
                 status = "not_done"
                 result = {**result, "done": False}

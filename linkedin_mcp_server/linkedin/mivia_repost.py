@@ -50,17 +50,26 @@ _MARK_REPOST_BUTTON_JS = r"""() => {
 # Visible menu entries after the button click, each marked with its index.
 _MENU_ITEMS_JS = r"""() => {
   document.querySelectorAll('[data-mivia-menu]').forEach(e => e.removeAttribute('data-mivia-menu'));
-  // Measured 2026-10-02: the entries are plain buttons ("Sofort teilen",
-  // "Mit Kommentar teilen") without a menu role. An entry is therefore any
-  // visible button or menu item that was not on the page before the click.
-  const items = [...document.querySelectorAll(
+  // Measured 2026-10-02: the entries ("Sofort teilen", "Mit Kommentar
+  // teilen") are div[role=button] inserted by the click. A candidate is any
+  // visible clickable that was not visible before the click.
+  const cands = [...document.querySelectorAll(
       '[role="menuitem"], [role="button"], .artdeco-dropdown__item, button')]
     .filter(e => {
-      if (e.hasAttribute('data-mivia-pre')) return false;
+      if (e.getAttribute('data-mivia-pre') === 'visible') return false;
       const r = e.getBoundingClientRect();
       return r.width > 0 && r.height > 0 && (e.innerText || '').trim();
     });
-  // An outer li that holds an inner menuitem is the same entry twice.
+  // Review 2026-10-02: a lazily loaded comment's "Entfernen" or a toast is
+  // new as well. Only candidates inside the smallest container of the
+  // share/repost entries count; without such an entry there is no menu.
+  const share = cands.filter(e => /teilen|repost|share/i.test(e.innerText || ''));
+  if (!share.length) return [];
+  let root = share.length === 1 ? share[0].parentElement : share[0];
+  while (root && !share.every(s => root.contains(s))) root = root.parentElement;
+  if (!root) return [];
+  const items = cands.filter(e => root.contains(e));
+  // An outer element that holds an inner entry is the same entry twice.
   const leaves = items.filter(e => !items.some(o => o !== e && e.contains(o)));
   return leaves.map((e, i) => {
     e.setAttribute('data-mivia-menu', String(i));
@@ -72,11 +81,9 @@ _MENU_ITEMS_JS = r"""() => {
 _MARK_PRESENT_JS = r"""() => {
   document.querySelectorAll('[role="menuitem"], [role="button"], .artdeco-dropdown__item, button')
     .forEach(e => {
-      // The menu is pre-rendered hidden (measured): only what was visible
-      // before the click is "old".
-      e.removeAttribute('data-mivia-pre');
+      // Only what was visible before the click is "old".
       const r = e.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) e.setAttribute('data-mivia-pre', '1');
+      e.setAttribute('data-mivia-pre', r.width > 0 && r.height > 0 ? 'visible' : 'hidden');
     });
   return true;
 }"""
@@ -105,7 +112,10 @@ def new_lines(before: Any, after: Any, limit: int = 40) -> list[str]:
     return out
 
 
-_UNDO_RE = re.compile(r"rückgängig|undo|entfernen|remove repost|löschen", re.I)
+# Undo only together with the repost/share wording: "Löschen" or "Entfernen"
+# alone may belong to anything on the page.
+_UNDO_RE = re.compile(r"rückgängig|undo|entfernen|remove|löschen", re.I)
+_UNDO_CONTEXT_RE = re.compile(r"repost|teilen|geteilt|share", re.I)
 _THOUGHTS_RE = re.compile(r"gedanken|thoughts|kommentar", re.I)
 _INSTANT_RE = re.compile(r"^\s*repost(en)?\b|sofort|instantly", re.I)
 
@@ -114,7 +124,7 @@ def classify_menu_entry(text: Any) -> str | None:
     """'undo', 'thoughts', 'instant' or None for an unrelated entry."""
     if not isinstance(text, str) or not text.strip():
         return None
-    if _UNDO_RE.search(text):
+    if _UNDO_RE.search(text) and _UNDO_CONTEXT_RE.search(text):
         return "undo"
     if _THOUGHTS_RE.search(text):
         return "thoughts"
@@ -132,6 +142,16 @@ def pick_entry(items: Any, wanted: str) -> tuple[dict[str, Any] | None, bool]:
     has_undo = "undo" in classes
     matches = [e for e, c in zip(entries, classes) if c == wanted]
     return (matches[0] if len(matches) == 1 else None), has_undo
+
+
+def is_share_menu(items: Any) -> bool:
+    """The opened menu carries a recognised share entry (instant or thoughts)."""
+    entries = items if isinstance(items, list) else []
+    return any(
+        isinstance(i, dict)
+        and classify_menu_entry(i.get("text")) in {"instant", "thoughts"}
+        for i in entries
+    )
 
 
 class MiviaReposter(MiviaActions):
@@ -172,7 +192,11 @@ class MiviaReposter(MiviaActions):
         if opened["status"] != "menu_open":
             return None
         await self._escape_quietly()
-        return pick_entry(opened["items"], "undo")[1]
+        has_undo = pick_entry(opened["items"], "undo")[1]
+        # A missing undo entry proves nothing in a menu we do not recognise.
+        if not has_undo and not is_share_menu(opened["items"]):
+            return None
+        return has_undo
 
     async def repost(
         self, activity_id: str, *, undo: bool = False, confirm: bool = False
@@ -190,6 +214,8 @@ class MiviaReposter(MiviaActions):
             return {"status": "already_reposted", "done": False, "menu": menu}
         if undo and not has_undo:
             await self._escape_quietly()
+            if not is_share_menu(items):
+                return {"status": "menu_unclear", "done": False, "menu": menu}
             return {"status": "not_reposted", "done": False, "menu": menu}
         if entry is None:
             await self._escape_quietly()

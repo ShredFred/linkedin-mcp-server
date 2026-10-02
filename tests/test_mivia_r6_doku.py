@@ -56,7 +56,6 @@ TOOL_EXCEPTIONS: dict[tuple[str, str], str] = {
     },
     ("repost_post", "duplicate"): _DUP_RENAMED + " (already_reposted / repost_pending)",
     ("repost_post", "not_done"): _LEDGER_ONLY,
-    ("repost_post", "unknown"): _LEDGER_ONLY + " (menu_missing)",
     ("create_post", "duplicate"): _DUP_RENAMED + " (duplicate_text)",
     ("comment_on_post", "duplicate"): _DUP_RENAMED + " (duplicate_text)",
     **{
