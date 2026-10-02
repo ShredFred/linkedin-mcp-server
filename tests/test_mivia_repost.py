@@ -425,3 +425,37 @@ def test_entry_without_index_clicks_nothing(monkeypatch):
     monkeypatch.setattr(rp, "pick_entry", lambda items, wanted: ({"text": "x"}, False))
     res = _run(r.repost(ACT, confirm=True))
     assert res["status"] == "menu_unclear" and not r.repost_clicked
+
+
+_JUNK = [None, 3, 1.5, [], {}, "", "nicht-datum", "9999-99-99T99:99", True]
+
+
+@pytest.mark.parametrize("junk", _JUNK)
+def test_junk_ledger_rows_never_crash_or_release(monkeypatch, junk):
+    ledger = outreach.Ledger.default()
+    # An undo with an unreadable time, written BEFORE the reposts: Ledger.append
+    # stamps "at", so it is dated earlier and must not release them.
+    ledger.append(
+        {
+            "attempt": "u",
+            "kind": "repost_undo",
+            "activity": ACT,
+            "status": "undone",
+            "started_at": junk,
+        }
+    )
+    for field in ("started_at", "status", "kind", "activity"):
+        row = {
+            "attempt": f"a-{field}",
+            "kind": "repost",
+            "activity": ACT,
+            "status": "reposted",
+            "started_at": "2099-01-01T10:00:00+02:00",
+        }
+        row[field] = junk
+        ledger.append(row)
+    calls = _fake(monkeypatch, {"status": "reposted", "done": True})
+    res = _call(confirm=True)
+    # Intact rows still mark the post reposted; an unreadable ledger stops.
+    assert res["status"] in {"already_reposted", "ledger_corrupt"}
+    assert calls == []

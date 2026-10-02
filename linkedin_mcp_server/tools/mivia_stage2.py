@@ -959,20 +959,21 @@ def register_mivia_stage2_tools(
                     ),
                     None,
                 )
+            # An undo releases a repost only when its attempt was written
+            # AFTER the repost's (ledger order; times are whole seconds and
+            # tie) and is not dated earlier. Undated rows release nothing.
             undone = [
-                t
-                for t in (
-                    outreach.row_time(r)
-                    for r in rows
-                    if r.get("kind") == "repost_undo" and r.get("status") == "undone"
-                )
-                if t is not None
+                (i, outreach.row_time(r))
+                for i, r in enumerate(rows)
+                if r.get("kind") == "repost_undo" and r.get("status") == "undone"
             ]
-            for r in rows:
+            for i, r in enumerate(rows):
                 if r.get("kind") != "repost" or r.get("status") not in _REPOST_OPEN:
                     continue
                 posted_at = outreach.row_time(r)
-                if posted_at is None or not any(t >= posted_at for t in undone):
+                if posted_at is None or not any(
+                    j > i and t is not None and t >= posted_at for j, t in undone
+                ):
                     return r
             return None
 
