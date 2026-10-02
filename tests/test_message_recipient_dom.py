@@ -341,6 +341,84 @@ class TestProfileMessageTargetDom:
         assert result == {"status": "unresolved"}
 
 
+    # Live shape of 2026-10-02 (tarik-boyraz-464391a7, thorsten-lambart-*):
+    # the top card wraps an empty inner section and the sidebar shows
+    # "Nachricht" buttons for other people.
+    @staticmethod
+    def _card_with_inner_section(card: str) -> str:
+        return f"""<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>
+          <main><div>
+            <section><div>
+              <section>
+                {card}
+                <section><div></div></section>
+              </section>
+              <section><h2>Aktivitaeten</h2></section>
+            </div></section>
+            <aside>
+              <section>
+                <h2>Weitere Profile fuer Sie</h2>
+                <a href="/messaging/compose/?recipient=OTHER1">Nachricht</a>
+                <a href="/messaging/compose/?recipient=OTHER2">Nachricht</a>
+              </section>
+              <section>
+                <h2>Premium-Profile erkunden</h2>
+                <a href="/messaging/compose/?recipient=OTHER3">Nachricht</a>
+              </section>
+            </aside>
+          </div></main>
+        </body></html>
+        """
+
+    async def test_top_card_wrapping_inner_section_resolves_despite_sidebar(
+        self, dom_page
+    ):
+        await _set_composer_content(
+            dom_page,
+            self._card_with_inner_section(
+                """<h2>Test User</h2>
+                <a href="/messaging/compose/?recipient=ACoAAB">Nachricht</a>
+                <div style="display:none">
+                  <a href="/messaging/compose/?recipient=ACoAAB">Nachricht</a>
+                </div>"""
+            ),
+        )
+
+        result = await dom_page.evaluate(_PROFILE_MESSAGE_TARGET_JS)
+
+        assert result["status"] == "resolved"
+        assert result["displayName"] == "Test User"
+        assert result["composeHrefs"] == ["/messaging/compose/?recipient=ACoAAB"]
+
+    async def test_inner_section_card_without_name_yet_is_unresolved(self, dom_page):
+        await _set_composer_content(
+            dom_page,
+            self._card_with_inner_section(
+                '<a href="/messaging/compose/?recipient=ACoAAB">Nachricht</a>'
+            ),
+        )
+
+        result = await dom_page.evaluate(_PROFILE_MESSAGE_TARGET_JS)
+
+        assert result == {"status": "unresolved"}
+
+    async def test_inner_section_card_with_two_message_actions_fails_closed(
+        self, dom_page
+    ):
+        await _set_composer_content(
+            dom_page,
+            self._card_with_inner_section(
+                """<h2>Test User</h2>
+                <a href="/messaging/compose/?recipient=ACoAAB">Nachricht</a>
+                <a href="/messaging/compose/?recipient=OTHER">Nachricht</a>"""
+            ),
+        )
+
+        result = await dom_page.evaluate(_PROFILE_MESSAGE_TARGET_JS)
+
+        assert result == {"status": "unresolved"}
+
+
 class TestMessageComposerDom:
     async def test_owner_handle_pins_one_dom_instance_and_disposes(self, dom_page):
         await _set_composer_content(

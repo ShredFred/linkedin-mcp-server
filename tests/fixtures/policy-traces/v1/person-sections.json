@@ -114,14 +114,14 @@
       "call": "read_person",
       "kind": "wait_for_function",
       "operation": "profile_message_target_ready",
-      "program_digest": "d156e406f6bb",
+      "program_digest": "2edbc00d2877",
       "timeout_ms": 1000
     },
     {
       "call": "read_person",
       "kind": "evaluate",
       "operation": "profile_message_target",
-      "program_digest": "c7804bf22e53"
+      "program_digest": "fd4ad412151d"
     },
     {
       "call": "read_person",

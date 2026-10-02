@@ -89,11 +89,19 @@ _PROFILE_MESSAGE_TARGET_JS = r"""() => {
     // before its heading is checked, so a card whose name has not rendered yet
     // stays unresolved instead of yielding to the next section. Sidebar
     // sections are skipped: they carry other people's Message links.
+    // Since October 2026 the card itself may wrap an empty inner section, so
+    // a section that owns a visible heading also counts as the card; an
+    // unrendered name still falls through to that inner leaf and stays
+    // unresolved.
+    const ownsHeading = element =>
+        Array.from(element.querySelectorAll('h1, h2, h3')).some(
+            heading => visible(heading) && heading.closest('section') === element
+        );
     const section = Array.from(main.querySelectorAll('section')).find(
         element =>
             visible(element) &&
             !element.closest('aside') &&
-            !element.querySelector('section')
+            (!element.querySelector('section') || ownsHeading(element))
     );
     if (!section) return {status: 'unresolved'};
     const headings = Array.from(section.querySelectorAll('h1, h2, h3')).filter(visible);
