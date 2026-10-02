@@ -34,6 +34,9 @@ def _isolated(tmp_path, monkeypatch):
         ("Repost with your thoughts", "thoughts"),
         (UNDO_DE, "undo"),
         ("Undo repost", "undo"),
+        # measured 2026-10-02 (de)
+        ("Sofort teilen", "instant"),
+        ("Mit Kommentar teilen", "thoughts"),
         ("Link kopieren", None),
         ("", None),
         (None, None),
@@ -92,6 +95,10 @@ class _Page:
     async def evaluate(self, js, *args):
         if js is rp._MARK_REPOST_BUTTON_JS:
             return {"count": self.buttons}
+        if js is rp._MARK_PRESENT_JS:
+            return True
+        if js is rp._BODY_LINES_JS:
+            return ["button: Reposten"] if not self.menus else []
         if js is rp._MENU_ITEMS_JS:
             texts = self.menus.pop(0) if self.menus else []
             return [{"index": i, "text": t} for i, t in enumerate(texts)]
@@ -366,3 +373,15 @@ def test_kinds_registered():
         assert kind in outreach.PACE_BUDGETS
         assert kind in outreach.PACE_WRITE_KINDS
         assert kind in outreach._LEDGER_KINDS
+
+
+def test_measured_menu_dry_run():
+    page = _Page(menus=[["Mit Kommentar teilen", "Sofort teilen"]])
+    res = _run(_reposter(page).repost(ACT))
+    assert res["status"] == "dry_run" and res["would_click"] == "Sofort teilen"
+
+
+def test_menu_missing_reports_new_lines():
+    assert rp.new_lines(["a", "b"], ["a", "c", "c", "d"]) == ["c", "d"]
+    assert rp.new_lines(None, "x") == []
+    assert len(rp.new_lines([], [str(i) for i in range(99)])) == 40

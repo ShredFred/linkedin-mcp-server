@@ -50,12 +50,13 @@ _MARK_REPOST_BUTTON_JS = r"""() => {
 # Visible menu entries after the button click, each marked with its index.
 _MENU_ITEMS_JS = r"""() => {
   document.querySelectorAll('[data-mivia-menu]').forEach(e => e.removeAttribute('data-mivia-menu'));
-  const seen = new Set();
+  // Measured 2026-10-02: the entries are plain buttons ("Sofort teilen",
+  // "Mit Kommentar teilen") without a menu role. An entry is therefore any
+  // visible button or menu item that was not on the page before the click.
   const items = [...document.querySelectorAll(
-      '[role="menu"] [role="menuitem"], [role="menuitem"], .artdeco-dropdown__item, [role="menu"] li')]
+      '[role="menuitem"], [role="button"], .artdeco-dropdown__item, button')]
     .filter(e => {
-      if (seen.has(e)) return false;
-      seen.add(e);
+      if (e.hasAttribute('data-mivia-pre')) return false;
       const r = e.getBoundingClientRect();
       return r.width > 0 && r.height > 0 && (e.innerText || '').trim();
     });
@@ -66,6 +67,43 @@ _MENU_ITEMS_JS = r"""() => {
     return {index: i, text: (e.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 200)};
   });
 }"""
+
+# Everything clickable before the repost click; the menu is what is new after it.
+_MARK_PRESENT_JS = r"""() => {
+  document.querySelectorAll('[role="menuitem"], [role="button"], .artdeco-dropdown__item, button')
+    .forEach(e => {
+      // The menu is pre-rendered hidden (measured): only what was visible
+      // before the click is "old".
+      e.removeAttribute('data-mivia-pre');
+      const r = e.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) e.setAttribute('data-mivia-pre', '1');
+    });
+  return true;
+}"""
+
+# Visible text lines of the page (with the role/tag of their element), for
+# the before/after diff that reports an unrecognised menu.
+_BODY_LINES_JS = r"""() => [...document.querySelectorAll('[role], li, button, a, span, div')]
+  .filter(e => e.children.length <= 3)
+  .filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; })
+  .map(e => {
+    const t = (e.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    return t ? (e.getAttribute('role') || e.tagName.toLowerCase()) + ': ' + t : '';
+  })
+  .filter(Boolean)"""
+
+
+def new_lines(before: Any, after: Any, limit: int = 40) -> list[str]:
+    """Lines visible after but not before, in page order, at most *limit*."""
+    old = set(before) if isinstance(before, list) else set()
+    out: list[str] = []
+    for line in after if isinstance(after, list) else []:
+        if isinstance(line, str) and line not in old and line not in out:
+            out.append(line)
+            if len(out) >= limit:
+                break
+    return out
+
 
 _UNDO_RE = re.compile(r"rückgängig|undo|entfernen|remove repost|löschen", re.I)
 _THOUGHTS_RE = re.compile(r"gedanken|thoughts|kommentar", re.I)
@@ -112,12 +150,20 @@ class MiviaReposter(MiviaActions):
                 else "repost_button_ambiguous",
                 "buttons": count,
             }
+        before = await self._page.evaluate(_BODY_LINES_JS)
+        await self._page.evaluate(_MARK_PRESENT_JS)
         await self._page.locator('[data-mivia-repost="1"]').first.click()
         await self._session.delay(random.uniform(0.8, 1.5))
         items = await self._page.evaluate(_MENU_ITEMS_JS)
         if not isinstance(items, list) or not items:
+            # Measurement for the unmeasured menu: what appeared after the click.
+            after = await self._page.evaluate(_BODY_LINES_JS)
             await self._escape_quietly()
-            return {"status": "menu_missing"}
+            return {
+                "status": "menu_missing",
+                "button": mark.get("label"),
+                "new_lines": new_lines(before, after),
+            }
         return {"status": "menu_open", "items": items}
 
     async def _undo_present(self, activity_id: str) -> bool | None:
