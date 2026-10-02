@@ -27,6 +27,7 @@ from linkedin_mcp_server.linkedin.mivia_network import (
     _EVENT_ID_RE as _NETWORK_EVENT_ID_RE,
 )
 from linkedin_mcp_server.linkedin.mivia_events import MiviaEventFinder, event_summary
+from linkedin_mcp_server.linkedin.mivia_repost import MiviaReposter
 from linkedin_mcp_server.linkedin.mivia_engagement import (
     MiviaEngagementReader,
     SeenStore,
@@ -46,6 +47,11 @@ from linkedin_mcp_server.tools.mivia import (
     _utf16_len,
     pace_lock_busy,
 )
+
+
+# A repost row in one of these states may be live and blocks a second repost.
+_REPOST_OPEN = {"attempted", "unknown", "reposted", "unverified"}
+_REPOST_DONE = {"reposted", "unverified"}
 
 
 def _engagement(extractor: Any) -> MiviaEngagementReader:
@@ -889,6 +895,162 @@ def register_mivia_stage2_tools(
             return {"activity_id": activity_id, **result}
 
         return await _run(ctx, "comment_on_post", body)
+
+    @mcp.tool(
+        timeout=tool_timeout,
+        title="Repost Post",
+        annotations={"destructiveHint": True, "openWorldHint": True},
+        tags={TAG, "post", "actions"},
+    )
+    async def repost_post(
+        post_url: str,
+        ctx: Context,
+        confirm: bool = False,
+        undo: bool = False,
+        thoughts: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Repost a post instantly to the signed-in member's own feed (never as a
+        company page), or take that repost back with undo=true. Dry run by
+        default: the repost menu is opened, its entries reported and closed
+        again; nothing is shared. With confirm=true the menu entry is clicked
+        and the post reloaded to read the state back. Each repost needs its own
+        approval; never use in a loop. Budget: repost / repost_undo pacer
+        (3/day each).
+
+        thoughts (repost with own text) is not implemented and is refused.
+
+        Result status: reposted / undone (done=true, read back), unverified /
+        undo_unverified (done=true but not read back: look at the post, never
+        repeat), dry_run (menu lists the entries, would_click the one a confirm
+        would click). Nothing clicked (done=false, safe to retry or check by
+        hand): no_repost_button, repost_button_ambiguous, menu_missing (button
+        opened no menu: look at the post before retrying), menu_unclear (no
+        single matching entry), already_reposted (the page or the ledger shows
+        an earlier repost), not_reposted (undo=true but nothing to take back).
+        Refusals (done=false): not_supported (thoughts), invalid_post_url,
+        repost_pending (an earlier undo on this post is still unresolved),
+        pace_budget_spent (wait), pace_lock_busy.
+        """
+        if thoughts is not None:
+            return {
+                "status": "not_supported",
+                "done": False,
+                "message": "Repost with own thoughts is not implemented; use create_post.",
+            }
+        activity_id, bad = _activity(post_url)
+        if bad:
+            return {**bad, "done": False}
+        ledger = outreach.Ledger.default()
+        kind = "repost_undo" if undo else "repost"
+
+        def blocker() -> dict[str, Any] | None:
+            """An earlier repost that may be live, or an unresolved undo."""
+            latest = ledger.latest_by_attempt()
+            rows = [r for r in latest.values() if r.get("activity") == activity_id]
+            if undo:
+                return next(
+                    (
+                        r
+                        for r in rows
+                        if r.get("kind") == "repost_undo"
+                        and r.get("status") in {"attempted", "unknown"}
+                    ),
+                    None,
+                )
+            undone = [
+                t
+                for t in (
+                    outreach.row_time(r)
+                    for r in rows
+                    if r.get("kind") == "repost_undo" and r.get("status") == "undone"
+                )
+                if t is not None
+            ]
+            for r in rows:
+                if r.get("kind") != "repost" or r.get("status") not in _REPOST_OPEN:
+                    continue
+                posted_at = outreach.row_time(r)
+                if posted_at is None or not any(t >= posted_at for t in undone):
+                    return r
+            return None
+
+        earlier = blocker()
+        if earlier and confirm:
+            return {
+                "status": "repost_pending" if undo else "already_reposted",
+                "done": False,
+                "previous": earlier,
+            }
+        if confirm:
+            refusal = _peek(kind)
+        else:
+            refusal = _pace("page_read", tool="repost_post")
+        if refusal:
+            return {**refusal, "done": False}
+
+        async def body(ex: Any) -> dict[str, Any]:
+            reposter = MiviaReposter(ex.mivia_session, ex.mivia_navigator)
+            if not confirm:
+                result = await reposter.repost(activity_id, undo=undo, confirm=False)
+                return {"activity_id": activity_id, **result}
+            attempt = uuid.uuid4().hex
+            refused = _book_attempt(
+                ledger,
+                kind,
+                {
+                    "attempt": attempt,
+                    "kind": kind,
+                    "activity": activity_id,
+                    "status": "attempted",
+                    "started_at": datetime.now()
+                    .astimezone()
+                    .isoformat(timespec="seconds"),
+                },
+                tool="repost_post",
+                duplicate=blocker,
+            )
+            if refused:
+                if refused["status"] == "duplicate":
+                    refused = {
+                        **refused,
+                        "status": "repost_pending" if undo else "already_reposted",
+                    }
+                return {"done": False, **refused}
+            try:
+                result = await reposter.repost(activity_id, undo=undo, confirm=True)
+            except BaseException:
+                clicked = bool(getattr(reposter, "repost_clicked", True))
+                ledger.append(
+                    {
+                        "attempt": attempt,
+                        "status": "unknown" if clicked else "not_done",
+                        "detail": "exception after the menu click"
+                        if clicked
+                        else "exception before the menu click",
+                    }
+                )
+                raise
+            # done must be literally True; menu_missing may have been a direct
+            # repost by the button itself and stays unknown.
+            if result.get("done") is True:
+                done_ok = {"undone", "undo_unverified"} if undo else _REPOST_DONE
+                status = (
+                    result.get("status")
+                    if result.get("status") in done_ok
+                    else ("undo_unverified" if undo else "unverified")
+                )
+                result = {**result, "status": status}
+            elif result.get("status") == "menu_missing":
+                status = "unknown"
+                result = {**result, "done": False}
+            else:
+                status = "not_done"
+                result = {**result, "done": False}
+            ledger.append({"attempt": attempt, "status": status})
+            return {"activity_id": activity_id, **result}
+
+        return await _run(ctx, "repost_post", body)
 
     # -- 7. job watch --------------------------------------------------------------
 

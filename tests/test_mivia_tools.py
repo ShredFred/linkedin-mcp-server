@@ -236,6 +236,7 @@ def test_fork_tools_are_registered_and_tagged():
         "set_contact_note",
         "get_profile_viewers",
         "comment_on_post",
+        "repost_post",
         "job_watch",
         "list_groups",
         "get_group_members",

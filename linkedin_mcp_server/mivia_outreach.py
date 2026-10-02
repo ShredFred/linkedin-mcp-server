@@ -45,6 +45,8 @@ _COUNTED = _BLOCKING | {"posted"}
 # create_post (2026-10-01) closes with posted_verified; a withdrawal with
 # withdrawn or still_pending (the click happened). not_found never counts.
 _COUNTED = _COUNTED | {"posted_verified", "withdrawn", "still_pending"}
+# repost_post (2026-10-02): every state after the menu click counts.
+_COUNTED = _COUNTED | {"reposted", "undone", "undo_unverified"}
 
 
 def ledger_path() -> Path:
@@ -361,6 +363,10 @@ PACE_BUDGETS: dict[str, dict[str, int]] = {
     "post_edit": {"day": 5, "week": 20},
     "comment_delete": {"day": 5, "week": 20},
     "comment_edit": {"day": 5, "week": 20},
+    # Reposting a post as the member (2026-10-02): lands in the whole
+    # network's feed like an own post, so the post cap; the undo likewise.
+    "repost": {"day": 3, "week": 10},
+    "repost_undo": {"day": 3, "week": 10},
 }
 # Everything that is visible to another member counts against one total.
 PACE_WRITE_KINDS = {
@@ -377,6 +383,8 @@ PACE_WRITE_KINDS = {
     "comment_delete",
     "comment_edit",
     "post",
+    "repost",
+    "repost_undo",
 }
 PACE_WRITE_TOTAL_PER_DAY = 150
 # LinkedIn's own event-invitation ceiling per organiser account and week.
@@ -395,6 +403,8 @@ _LEDGER_KINDS = {
     "comment_edit",
     "post",
     "withdraw",
+    "repost",
+    "repost_undo",
 }
 
 

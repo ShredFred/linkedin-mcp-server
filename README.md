@@ -36,6 +36,7 @@
 > - `outreach_quota` — Today's and this week's sends and invites from the local outreach ledger.
 > - `outreach_selftest` — Read-only check that the Message and Connect actions still resolve, run before a batch so a LinkedIn UI change is caught before the first send.
 > - `pace_status` — The pacer (Taktgeber): per action kind today's and the last seven days' use against its budget, and the daily total of visible actions.
+> - `repost_post` — Repost a post instantly to the signed-in member's own feed (never as a company page), or take that repost back with undo=true.
 > - `search_events` — One LinkedIn event search (/search/results/events/?keywords=...).
 > - `send_campaign_batch` — Send the same text to many recipients safely, one small batch per call.
 > - `send_inmail` — Send one InMail through Sales Navigator (spends one credit) to a 2nd/3rd-degree member.

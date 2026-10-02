@@ -40,6 +40,7 @@ a page-owning collaborator.
 | `mivia_network` | `ATTENDEE_FIELDS_CARD`, `ATTENDEE_FIELDS_MINIMAL`, `CONNECTIONS_URL`, `EVENT_COUNT_JS`, `EVENT_COUNT_WAIT_SECONDS`, `EVENT_STATUS_JS`, `MAX_ATTENDEE_PAGES`, `MAX_LIST_LIMIT`, `MiviaNetworkReader`, `SENT_INVITATIONS_URL`, `SearchLimitReached`, `classify_action()`, `event_attendees_url()`, `event_page_flags()`, `is_search_limit_text()`, `own_rsvp_from()`, `parse_connected_date()`, `parse_degree()`, `project_attendees()`, `read_event_count()`, `split_person_lines()` | `browser-free` |
 | `mivia_own_content` | `CANCEL_WORDS`, `CONFIRM_DELETE_WORDS`, `DELETE_COMMENT_WORDS`, `DELETE_POST_WORDS`, `DISCARD_WORDS`, `EDIT_COMMENT_WORDS`, `EDIT_POST_WORDS`, `ME_URL`, `MiviaOwnContent`, `SAVE_WORDS`, `comment_permalink()`, `parse_comment_ref()`, `post_gone_evidence()`, `prefill_matches()`, `same_member()`, `slug_of()`, `text_matches()` | `browser-free` |
 | `mivia_post` | `MiviaPostComposer`, `RECENT_ACTIVITY_URL`, `SHARE_URL` | `browser-free` |
+| `mivia_repost` | `MiviaReposter`, `classify_menu_entry()`, `pick_entry()` | `browser-free` |
 | `mivia_selftest` | `outreach_selftest()` | `page-owning` |
 | `mivia_urls` | `BENIGN_PROFILE_QUERY`, `benign_query()`, `canonical_profile_path()`, `identity_path()`, `profile_key()`, `profile_slug_from_url()` | `browser-free` |
 | `navigation` | `PageNavigator`, `WaitUntil` | `page-owning` |
@@ -77,6 +78,7 @@ a page-owning collaborator.
 - `mivia_network` -> `navigation`, `session`
 - `mivia_own_content` -> `mivia_actions`, `mivia_engagement`, `mivia_inmail`
 - `mivia_post` -> `navigation`, `session`
+- `mivia_repost` -> `mivia_actions`
 - `mivia_selftest` -> `connection`, `connection_actions`, `identifiers`, `message_sender`, `mivia_urls`, `navigation`, `session`
 - `mivia_urls` -> _(none)_
 - `navigation` -> `session`
