@@ -194,7 +194,8 @@ _COMMENT_CARD_JS = (
     const t = r.innerText || '';
     if (t) text = text.replace(t, '');
   });
-  const label = /optionen|options|weitere|more/i;
+  // Not "Weitere Antworten laden" / "Mehr anzeigen" (review 2026-10-02).
+  const label = /optionen|options|steuerungsmen|control menu/i;
   const menus = [...card.querySelectorAll('button')]
       .filter(b => vis(b) && own(b) && label.test(b.getAttribute('aria-label') || ''));
   if (menus.length === 1) menus[0].setAttribute('data-mivia-own', 'comment-menu');
@@ -207,13 +208,27 @@ _COMMENT_CARD_JS = (
 # Entries of the open (visible) menu; the one whose text is in arg.words is
 # tagged. A container holding a matching child is dropped, so a <li> around a
 # role=button counts once.
+# Before the menu click: every menu entry already visible is marked "old".
+_MENU_PRE_JS = r"""() => {
+  document.querySelectorAll('[data-mivia-menupre]').forEach(e => e.removeAttribute('data-mivia-menupre'));
+  const sel = '[role="menu"] [role="menuitem"], [role="menuitem"], .artdeco-dropdown__content [role="button"], .artdeco-dropdown__content li, [role="menu"] li';
+  document.querySelectorAll(sel).forEach(e => {
+    const r = e.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) e.setAttribute('data-mivia-menupre', '1');
+  });
+  return true;
+}"""
+
 _MENU_PICK_JS = (
     "(arg) => {"
     + _VISIBLE_JS
     + r"""
   clearTag(arg.tag);
   const sel = '[role="menu"] [role="menuitem"], [role="menuitem"], .artdeco-dropdown__content [role="button"], .artdeco-dropdown__content li, [role="menu"] li';
-  const items = [...document.querySelectorAll(sel)].filter(vis);
+  // Only entries that became visible with this menu (review 2026-10-02:
+  // a leftover dropdown's "Löschen" elsewhere on the page was eligible).
+  const items = [...document.querySelectorAll(sel)].filter(vis)
+      .filter(e => !e.hasAttribute('data-mivia-menupre'));
   const first = el => ((el.innerText || '').trim().split('\n')[0] || '').trim();
   const texts = [...new Set(items.map(first).filter(Boolean))];
   let hits = items.filter(el => arg.words.includes(first(el).toLowerCase()));
@@ -260,6 +275,7 @@ _EDITOR_PICK_JS = (
     + _VISIBLE_JS
     + r"""
   clearTag(arg.tag);
+  clearTag(arg.tag + '-scope');
   let scope;
   if (arg.comment_id) {
     scope = [...document.querySelectorAll('[componentkey^="replaceableComment_urn:li:comment:"]')]
@@ -444,6 +460,7 @@ class MiviaOwnContent(MiviaActions):
         if await trigger.count() == 0:
             return {"status": "menu_unavailable"}
         await trigger.scroll_into_view_if_needed()
+        await self._page.evaluate(_MENU_PRE_JS)
         await trigger.click()
         await self._wait(0.8, 1.4)
         picked = await self._pick(_MENU_PICK_JS, {"words": words, "tag": "entry"})

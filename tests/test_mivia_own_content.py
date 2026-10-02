@@ -101,6 +101,9 @@ class _Page:
             return self._next(self.posts)
         if js is oc._COMMENT_CARD_JS:
             return self._next(self.comments)
+        if js is oc._MENU_PRE_JS:
+            self.menu_pre = getattr(self, "menu_pre", 0) + 1
+            return True
         if js is oc._MENU_PICK_JS:
             return self.menu
         if js is oc._BUTTON_PICK_JS:
