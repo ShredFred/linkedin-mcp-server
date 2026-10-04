@@ -23,6 +23,7 @@ from linkedin_mcp_server.linkedin.contracts import (
 )
 from linkedin_mcp_server.linkedin.fields import PERSON_SECTIONS, _person_section_specs
 from linkedin_mcp_server.linkedin.identifiers import (
+    landed_identity_mismatch,
     normalize_person_identifier,
     person_profile_url,
 )
@@ -225,6 +226,7 @@ class PersonReader:
         section_errors: dict[str, dict[str, Any]] = {}
         profile_urn: str | None = None
         rate_limited = False
+        redirected_to: dict[str, str] | None = None
 
         requested_ordered = [
             spec
@@ -298,6 +300,17 @@ class PersonReader:
                     # the handler below, which would overwrite the entry just
                     # recorded with a generic diagnostic — losing the one
                     # finding this section had.
+                    # Fork extension: notice a redirect to another profile.
+                    if (
+                        section_name == "main_profile"
+                        and sections.get("main_profile")
+                        and username != "me"
+                    ):
+                        redirect = landed_identity_mismatch(
+                            getattr(self._session.page, "url", None), "in", username
+                        )
+                        if redirect:
+                            redirected_to = redirect
                     if (
                         section_name == "main_profile"
                         and profile_urn is None
@@ -336,6 +349,8 @@ class PersonReader:
         }
         if profile_urn:
             result["profile_urn"] = profile_urn
+        if redirected_to:
+            result["redirected_to"] = redirected_to
         if references:
             result["references"] = references
         if section_errors:

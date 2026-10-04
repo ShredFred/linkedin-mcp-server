@@ -1048,7 +1048,15 @@ class TestGetInbox:
             ("navigate", COMPOSE),
             "rate_limit",
             "modal",
-            ("scan", {"limit": 20, "context": "inbox", "scroll_attempts": 2}),
+            (
+                "scan",
+                {
+                    "limit": 20,
+                    "context": "inbox",
+                    "scroll_attempts": 2,
+                    "load_until": 20,
+                },
+            ),
         ]
         assert result["url"] == MESSAGING
         assert result["sections"] == {"inbox": "Conversation A"}
@@ -1156,7 +1164,10 @@ class TestGetInbox:
             position="bottom", attempts=attempts, pause_time=0.5
         )
         refs_mock.assert_awaited_once_with(
-            limit=limit, context="inbox", scroll_attempts=attempts
+            limit=limit,
+            context="inbox",
+            scroll_attempts=attempts,
+            load_until=limit,
         )
 
     async def _inbox(

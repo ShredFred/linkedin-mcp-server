@@ -8,6 +8,14 @@ import sys
 # import, and inherited by every process a test starts. CI sets it before
 # Python starts as well; `test_fastmcp_compatibility.py` checks it took effect.
 os.environ["FASTMCP_MCP_CAMELCASE_COMPAT"] = "false"
+# Deployment values the fork reads from the environment (never built in).
+# The canary is read at import, the booking account per call (see
+# fork_deployment_values); both are fixed here, never the developer's own.
+FORK_DEPLOYMENT = {
+    "LINKEDIN_MCP_CANARY": "johnsmith",
+    "LINKEDIN_MCP_CALENDLY_ACCOUNT": "acme_jane-doe",
+}
+os.environ.update(FORK_DEPLOYMENT)
 
 import pytest  # noqa: E402
 
@@ -47,6 +55,12 @@ def reset_singletons():
     # from process state. Left standing, one OWNER would refuse logins in every
     # test after it, in a suite where most never mention a role.
     reset_process_role_for_testing()
+    # Rate-limit hooks (#957) are process state; registering the ext tools
+    # installs them, and left standing they would read and write the real
+    # pacer ledger from every later navigation test.
+    from linkedin_mcp_server.core.rate_limit_hooks import set_rate_limit_hooks
+
+    set_rate_limit_hooks(None, None)
     # The trace directory is derived from the profile root and cached, so a
     # test pointing USER_DATA_DIR at its tmp_path otherwise leaves every later
     # test on this worker writing into a directory pytest has removed. The log
@@ -133,6 +147,13 @@ def ignore_the_developers_environment(monkeypatch):
     ours = [key for key in os.environ if key.startswith("LINKEDIN")]
     for key in (*from_the_table, *ours):
         monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def fork_deployment_values(ignore_the_developers_environment, monkeypatch):
+    """Put the fork's deployment values back after the LINKEDIN* sweep."""
+    for key, value in FORK_DEPLOYMENT.items():
+        monkeypatch.setenv(key, value)
 
 
 @pytest.fixture(autouse=True)

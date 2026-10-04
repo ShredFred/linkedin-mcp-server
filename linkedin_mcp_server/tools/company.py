@@ -9,6 +9,7 @@ import logging
 from typing import Annotated, Any
 
 from fastmcp import Context, FastMCP
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from linkedin_mcp_server.callbacks import MCPContextProgressCallback
@@ -188,6 +189,10 @@ def register_company_tools(
             Dict with url, sections (search_results -> raw text), and optional references.
             The LLM should parse the raw text to extract individual companies and their pages.
         """
+        # Fork extension: blank keywords navigate to an unfiltered page whose
+        # result reads as a search answer; refuse before any page load.
+        if not keywords or not keywords.strip():
+            raise ToolError("keywords must not be empty.")
         try:
             extractor = await get_ready_extractor(ctx, tool_name="search_companies")
             logger.info("Searching companies: keywords='%s'", keywords)

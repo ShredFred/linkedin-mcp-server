@@ -214,3 +214,6 @@ scripts/snapshot_dumps/
 
 # Debug artifacts
 .debug/
+
+# Local review broker state (mco)
+.agent-broker/

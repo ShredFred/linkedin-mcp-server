@@ -89,14 +89,19 @@ class TestMessageTargetUrls:
             ("https://www.linkedin.com:444/in/testuser/", None),
             ("https://www.linkedin.com/in/testuser/edit/intro/", None),
             ("https://www.linkedin.com/in/testuser%2Fedit/", None),
-            ("https://www.linkedin.com/in/testuser/?trk=profile", None),
-            # The 2026 profile page lands on this flag; it is the only query allowed.
+            # Fork extension: trk is allowlisted as benign; unknown keys still fail.
+            ("https://www.linkedin.com/in/testuser/?miniProfileUrn=x", None),
+            # The 2026 profile page lands on this flag (upstream); trk is fork-allowlisted.
             (
                 "https://www.linkedin.com/in/testuser/?isSelfProfile=false",
                 "/in/testuser/",
             ),
             ("https://www.linkedin.com/in/testuser/?isSelfProfile=true", None),
-            ("https://www.linkedin.com/in/testuser/?isSelfProfile=false&trk=x", None),
+            ("https://www.linkedin.com/in/testuser/?trk=profile", "/in/testuser/"),
+            (
+                "https://www.linkedin.com/in/testuser/?isSelfProfile=false&trk=x",
+                "/in/testuser/",
+            ),
             ("https://www.linkedin.com/in/testuser/#details", None),
         ],
     )
@@ -236,8 +241,9 @@ class TestSendMessage:
 
     @pytest.mark.parametrize(
         "message",
-        ["First\nSecond", "First\rSecond", "First\tSecond", "First\x7fSecond"],
-        ids=["newline", "carriage-return", "tab", "del"],
+        # Fork extension: LF is allowed (multi-line messages), so it left this list.
+        ["First\rSecond", "First\tSecond", "First\x7fSecond"],
+        ids=["carriage-return", "tab", "del"],
     )
     async def test_control_message_is_rejected_before_browser_interaction(
         self, mock_page, message

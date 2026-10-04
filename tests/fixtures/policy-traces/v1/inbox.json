@@ -103,6 +103,17 @@
     },
     {
       "arg": {
+        "act": true,
+        "target": 10
+      },
+      "call": "get_inbox",
+      "kind": "evaluate",
+      "operation": "load_more_conversation_rows",
+      "program_digest": "e206fbb3db8f",
+      "section": "conversation"
+    },
+    {
+      "arg": {
         "selectors": [
           "main"
         ]

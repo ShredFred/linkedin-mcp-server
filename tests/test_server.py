@@ -1,3 +1,4 @@
+import os
 import asyncio
 import json
 import subprocess
@@ -176,6 +177,8 @@ async def _wire_tools(
         (
             tool.model_dump(mode="json", by_alias=True, exclude_none=True)
             for tool in tools
+            # Fork extension: fork tools are contracted in tests/test_ext_tools.py.
+            if "ext" not in (tool.meta or {}).get("fastmcp", {}).get("tags", [])
         ),
         key=lambda tool: tool["name"],
     )
@@ -438,13 +441,13 @@ class TestTheRoleAsProcessState:
 
         Driven rather than read: an earlier version of this asserted on the source
         text of `main`, which stayed green when the call was made unreachable. The
-        child opens its log before taking the lock, so that boundary records the
-        role before its expected startup failure is translated into a verdict.
+        role must be recorded before the lock is taken, the first step that
+        touches the profile's state.
         """
         from linkedin_mcp_server import daemon_config, daemon_owner
         from linkedin_mcp_server.config.schema import AppConfig
 
-        class Checkpoint(BaseException):
+        class Checkpoint(Exception):
             pass
 
         seen: list[ServerRole] = []
@@ -459,13 +462,28 @@ class TestTheRoleAsProcessState:
             lambda: daemon_config.OwnerHandover(AppConfig(), "0123456789abcdef" * 4),
         )
         monkeypatch.setattr(daemon_owner, "set_headless", lambda _headless: None)
-        monkeypatch.setattr(daemon_owner, "_attach_daemon_log", at_checkpoint)
+        # The lock is the first step after the role claim that touches real
+        # state (the profile's auth root), so the checkpoint sits there: the
+        # drive never takes a lock on, or writes a log into, a real profile.
+        monkeypatch.setattr(daemon_owner, "_take_lock", at_checkpoint)
         monkeypatch.setattr(daemon_owner, "_claim_bootstrap_stream", lambda: None)
         monkeypatch.setattr(
             daemon_owner, "_claim_handshake_stream", lambda: MagicMock()
         )
 
-        assert daemon_owner.main([]) == 1
+        # On Windows `main` first verifies the Job Object handoff and returns 1
+        # before the handover is read; give it a verified job so the drive
+        # reaches the checkpoint on every platform (red on Windows until 2026-10).
+        argv: list[str] = []
+        if os.name == "nt":
+            argv = ["--job-name", "test-job"]
+            monkeypatch.setattr(
+                daemon_owner.WindowsJob, "verify_current_process", lambda _name: None
+            )
+            # ...and refuses an unauthorized startup commit before the log.
+            monkeypatch.setattr(daemon_config, "authorizes_commit", lambda _p: True)
+
+        assert daemon_owner.main(argv) == 1
         assert seen == [ServerRole.OWNER]
 
     def test_the_windows_owner_verifies_membership_before_reading_config(

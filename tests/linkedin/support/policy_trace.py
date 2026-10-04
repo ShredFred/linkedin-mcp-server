@@ -596,6 +596,8 @@ def semantic_program_id(program: str) -> str:
     compact = " ".join(program.split())
     checks = (
         ("performance.timeOrigin", "document_origin"),
+        ("companyPeopleLoadState", "company_people_load_state"),
+        ("companyPeopleClickMore", "company_people_click_more"),
         ("MAX_HEADING_CONTAINERS", "root_content"),
         ("SIDEBAR_SECTIONS", "sidebar_profiles"),
         ("showAllUrls", "sidebar_profiles"),
@@ -620,6 +622,7 @@ def semantic_program_id(program: str) -> str:
         ("signals.bounded && (signals.easy_apply", "job_apply_ready"),
         ("descriptionHeadings, closedLines", "job_apply_signals"),
         ("const heading = document.querySelector('main h1')", "profile_display_name"),
+        ("loadMoreConversationRows", "load_more_conversation_rows"),
         ("main li label[aria-label]", "conversation_thread_refs"),
         ("isScrollable", "scroll_main_region"),
         ("jobs-search-pagination__page-state", "job_total_pages"),

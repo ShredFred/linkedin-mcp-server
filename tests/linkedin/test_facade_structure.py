@@ -27,7 +27,14 @@ FACADE_PACKAGE_IMPORTERS = {
     Path("tests/linkedin/test_facade_results.py"),
     Path("tests/linkedin/test_facade_structure.py"),
     Path("tests/test_dependencies.py"),
+    # Fork extension: the daily-report runner builds its own extractor.
+    Path("linkedin_mcp_server/ext_daily.py"),
 }
+
+# Fork extension: state behind the public ext_session/ext_navigator
+# properties. No caller reaches it directly; private facade access is
+# forbidden without exception.
+LINKEDIN_MCP_FORK_FACADE_STATE = {"_ext_navigator", "_ext_session"}
 
 PUBLIC_SIGNATURES = {
     "click_button_by_text": "(self, text: 'str', *, scope: 'str' = 'main', timeout: 'int' = 5000) -> 'bool'",
@@ -112,7 +119,10 @@ FACADE_STATE = {
     "_message_sender",
     "_person",
     "_posts",
-}
+} | LINKEDIN_MCP_FORK_FACADE_STATE
+
+# Fork extension: read-only properties the fork's outreach tools consult.
+LINKEDIN_MCP_FORK_PROPERTIES = {"invite_send_clicked", "ext_navigator", "ext_session"}
 
 PERMANENT_ALIASES = {
     "ExtractedSection": contracts.ExtractedSection,
@@ -163,7 +173,8 @@ def _assert_facade_shape(source: str) -> None:
         for node in facade.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
-    assert set(methods) == {*PUBLIC_SIGNATURES, "__init__"}
+    # Fork extension: invite_send_clicked is a read-only property, not a delegate.
+    assert set(methods) == {*PUBLIC_SIGNATURES, "__init__", *LINKEDIN_MCP_FORK_PROPERTIES}
     assert all(
         isinstance(methods[name], ast.AsyncFunctionDef) for name in PUBLIC_SIGNATURES
     )

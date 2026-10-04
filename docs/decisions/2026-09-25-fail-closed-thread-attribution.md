@@ -43,7 +43,7 @@ Username resolution converts one scan into the gap-free prefix of matching
 rows that precede the earliest barrier: an unresolved click, a matching row
 without a click target, or an attributed row that fails the existing exact
 display-name check in Python. An index inside that prefix is served; an index at
-or beyond it is refused with a `LinkedInScraperException` naming the reason, and
+or beyond it is refused with a `LinkedInOperationError` naming the reason, and
 nothing is navigated to or captured.
 
 | Inbox scan | Action |

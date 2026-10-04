@@ -584,11 +584,14 @@ class TestActionChoiceIsStructural:
         )
 
     async def test_no_more_opener_outside_an_action_root(self, dom_page):
-        # No compose anchor means no action root, so there is no More button
-        # to find even though the page renders one.
+        # No compose anchor means no action root. fork (2026-09-30):
+        # the opener then falls back to the top card's unlabeled menu
+        # button, because a Connect-only 2026 card has no Message anchor.
+        # Opening a menu writes nothing; connect_with_person never calls it
+        # for a self profile.
         await _in_every_locale(
             dom_page,
             self_top_card,
-            (False, None),
+            (True, None),
             lambda page, html: _click(page, html, OPEN_MORE_BUTTON_JS),
         )

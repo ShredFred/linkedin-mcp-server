@@ -257,6 +257,8 @@ async def _generic_capture_scenario(
     recorder = TraceRecorder(name, _COMMON_ALLOWED)
     clock = FakeClock(recorder)
     page = _page(recorder).script("evaluate:root_content", _root("Policy content"))
+    if "/company/" in url and "/people/" in url:
+        page.script("evaluate:company_people_load_state", {"rows": 0, "more": False})
     extractor = _extractor(page)
     async with boundaries(recorder, clock):
         with recorder.context("extract_page", "section"):
@@ -843,6 +845,14 @@ async def _single_capture_facade_scenario(method: str) -> dict[str, Any]:
     # facades accept any text.
     text = "About the job\nResult content" if method == "read_job" else "Result content"
     page = _page(recorder).script("evaluate:root_content", _root(text))
+    if method == "get_company_employees":
+        # One "Show more results" round, then the button is gone (#1077).
+        page.script(
+            "evaluate:company_people_load_state",
+            {"rows": 12, "more": True},
+            {"rows": 20, "more": False},
+        )
+        page.script("evaluate:company_people_click_more", True)
     extractor = _extractor(page)
     arguments: dict[str, Any]
     async with boundaries(recorder, clock):
@@ -998,6 +1008,9 @@ async def _conversation_scenario(method: str) -> dict[str, Any]:
     if method != "search_conversations":
         scrolls = 3 if method == "get_conversation" else 1
         page.script("evaluate:scroll_main_region", *([True] * scrolls))
+    if method == "get_inbox":
+        # One "load more" round on the inbox page; the limit is already met.
+        page.script("evaluate:load_more_conversation_rows", 10)
     page.script("evaluate:root_content", _root("Conversation content"))
     if method != "get_conversation":
         page.script(
@@ -1047,6 +1060,8 @@ async def _conversation_row_resolution_scenario() -> dict[str, Any]:
     page = _page(recorder)
     page.script("evaluate:scroll_main_region", True, True)
     page.script("evaluate:root_content", _root("Conversation content"))
+    # One "load more" round on each page; the limit is already met.
+    page.script("evaluate:load_more_conversation_rows", 10, 10)
     page.script("wait_for_selector:conversation_rows", None)
     page.script("evaluate:conversation_thread_refs", ROW_CLICK_STOPPED_OUTCOME)
     extractor = _extractor(page)
@@ -1078,6 +1093,8 @@ async def _facade_contract_trace() -> dict[str, Any]:
                 "output": tool.output_schema,
             }
             for tool in sorted(tools, key=lambda item: item.name)
+            # Fork extension: fork tools are contracted in tests/test_ext_tools.py.
+            if "ext" not in tool.tags
         }
     return {
         "schema_version": 1,
@@ -1170,7 +1187,7 @@ async def build_policy_traces() -> dict[str, dict[str, Any]]:
         "message-sent.json": await _messaging_submission_scenario("sent"),
         "message-cancelled.json": await _messaging_cancellation_scenario(),
         "message-blank.json": await _invalid_message_scenario("   ", "blank"),
-        "message-c0.json": await _invalid_message_scenario("line\nbreak", "c0"),
+        "message-c0.json": await _invalid_message_scenario("line\rbreak", "c0"),
         "message-del.json": await _invalid_message_scenario("text\x7f", "del"),
         "connect.json": await _connect_scenario(),
         "get-my-profile.json": await _get_my_profile_scenario(),

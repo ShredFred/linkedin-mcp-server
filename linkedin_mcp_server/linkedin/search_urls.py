@@ -64,6 +64,82 @@ CONTENT_DATE_POSTED_MAP = {
 # LinkedIn accepts "F" (1st-degree), "S" (2nd-degree), "O" (3rd-degree and beyond).
 NETWORK_TOKENS = ("F", "S", "O")
 
+# People search filters location only through the ``geoUrn`` facet, a JSON
+# list of numeric LinkedIn geo ids. A plain ``&location=<text>`` parameter is
+# accepted by the URL and then ignored, answering a worldwide result set that
+# reads as filtered (upstream #710/#722). The map below resolves a small set of
+# common country names to their public geo ids; anything else must be passed
+# as the numeric id itself (visible in the ``geoUrn`` of a LinkedIn people
+# search URL after picking the location by hand). Keys are lowercase,
+# whitespace-collapsed, and carry German and English spellings.
+PEOPLE_GEO_IDS = {
+    "germany": "101282230",
+    "deutschland": "101282230",
+    "austria": "103883259",
+    "österreich": "103883259",
+    "oesterreich": "103883259",
+    "switzerland": "106693272",
+    "schweiz": "106693272",
+    "united states": "103644278",
+    "usa": "103644278",
+    "united kingdom": "101165590",
+    "uk": "101165590",
+    "france": "105015875",
+    "frankreich": "105015875",
+    "netherlands": "102890719",
+    "niederlande": "102890719",
+    "italy": "103350119",
+    "italien": "103350119",
+    "spain": "105646813",
+    "spanien": "105646813",
+    "poland": "105072130",
+    "polen": "105072130",
+    "india": "102713980",
+    "indien": "102713980",
+    "canada": "101174742",
+    "kanada": "101174742",
+}
+
+_GEO_ID_RE = re.compile(r"[0-9]{1,15}")
+
+
+def resolve_people_geo_ids(location: str) -> list[str]:
+    """Resolve a people-search ``location`` to numeric geo ids, or refuse.
+
+    Accepts one or more comma-separated entries, each a numeric geo id or a
+    name from ``PEOPLE_GEO_IDS`` (case-insensitive). An empty or
+    whitespace-only value means "no location filter" and returns ``[]``, the
+    same as omitting it. An empty entry inside a list, an
+    unknown name or any other character is refused with
+    ``FilterValidationError`` -- never dropped, because a dropped location
+    searches worldwide while the request still reads as filtered.
+    """
+    if not location.strip():
+        return []
+    entries = [e.strip() for e in location.split(",")]
+    ids: list[str] = []
+    for entry in entries:
+        if not entry:
+            raise FilterValidationError(
+                f"location {location!r} contains an empty entry."
+            )
+        if _GEO_ID_RE.fullmatch(entry):
+            geo_id = entry
+        else:
+            key = " ".join(entry.casefold().split())
+            geo_id = PEOPLE_GEO_IDS.get(key)
+            if geo_id is None:
+                raise FilterValidationError(
+                    f"Unknown location {entry!r}: LinkedIn people search only "
+                    f"filters on a numeric geo id (geoUrn), and a place name it "
+                    f"cannot resolve would be silently ignored. Pass the numeric "
+                    f"id (e.g. '101282230' for Germany) or one of "
+                    f"{sorted(PEOPLE_GEO_IDS)!r}."
+                )
+        if geo_id not in ids:
+            ids.append(geo_id)
+    return ids
+
 
 def _normalize_csv(value: str, mapping: dict[str, str]) -> str:
     """Normalize and encode each token in a comma-separated filter value."""
@@ -149,9 +225,11 @@ def build_people_search_url(
             f'URN via get_company_profile -> references["about"].'
         )
 
+    geo_ids = resolve_people_geo_ids(location) if location else []
+
     params = f"keywords={quote_plus(keywords)}"
-    if location:
-        params += f"&location={quote_plus(location)}"
+    if geo_ids:
+        params += f"&geoUrn={_encode_list_facet(geo_ids)}"
     if network:
         params += f"&network={_encode_list_facet(network)}"
     if current_company:

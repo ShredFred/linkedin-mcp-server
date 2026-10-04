@@ -94,6 +94,13 @@
       "timeout_ms": 5000
     },
     {
+      "call": "extract_page",
+      "kind": "evaluate",
+      "operation": "company_people_load_state",
+      "program_digest": "9df1380523f3",
+      "section": "section"
+    },
+    {
       "actual_scrolls": 2,
       "call": "extract_page",
       "kind": "boundary.scroll_body",

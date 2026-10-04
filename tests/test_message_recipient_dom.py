@@ -340,6 +340,206 @@ class TestProfileMessageTargetDom:
 
         assert result == {"status": "unresolved"}
 
+    # Live shape of 2026-10-02 (two measured profiles):
+    # the top card wraps an empty inner section and the sidebar shows
+    # "Nachricht" buttons for other people.
+    @staticmethod
+    def _card_with_inner_section(card: str) -> str:
+        return f"""<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>
+          <main><div>
+            <section><div>
+              <section>
+                {card}
+                <section><div></div></section>
+              </section>
+              <section><h2>Aktivitaeten</h2></section>
+            </div></section>
+            <aside>
+              <section>
+                <h2>Weitere Profile fuer Sie</h2>
+                <a href="/messaging/compose/?recipient=OTHER1">Nachricht</a>
+                <a href="/messaging/compose/?recipient=OTHER2">Nachricht</a>
+              </section>
+              <section>
+                <h2>Premium-Profile erkunden</h2>
+                <a href="/messaging/compose/?recipient=OTHER3">Nachricht</a>
+              </section>
+            </aside>
+          </div></main>
+        </body></html>
+        """
+
+    async def test_top_card_wrapping_inner_section_resolves_despite_sidebar(
+        self, dom_page
+    ):
+        await _set_composer_content(
+            dom_page,
+            self._card_with_inner_section(
+                """<h2>Test User</h2>
+                <a href="/messaging/compose/?recipient=ACoAAB">Nachricht</a>
+                <div style="display:none">
+                  <a href="/messaging/compose/?recipient=ACoAAB">Nachricht</a>
+                </div>"""
+            ),
+        )
+
+        result = await dom_page.evaluate(_PROFILE_MESSAGE_TARGET_JS)
+
+        assert result["status"] == "resolved"
+        assert result["displayName"] == "Test User"
+        assert result["composeHrefs"] == ["/messaging/compose/?recipient=ACoAAB"]
+
+    async def test_inner_section_card_without_name_yet_is_unresolved(self, dom_page):
+        await _set_composer_content(
+            dom_page,
+            self._card_with_inner_section(
+                '<a href="/messaging/compose/?recipient=ACoAAB">Nachricht</a>'
+            ),
+        )
+
+        result = await dom_page.evaluate(_PROFILE_MESSAGE_TARGET_JS)
+
+        assert result == {"status": "unresolved"}
+
+    async def test_inner_section_card_with_two_message_actions_fails_closed(
+        self, dom_page
+    ):
+        await _set_composer_content(
+            dom_page,
+            self._card_with_inner_section(
+                """<h2>Test User</h2>
+                <a href="/messaging/compose/?recipient=ACoAAB">Nachricht</a>
+                <a href="/messaging/compose/?recipient=OTHER">Nachricht</a>"""
+            ),
+        )
+
+        result = await dom_page.evaluate(_PROFILE_MESSAGE_TARGET_JS)
+
+        assert result == {"status": "unresolved"}
+
+    # #1152: Premium upsell blocks and suggestion rails outside an aside.
+    @staticmethod
+    def _upsell_page(before: str, card: str, after: str = "") -> str:
+        return f"""<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>
+          <main><div>
+            {before}
+            <section><div><section>{card}</section></div></section>
+            {after}
+          </div></main>
+        </body></html>
+        """
+
+    _CARD = """<h2>Ada Lovelace</h2>
+        <a href="/messaging/compose/?recipient=ACoAAB">Message</a>"""
+
+    @pytest.mark.parametrize(
+        "heading",
+        [
+            "Explore Premium profiles",
+            "Premium-Profile erkunden",
+            "People you may know",
+            "Personen, die Sie kennen könnten",
+        ],
+    )
+    async def test_upsell_section_before_card_is_skipped(self, dom_page, heading):
+        await _set_composer_content(
+            dom_page,
+            self._upsell_page(
+                f"""<section><h2>{heading}</h2>
+                <a href="/messaging/compose/?recipient=OTHER">Message</a></section>""",
+                self._CARD,
+            ),
+        )
+
+        result = await dom_page.evaluate(_PROFILE_MESSAGE_TARGET_JS)
+
+        assert result["status"] == "resolved"
+        assert result["composeHrefs"] == ["/messaging/compose/?recipient=ACoAAB"]
+
+    @pytest.mark.parametrize(
+        "upsell",
+        [
+            '<a href="/premium/products/?upsellOrderOrigin=x">Premium testen</a>',
+            '<a href="/messaging/compose/?recipient=ACoAAB&upsellOrderOrigin=x">'
+            "Explore Premium</a>",
+            '<a href="/messaging/compose/?recipient=ACoAAB" '
+            'aria-label="Try Premium for free">Message</a>',
+            '<div data-view-name="premium-upsell-cta">'
+            '<a href="/messaging/compose/?recipient=ACoAAB">Message</a></div>',
+            "<h3>Premium testen</h3>",
+        ],
+    )
+    async def test_upsell_inside_card_does_not_block_real_message(
+        self, dom_page, upsell
+    ):
+        await _set_composer_content(
+            dom_page,
+            self._upsell_page("", upsell + self._CARD),
+        )
+
+        result = await dom_page.evaluate(_PROFILE_MESSAGE_TARGET_JS)
+
+        assert result["status"] == "resolved"
+        assert result["displayName"] == "Ada Lovelace"
+        assert result["composeHrefs"] == ["/messaging/compose/?recipient=ACoAAB"]
+
+    @pytest.mark.parametrize(
+        "upsell",
+        [
+            '<a href="/messaging/compose/?recipient=ACoAAB&upsellOrderOrigin=x">'
+            "Message</a>",
+            '<a href="/messaging/compose/?recipient=ACoAAB">Explore Premium</a>',
+            '<a href="/messaging/compose/?recipient=ACoAAB">Premium testen</a>',
+        ],
+    )
+    async def test_only_upsell_message_fails_closed(self, dom_page, upsell):
+        await _set_composer_content(
+            dom_page,
+            self._upsell_page("", "<h2>Ada Lovelace</h2>" + upsell),
+        )
+
+        result = await dom_page.evaluate(_PROFILE_MESSAGE_TARGET_JS)
+
+        assert result == {"status": "unresolved"}
+
+    @pytest.mark.parametrize(
+        "label",
+        [
+            'aria-label="Message (Premium)">Message',
+            'title="InMail">InMail',
+            'aria-label="Send InMail (Premium)">Message (Premium)',
+        ],
+    )
+    async def test_premium_labelled_compose_anchor_resolves(self, dom_page, label):
+        await _set_composer_content(
+            dom_page,
+            self._upsell_page(
+                "",
+                '<h2>Ada Lovelace</h2>'
+                f'<a href="/messaging/compose/?recipient=ACoAAB" {label}</a>',
+            ),
+        )
+
+        result = await dom_page.evaluate(_PROFILE_MESSAGE_TARGET_JS)
+
+        assert result["status"] == "resolved"
+        assert result["composeHrefs"] == ["/messaging/compose/?recipient=ACoAAB"]
+
+    async def test_upsell_does_not_hide_a_second_real_message(self, dom_page):
+        await _set_composer_content(
+            dom_page,
+            self._upsell_page(
+                "",
+                self._CARD
+                + '<a href="/messaging/compose/?recipient=OTHER">Message</a>'
+                + '<a href="/premium/">Explore Premium</a>',
+            ),
+        )
+
+        result = await dom_page.evaluate(_PROFILE_MESSAGE_TARGET_JS)
+
+        assert result == {"status": "unresolved"}
+
 
 class TestMessageComposerDom:
     async def test_owner_handle_pins_one_dom_instance_and_disposes(self, dom_page):

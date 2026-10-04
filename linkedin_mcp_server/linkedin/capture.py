@@ -71,6 +71,42 @@ class CapturePlan:
 
     mode: CaptureMode = CaptureMode.STANDARD
     max_scrolls: int | None = None
+    # COMPANY_PEOPLE only: stop "Show more results" once this many profile
+    # rows are on the page (upstream #1077). None uses the module default.
+    max_rows: int | None = None
+
+
+# /company/<x>/people/ renders ~12 rows and a "Show more results" button
+# (upstream #1077). The loader clicks it until one of: the requested row
+# count is reached, no button is left, the row count stops growing, or the
+# hard round cap is hit. Each round is one click plus a pause, so the cap
+# also bounds the time and the request count of one capture.
+COMPANY_PEOPLE_DEFAULT_MAX_ROWS = 100
+COMPANY_PEOPLE_MAX_ROUNDS = 15
+COMPANY_PEOPLE_ROUND_PAUSE = 1.5
+
+_COMPANY_PEOPLE_STATE_JS = r"""() => {
+  const companyPeopleLoadState = true;
+  const main = document.querySelector('main');
+  if (!main) return {rows: 0, more: false};
+  const hrefs = new Set([...main.querySelectorAll('a[href*="/in/"]')]
+    .map(a => (a.getAttribute('href') || '').split('?')[0]));
+  const more = [...main.querySelectorAll('button')]
+    .some(b => /Weitere Ergebnisse|Show more results/i.test(b.innerText || '') && !b.disabled);
+  return {rows: hrefs.size, more};
+}"""
+
+_COMPANY_PEOPLE_CLICK_MORE_JS = r"""() => {
+  const companyPeopleClickMore = true;
+  const main = document.querySelector('main');
+  if (!main) return false;
+  const button = [...main.querySelectorAll('button')]
+    .find(b => /Weitere Ergebnisse|Show more results/i.test(b.innerText || '') && !b.disabled);
+  if (!button) return false;
+  button.scrollIntoView({block: 'center'});
+  button.click();
+  return true;
+}"""
 
 
 def capture_plan_for_url(url: str, max_scrolls: int | None = None) -> CapturePlan:
@@ -233,6 +269,43 @@ class SectionCapture:
             capture_plan_for_url(url, max_scrolls),
         )
 
+    async def _load_more_company_people(
+        self, max_rows: int | None
+    ) -> dict[str, Any]:
+        """Click "Show more results" on a company people list, bounded.
+
+        Returns ``{rows, rounds, stop}`` where ``stop`` is one of
+        ``limit``, ``no_button``, ``stagnated``, ``round_cap``.
+        """
+        target = max_rows if max_rows is not None else COMPANY_PEOPLE_DEFAULT_MAX_ROWS
+        page = self._session.page
+        state = await page.evaluate(_COMPANY_PEOPLE_STATE_JS)
+        rounds = 0
+        stale = 0
+        stop = "round_cap"
+        while rounds < COMPANY_PEOPLE_MAX_ROUNDS:
+            rows = int(state.get("rows") or 0)
+            if rows >= target:
+                stop = "limit"
+                break
+            if not state.get("more"):
+                stop = "no_button"
+                break
+            if not await page.evaluate(_COMPANY_PEOPLE_CLICK_MORE_JS):
+                stop = "no_button"
+                break
+            rounds += 1
+            await self._session.delay(COMPANY_PEOPLE_ROUND_PAUSE)
+            state = await page.evaluate(_COMPANY_PEOPLE_STATE_JS)
+            if int(state.get("rows") or 0) <= rows:
+                stale += 1
+                if stale >= 2:
+                    stop = "stagnated"
+                    break
+            else:
+                stale = 0
+        return {"rows": int(state.get("rows") or 0), "rounds": rounds, "stop": stop}
+
     async def capture(
         self,
         url: str,
@@ -387,6 +460,8 @@ class SectionCapture:
                 )
             except PlaywrightTimeoutError:
                 logger.debug("Company people listing did not appear on %s", url)
+            outcome = await self._load_more_company_people(plan.max_rows)
+            logger.debug("Company people load-more on %s: %s", url, outcome)
 
         if CaptureMode.DETAILS in plan.mode:
             try:

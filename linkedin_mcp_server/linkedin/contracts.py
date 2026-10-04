@@ -92,6 +92,27 @@ def message_action_result(
     }
 
 
+# Fork extension: characters that are not C0 but still invisible or line-breaking
+# in the composer -- C1 controls, the Unicode line/paragraph separators,
+# zero-width space, directional marks and the BOM. Not the zero-width joiner
+# (U+200D) or variation selectors: emojis are built from them.
+_INVISIBLE_CONTROLS = frozenset("  ​‎‏﻿")
+
+
+def is_invisible_control(character: str) -> bool:
+    """DEL, a C1 control, a bidi embedding/override/isolate, or one of the
+    invisible separators above. Bidi controls reorder what the recipient sees
+    without changing the stored text, so a reviewed draft could read differently."""
+    code = ord(character)
+    return (
+        code == 127
+        or 0x80 <= code <= 0x9F
+        or 0x202A <= code <= 0x202E
+        or 0x2066 <= code <= 0x2069
+        or character in _INVISIBLE_CONTROLS
+    )
+
+
 def refuse_an_invalid_message(
     linkedin_username: str, message: str
 ) -> dict[str, Any] | None:
@@ -99,10 +120,18 @@ def refuse_an_invalid_message(
     reason = None
     if not message.strip():
         reason = "Message must contain non-whitespace characters."
-    elif any(ord(character) < 32 or ord(character) == 127 for character in message):
+    elif any(
+        (ord(character) < 32 and character != "\n") or is_invisible_control(character)
+        for character in message
+    ):
         # Keep the browser-side insertion contract to plain message text.
         # Reject every C0 control and DEL before a session is acquired so no
         # control input can reach the contenteditable surface.
+        # Fork extension: LF is the one exception. The composer never receives it
+        # as a key: message_sender splits on it and inserts a paragraph with
+        # execCommand('insertParagraph'), so no Enter can submit half a message.
+        # CR stays refused -- send "\n", not "\r\n".
+        # The reason text stays upstream's verbatim so fixtures need no rewrite.
         reason = "Message must not contain control characters or line breaks."
     if reason is None:
         return None

@@ -25,6 +25,7 @@ from linkedin_mcp_server.core.exceptions import (
     PageReadError,
     ProfileNotFoundError,
     ProxyConnectionError,
+    OffSiteNavigationError,
     RateLimitError,
 )
 
@@ -234,6 +235,13 @@ def raise_tool_error(exception: Exception, context: str = "") -> NoReturn:
         logger.warning("Rate limit%s: %s (wait=%ds)", ctx, exception, wait_time)
         raise ToolError(
             f"Rate limit detected. Wait {wait_time} seconds before trying again."
+        ) from exception
+
+    elif isinstance(exception, OffSiteNavigationError):
+        logger.warning("Off-site navigation%s: %s", ctx, exception)
+        raise ToolError(
+            "Navigation left LinkedIn; the page was not read. "
+            f"Final URL: {exception.final_url}"
         ) from exception
 
     elif isinstance(exception, ProfileNotFoundError):

@@ -82,6 +82,30 @@
       "timeout_ms": 5000
     },
     {
+      "call": "get_company_employees",
+      "kind": "evaluate",
+      "operation": "company_people_load_state",
+      "program_digest": "9df1380523f3"
+    },
+    {
+      "call": "get_company_employees",
+      "kind": "evaluate",
+      "operation": "company_people_click_more",
+      "program_digest": "b66bbb0f525a"
+    },
+    {
+      "call": "get_company_employees",
+      "kind": "sleep",
+      "reason": "sleep",
+      "seconds": 1.5
+    },
+    {
+      "call": "get_company_employees",
+      "kind": "evaluate",
+      "operation": "company_people_load_state",
+      "program_digest": "9df1380523f3"
+    },
+    {
       "actual_scrolls": 2,
       "call": "get_company_employees",
       "kind": "boundary.scroll_body",

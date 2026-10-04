@@ -2,6 +2,8 @@
 
 from urllib.parse import quote
 
+import pytest
+
 from linkedin_mcp_server.linkedin.fields import COMPANY_SECTIONS, PERSON_SECTIONS
 from linkedin_mcp_server.linkedin.link_metadata import (
     _REFERENCE_CAPS,
@@ -956,6 +958,43 @@ class TestClassifyLink:
             "https://www.linkedin.com/messaging/thread/2-abc123/?focusedMsgUrn=xyz"
         )
         assert result == ("conversation", "/messaging/thread/2-abc123/")
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://www.linkedin.com/messaging/thread/new/",
+            "https://www.linkedin.com/messaging/thread/new",
+            "https://www.linkedin.com/messaging/thread/new/?searchTerm=x",
+            "https://www.linkedin.com/messaging/thread/NEW/#top",
+            "https://www.linkedin.com/messaging/thread/compose/",
+            "https://www.linkedin.com/messaging/compose/?recipient=ACoAAB",
+        ],
+    )
+    def test_compose_links_are_not_conversations(self, url):
+        """#1194: the "New message" button is not a conversation."""
+        assert classify_link(url) is None
+
+    def test_thread_id_starting_with_new_is_still_a_conversation(self):
+        assert classify_link("https://www.linkedin.com/messaging/thread/newabc/") == (
+            "conversation",
+            "/messaging/thread/newabc/",
+        )
+
+    def test_search_references_drop_new_message_link(self):
+        references = build_references(
+            [
+                {
+                    "href": "https://www.linkedin.com/messaging/thread/new/",
+                    "text": "New message",
+                },
+                {
+                    "href": "https://www.linkedin.com/messaging/thread/2-abc123/",
+                    "text": "Ada Lovelace",
+                },
+            ],
+            "search_results",
+        )
+        assert [r["url"] for r in references] == ["/messaging/thread/2-abc123/"]
 
     def test_inbox_references_include_threads(self):
         references = build_references(

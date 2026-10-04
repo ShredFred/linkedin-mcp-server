@@ -90,11 +90,30 @@ class ActionSignals:
     finds no top-card root on incoming profiles (they have no Message
     button) and would otherwise mis-anchor on sidebar cards."""
 
+    # fork extension (2026-09-30): LinkedIn's 2026 top card moved Connect and the
+    # Pending state into the More menu for many profiles. Both carry a
+    # locale-independent ``componentkey`` of the form
+    # ``ConnectButtonstate:invitation:urn:li:member:<id>_pending`` or
+    # ``..._conn...``. Measured live on four German-locale profiles; three of
+    # the eight connect_unavailable results of 2026-09-29 were in fact pending.
+    has_pending_invitation_key: bool = False
+    """A ``ConnectButtonstate:invitation:*_pending`` element exists in the
+    top card or in an open More menu."""
+
+    has_connect_invitation_key: bool = False
+    """A ``ConnectButtonstate:invitation:*_conn*`` element exists in the top
+    card or in an open More menu. Informational only: the write gate stays
+    ``has_invite_anchor``."""
+
 
 def detect_connection_state(signals: ActionSignals) -> ConnectionState:
     """Determine the relationship state for a profile from structural signals.
 
     Resolution order:
+
+    Fork extension: ``pending`` by ``componentkey`` (top card or open More
+    menu) now comes right after ``self_profile``, unless the incoming-request
+    row is present.
 
     1. ``self_profile`` — edit-intro anchor (URL).
     2. ``connectable`` — vanityName invite anchor (URL).
@@ -119,6 +138,11 @@ def detect_connection_state(signals: ActionSignals) -> ConnectionState:
     """
     if signals.has_edit_intro_anchor:
         return "self_profile"
+    # Fork extension: a pending invitation is the stronger fact. Checked before
+    # the invite anchor so a stale Connect never produces a second invite,
+    # but never on an incoming-request row, which must stay acceptable.
+    if signals.has_pending_invitation_key and not signals.has_incoming_action_row:
+        return "pending"
     if signals.has_invite_anchor:
         return "connectable"
     if signals.has_incoming_action_row:

@@ -189,10 +189,52 @@ ACTION_SIGNALS_JS = (
   if (!main) return null;
 
   const safe = CSS.escape(username);
-  const inviteSel = `a[href*="/preload/custom-invite/?vanityName=${safe}"]`;
   const editSel = `a[href*="/in/${safe}/edit/intro/"]`;
 
-  const hasInvite = !!document.querySelector(inviteSel);
+  // Fork extension: parse vanityName instead of a substring selector. LinkedIn
+  // percent-encodes umlaut slugs and may put other parameters first; the
+  // old selector matched neither and reported connect_unavailable.
+  const fold = value => {
+    try { return decodeURIComponent(value).toLowerCase(); } catch { return null; }
+  };
+  const wanted = fold(username);
+  const hasInvite = Array.from(
+    document.querySelectorAll('a[href*="/preload/custom-invite/"]')
+  ).some(anchor => {
+    try {
+      // The base only resolves relative hrefs; host and path are irrelevant
+      // here because only vanityName is read.
+      const url = new URL(anchor.getAttribute('href') || '', 'https://www.linkedin.com/');
+      const host = url.hostname.toLowerCase().replace(/\.$/, '');
+      if (
+        url.protocol !== 'https:' ||
+        !/(^|\.)linkedin\.com$/.test(host) ||
+        url.pathname !== '/preload/custom-invite/'
+      ) {
+        return false;
+      }
+      const values = url.searchParams.getAll('vanityName');
+      // searchParams already decoded once; fold again only for case.
+      return values.length === 1 && wanted !== null &&
+        values[0].toLowerCase() === wanted;
+    } catch {
+      return false;
+    }
+  });
+  // The top card is the first section that wraps no other section, outside
+  // any aside (same rule as the message target). The outer wrapper section
+  // also holds posts and "people you may know" cards whose Connect/Pending
+  // keys belong to other members (measured 2026-09-30).
+  const topScope = Array.from(main.querySelectorAll('section')).find(
+    element => !element.closest('aside') && !element.querySelector('section')
+  ) || main.firstElementChild || main;
+  const invitationKeys = [topScope, ...document.querySelectorAll('[role="menu"]')]
+    .flatMap(scope => Array.from(
+      scope.querySelectorAll('[componentkey^="ConnectButtonstate:invitation:"]')
+    ))
+    .map(element => element.getAttribute('componentkey') || '');
+  const hasPendingInvitationKey = invitationKeys.some(key => /_pending$/.test(key));
+  const hasConnectInvitationKey = invitationKeys.some(key => /_conn[a-z]*$/.test(key));
   const hasEditIntro = !!main.querySelector(editSel);
 
   const actionRoot = findActionRoot(main);
@@ -224,6 +266,8 @@ ACTION_SIGNALS_JS = (
     hasLabeledActionButton,
     hasLabeledActionAnchor,
     hasIncomingActionRow: !!findIncomingActionRow(main),
+    hasPendingInvitationKey,
+    hasConnectInvitationKey,
   };
 })
 """
@@ -244,14 +288,38 @@ OPEN_MORE_BUTTON_JS = (
   const main = document.querySelector('main');
   if (!main) return false;
   const actionRoot = findActionRoot(main);
-  if (!actionRoot) return false;
-  const moreBtn = actionRoot.querySelector('button[aria-expanded]');
+  // Fork extension: a profile whose top card has no Message (Connect-only or
+  // Follow-only, 2026 layout) has no compose anchor to walk up from. Fall
+  // back to the first unlabeled menu opener of the top card; the sticky
+  // header's copy carries an aria-label and is skipped.
+  let moreBtn = actionRoot ? actionRoot.querySelector('button[aria-expanded]') : null;
+  if (!moreBtn) {
+    // Only inside the top card itself (the first section that wraps no
+    // other section): the outer wrapper also holds post and "people you
+    // may know" controls.
+    const scope = Array.from(main.querySelectorAll('section')).find(
+      element => !element.closest('aside') && !element.querySelector('section')
+    );
+    moreBtn = scope
+      ? scope.querySelector('button[aria-expanded]:not([aria-label])')
+      : null;
+  }
   if (!moreBtn) return false;
   moreBtn.click();
   return true;
 })
 """
 )
+
+# Fork extension: is a Pending invitation shown in an open More menu? The
+# componentkey is locale-independent (measured 2026-09-30).
+MENU_PENDING_JS = r"""
+(() => Array.from(
+  document.querySelectorAll(
+    '[role="menu"] [componentkey^="ConnectButtonstate:invitation:"]'
+  )
+).some(element => /_pending$/.test(element.getAttribute('componentkey') || '')))
+"""
 
 # Click Accept on an incoming-request profile. Accept is the FIRST labeled
 # button in the fingerprinted row — primary actions render first in
@@ -315,6 +383,11 @@ class ConnectionActions:
         self._session = session
         self._navigator = navigator
         self._read_main_profile = read_main_profile
+        # fork extension (2026-10-01): set immediately before any control that can
+        # send or accept an invitation is triggered, reset at the start of
+        # every connect_with_person. False after a call (or an exception) means
+        # nothing can have left, so the caller may book not_sent.
+        self.send_clicked = False
 
     async def _dialog_is_open(self, *, timeout: int = 1000) -> bool:
         """Return whether a dialog is currently open (structural check)."""
@@ -341,6 +414,7 @@ class ConnectionActions:
         if count == 0:
             return False
         try:
+            self.send_clicked = True
             await buttons.nth(count - 1).click(timeout=timeout)
             return True
         except Exception:
@@ -442,6 +516,26 @@ class ConnectionActions:
             logger.debug("More menu did not appear after click")
             return False
 
+    async def _more_menu_shows_pending(self) -> bool:
+        """Fork extension: open More, look only for this card's Pending key, close.
+
+        Only a literal ``true`` from the page counts, so an unreadable menu is
+        "not shown" and the upstream write gate (the vanityName anchor)
+        decides as before.
+        """
+        if not await self._open_more_menu():
+            return False
+        try:
+            shown = await self._session.page.evaluate(MENU_PENDING_JS)
+        except Exception:
+            logger.debug("Pending peek in the More menu failed", exc_info=True)
+            shown = False
+        try:
+            await self._session.page.keyboard.press("Escape")
+        except Exception:
+            logger.debug("Escape after the pending peek failed", exc_info=True)
+        return shown is True
+
     async def _click_incoming_accept(self) -> bool:
         """Click Accept on an incoming-request profile, locale-independently.
 
@@ -490,6 +584,8 @@ class ConnectionActions:
             has_labeled_action_button=bool(data.get("hasLabeledActionButton")),
             has_labeled_action_anchor=bool(data.get("hasLabeledActionAnchor")),
             has_incoming_action_row=bool(data.get("hasIncomingActionRow")),
+            has_pending_invitation_key=bool(data.get("hasPendingInvitationKey")),
+            has_connect_invitation_key=bool(data.get("hasConnectInvitationKey")),
         )
 
     async def _submit_invite_dialog(
@@ -538,7 +634,17 @@ class ConnectionActions:
                 )
                 btn_count = await buttons.count()
                 if btn_count >= 2:
-                    await buttons.nth(btn_count - 2).click()
+                    # Meant to be "Add a note", but an unknown button layout
+                    # can misdirect it onto Send. Marking it up front blocked
+                    # a person for good when only the note quota was spent,
+                    # so it counts as a send click only when it may have
+                    # been one: it raised, or the dialog vanished without a
+                    # note editor.
+                    try:
+                        await buttons.nth(btn_count - 2).click()
+                    except BaseException:
+                        self.send_clicked = True
+                        raise
                     textarea_appeared = True
                     try:
                         await self._session.page.wait_for_selector(
@@ -549,6 +655,15 @@ class ConnectionActions:
                     except PlaywrightTimeoutError:
                         logger.debug("Note textarea did not appear")
                         textarea_appeared = False
+                    if not textarea_appeared:
+                        try:
+                            dialog_left = await self._session.page.locator(
+                                f"{_DIALOG_SELECTOR} >> visible=true"
+                            ).count()
+                        except Exception:
+                            dialog_left = 0
+                        if not dialog_left:
+                            self.send_clicked = True
                     # ponytail: LinkedIn now renders a persistent Premium
                     # nudge banner on this step even when quota is NOT
                     # exhausted (observed: "3 personalized invitations
@@ -566,6 +681,10 @@ class ConnectionActions:
                             )
                             await self._dismiss_dialog()
                             return False, False, note_limit_message
+                        # A dialog without note editor and without the quota
+                        # upsell is unexplained: a misdirected Send can leave
+                        # a follow-up dialog behind. Treat it as clicked.
+                        self.send_clicked = True
 
             note_filled = await self._fill_dialog_textarea(note)
             if not note_filled:
@@ -609,6 +728,7 @@ class ConnectionActions:
             if btn_count > 0:
                 try:
                     await buttons.nth(btn_count - 1).focus()
+                    self.send_clicked = True
                     await self._session.page.keyboard.press("Enter")
                     sent = not await self._dialog_is_open(timeout=2000)
                 except Exception:
@@ -697,10 +817,18 @@ class ConnectionActions:
         except Exception:
             btn_count = 0
         if btn_count >= 3:
+            # fork extension (2026-10-01): an unknown layout can put Send at
+            # ``btn_count - 2``. The probe returned without any click marker,
+            # so a misdirected send was booked not_sent and the person could
+            # be invited again. Same rule as the submit reveal step: the
+            # click counts as a send when it raised, or the dialog vanished
+            # without a note editor.
             try:
                 await buttons.nth(btn_count - 2).click()
             except Exception:
+                self.send_clicked = True
                 logger.debug("Could not open invite note editor", exc_info=True)
+            textarea_appeared = True
             try:
                 await self._session.page.wait_for_selector(
                     _DIALOG_TEXTAREA_SELECTOR,
@@ -708,7 +836,17 @@ class ConnectionActions:
                     timeout=3000,
                 )
             except PlaywrightTimeoutError:
+                textarea_appeared = False
                 logger.debug("Note textarea did not appear during quota probe")
+            if not textarea_appeared:
+                try:
+                    dialog_left = await self._session.page.locator(
+                        f"{_DIALOG_SELECTOR} >> visible=true"
+                    ).count()
+                except Exception:
+                    dialog_left = 0
+                if not dialog_left:
+                    self.send_clicked = True
 
         note_limit_message = await self._get_premium_upsell_message()
         await self._dismiss_dialog()
@@ -735,6 +873,7 @@ class ConnectionActions:
         whether the user-visible Connect button is in the action bar
         or buried under the More menu.
         """
+        self.send_clicked = False
         username = normalize_person_identifier(username)
         url = person_profile_url(username, "/")
 
@@ -781,6 +920,7 @@ class ConnectionActions:
             # locale), and accepting/ignoring is irreversible. When the
             # fingerprint does not match we report send_failed rather than
             # guess.
+            self.send_clicked = True
             clicked = await self._click_incoming_accept()
             if not clicked:
                 return _connection_result(
@@ -821,11 +961,25 @@ class ConnectionActions:
         # Follow-only profiles may have Connect hidden under the More menu
         # (high-follower / creator-mode profiles). Try opening it and
         # re-reading signals; if the vanityName invite anchor surfaces in
-        # the menu, we can proceed with the deeplink. (The
-        # has_invite_anchor=False guard is implicit: detect_connection_state
-        # only returns "follow_only" after the has_invite_anchor branch
-        # has already failed, so reaching this branch already implies it.)
-        if state == "follow_only":
+        # the menu, we can proceed with the deeplink.
+        #
+        # fork extension (2026-09-30): the 2026 top card also hides Pending and
+        # Connect under More on ordinary profiles, and a Connect-only card
+        # has no Message anchor, so the state reads "unavailable". Both
+        # states now open the menu, and the re-read decides between pending,
+        # connect in the menu, follow only and truly unavailable.
+        connect_via = "top_card"
+        if state == "connectable" and await self._more_menu_shows_pending():
+            # A stale top-card Connect next to a Pending that is only shown
+            # in the menu must not produce a second invite.
+            return _connection_result(
+                url,
+                "pending",
+                "A connection request is already pending for this profile "
+                "(shown in the More menu).",
+                profile=page_text,
+            )
+        if state in ("follow_only", "unavailable"):
             opened = await self._open_more_menu()
             if opened:
                 signals = await self._read_action_signals(username)
@@ -836,6 +990,23 @@ class ConnectionActions:
                 except Exception:
                     logger.debug("Escape after More-menu reread failed", exc_info=True)
                 logger.info("Post-More signals for %s: signals=%s", username, signals)
+                menu_state = connection.detect_connection_state(signals)
+                if menu_state == "pending":
+                    return _connection_result(
+                        url,
+                        "pending",
+                        "A connection request is already pending for this "
+                        "profile (shown in the More menu).",
+                        profile=page_text,
+                    )
+                if signals.has_invite_anchor:
+                    connect_via = "more_menu"
+                elif menu_state == "follow_only" or state == "follow_only":
+                    state = "follow_only"
+            else:
+                # The menu did not open, so what it holds is unknown: never
+                # report follow_only on an unread menu.
+                state = "unavailable"
 
         invite_url = (
             "https://www.linkedin.com/preload/custom-invite/"
@@ -864,6 +1035,25 @@ class ConnectionActions:
                         note_sent=False,
                         profile=page_text,
                     )
+                if self.send_clicked:
+                    # The probe click may have sent (see the probe). follow_only
+                    # is booked not_sent unconditionally by connect_guarded, so
+                    # report send_failed: it books unknown and blocks a retry.
+                    return _connection_result(
+                        url,
+                        "send_failed",
+                        "The note-quota probe may have submitted the invite "
+                        "dialog; delivery is unknown.",
+                        profile=page_text,
+                    )
+            if state == "follow_only":
+                return _connection_result(
+                    url,
+                    "follow_only",
+                    "This profile offers Follow but no Connect action, in the "
+                    "top card or the More menu.",
+                    profile=page_text,
+                )
             return _connection_result(
                 url,
                 "connect_unavailable",
@@ -920,10 +1110,12 @@ class ConnectionActions:
                 profile=verified_text or page_text,
             )
 
-        return _connection_result(
+        result = _connection_result(
             url,
             "connected",
             f"Connection request sent. State after send: {verified_state}.",
             note_sent=note_sent,
             profile=verified_text or page_text,
         )
+        result["connect_via"] = connect_via
+        return result

@@ -52,6 +52,7 @@ from linkedin_mcp_server.tools.job import register_job_tools
 from linkedin_mcp_server.tools.messaging import register_messaging_tools
 from linkedin_mcp_server.tools.person import register_person_tools
 from linkedin_mcp_server.tools.post import register_post_tools
+from linkedin_mcp_server.tools.ext import register_ext_tools  # fork extension
 
 if TYPE_CHECKING:
     from linkedin_mcp_server.daemon_proxy import DaemonProxyBackend
@@ -215,6 +216,15 @@ def create_mcp_server(
         mask_error_details=True,
         auth=_StaticTokenAuth(auth_token) if auth_token is not None else None,
     )
+    # Fork extension: outermost on every process that drives the browser, so an
+    # unguarded upstream write tool is refused before it queues for Chromium.
+    # A proxy forwards to an owner, which carries the guard itself.
+    if role.drives_browser:
+        from linkedin_mcp_server.ext_upstream_write_guard import (
+            UpstreamWriteGuardMiddleware,
+        )
+
+        mcp.add_middleware(UpstreamWriteGuardMiddleware())
     # Added before the serializing middleware below, which makes it the outer one.
     # An inner position would work: `close_browser` does not consult the in-flight
     # count, so quiescence succeeds from there, and the lease reference the inner
@@ -293,6 +303,7 @@ def create_mcp_server(
         register_messaging_tools(mcp, tool_timeout=tool_timeout)
         register_feed_tools(mcp, tool_timeout=tool_timeout)
         register_post_tools(mcp, tool_timeout=tool_timeout)
+        register_ext_tools(mcp, tool_timeout=tool_timeout)  # fork extension
 
         # Inside the gate with the rest, and easy to miss because it is the one
         # tool defined here rather than in a `register_*` call. Left out of the

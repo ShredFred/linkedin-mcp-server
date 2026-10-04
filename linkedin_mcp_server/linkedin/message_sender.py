@@ -8,7 +8,7 @@ import logging
 import re
 import time
 from typing import Any, Literal
-from urllib.parse import ParseResult, parse_qs, urljoin, urlparse
+from urllib.parse import ParseResult, parse_qs, unquote, urljoin, urlparse
 
 import anyio
 import anyio.lowlevel
@@ -21,6 +21,7 @@ from linkedin_mcp_server.linkedin.identifiers import (
     normalize_profile_urn,
     person_profile_url,
 )
+import linkedin_mcp_server.linkedin.ext_urls as ext_urls
 from linkedin_mcp_server.linkedin.navigation import PageNavigator
 from linkedin_mcp_server.linkedin.session import PageSession
 
@@ -88,18 +89,79 @@ _PROFILE_MESSAGE_TARGET_JS = r"""() => {
     // before its heading is checked, so a card whose name has not rendered yet
     // stays unresolved instead of yielding to the next section. Sidebar
     // sections are skipped: they carry other people's Message links.
+    // Since October 2026 the card itself may wrap an empty inner section, so
+    // a section that owns a visible heading also counts as the card; an
+    // unrendered name still falls through to that inner leaf and stays
+    // unresolved.
+    const ownsHeading = element =>
+        Array.from(element.querySelectorAll('h1, h2, h3')).some(
+            heading => visible(heading) && heading.closest('section') === element
+        );
+    // Fork extension (#1152): Premium / Sales Navigator upsell blocks and
+    // suggestion rails ("Explore Premium profiles", "Premium testen",
+    // "People you may know") are not always wrapped in an aside. They are
+    // skipped as top-card candidates, their headings do not count as the
+    // card's name, and an upsell anchor never counts as the Message action.
+    // If only upsell anchors remain, the result stays unresolved.
+    const upsellPattern =
+        /premium|sales[\s-]*navigator|upsell|salesnav|\/sales\//i;
+    const suggestionPattern =
+        /people you may know|more profiles for you|personen, die sie (vielleicht )?kennen|weitere profile f(ü|ue)r sie/i;
+    const labelOf = element => normalize(
+        [
+            element.innerText || element.textContent || '',
+            element.getAttribute('aria-label') || '',
+            element.getAttribute('title') || '',
+        ].join(' ')
+    );
+    const upsellHeading = heading =>
+        upsellPattern.test(labelOf(heading)) ||
+        suggestionPattern.test(labelOf(heading));
+    // A section is an upsell block only when every one of its own visible
+    // headings is an upsell heading; a top card carrying a "Premium testen"
+    // line next to the member's name stays the top card.
+    const upsellSection = element => {
+        const own = Array.from(element.querySelectorAll('h1, h2, h3')).filter(
+            heading => visible(heading) && heading.closest('section') === element
+        );
+        return own.length > 0 && own.every(upsellHeading);
+    };
+    // An anchor's label only counts as upsell for an explicit upsell phrase:
+    // a real compose action may read "Message (Premium)" or "InMail", and a
+    // bare "premium" there must not hide it. The href keeps the broad check.
+    const upsellAnchorLabelPattern =
+        /upsell|sales[\s-]*navigator|salesnav|try premium|premium testen|explore premium/i;
+    const upsellAnchor = anchor =>
+        upsellPattern.test(anchor.getAttribute('href') || '') ||
+        upsellAnchorLabelPattern.test(labelOf(anchor)) ||
+        !!anchor.closest(
+            '[data-view-name*="upsell" i], [data-view-name*="premium" i], ' +
+            '[data-test-id*="upsell" i], [data-test-id*="premium" i]'
+        );
     const section = Array.from(main.querySelectorAll('section')).find(
         element =>
             visible(element) &&
             !element.closest('aside') &&
-            !element.querySelector('section')
+            !upsellSection(element) &&
+            (!element.querySelector('section') || ownsHeading(element))
     );
     if (!section) return {status: 'unresolved'};
-    const headings = Array.from(section.querySelectorAll('h1, h2, h3')).filter(visible);
-    const visibleComposeAnchors = Array.from(
+    const headings = Array.from(section.querySelectorAll('h1, h2, h3')).filter(
+        heading => visible(heading) && !upsellHeading(heading)
+    );
+    const ownComposeAnchors = Array.from(
         section.querySelectorAll('a[href*="/messaging/compose/"]')
     ).filter(anchor => visible(anchor) && anchor.closest('section') === section);
+    const visibleComposeAnchors = ownComposeAnchors.filter(
+        anchor => !upsellAnchor(anchor)
+    );
     const composeAnchors = visibleComposeAnchors.filter(active);
+    if (
+        visibleComposeAnchors.length === 0 &&
+        ownComposeAnchors.length > 0
+    ) {
+        return {status: 'unresolved'};
+    }
     if (
         headings.length !== 1 ||
         composeAnchors.length > 1 ||
@@ -143,6 +205,12 @@ _MESSAGE_CLEANUP_TIMEOUT_SECONDS = 1.0
 # the send-toggle class only when the verified composer has no Send button.
 # If the class changes, confirmed sends remain unavailable.
 _MESSAGE_COMPOSER_INSPECT_JS = r"""
+    // Fork extension: multi-line messages. The editor renders one block per line,
+    // so innerText and textContent no longer equal the raw message. Compare a
+    // canonical form on both sides: newline runs (with surrounding blanks)
+    // collapse to one LF. For a single-line message this is only a trim.
+    const mcpCanon = value => String(value || '')
+        .replace(/[ \t ]*\n[\s ]*/g, '\n').trim();
     const visible = element => {
         const visibility = element && getComputedStyle(element).visibility;
         return !!(
@@ -175,8 +243,15 @@ _MESSAGE_COMPOSER_INSPECT_JS = r"""
             ) {
                 return null;
             }
+            // Fork extension: compare the decoded, lower-cased slug, the same
+            // rule as scraping/ext_urls.py. LinkedIn emits umlaut slugs
+            // percent-encoded, so a raw compare failed them all.
             const match = /^\/in\/([^/?#]+)(?:\/.*)?$/.exec(url.pathname);
-            return match ? `/in/${match[1]}/` : null;
+            if (!match) return null;
+            let decoded;
+            try { decoded = decodeURIComponent(match[1]); } catch { return null; }
+            if (!decoded || /[\/?#%\s\x00-\x1f\x7f]/.test(decoded)) return null;
+            return `/in/${decoded.toLowerCase()}/`;
         } catch {
             return null;
         }
@@ -378,7 +453,7 @@ _MESSAGE_CONFIRMATION_PREPARE_JS = (
             !arg.owner.contains(pinned.editor) ||
             document.activeElement !== pinned.editor ||
             pinned.ownedMessage !== arg.expected ||
-            (pinned.editor.innerText || pinned.editor.textContent || '') !== arg.expected
+            mcpCanon(pinned.editor.innerText || pinned.editor.textContent) !== mcpCanon(arg.expected)
         ) {
             return null;
         }
@@ -407,7 +482,7 @@ _MESSAGE_CONFIRMATION_PREPARE_JS = (
                 element => !requireVisible || visible(element)
             );
             const matches = elements.filter(
-                element => (element.innerText || '') === state.expected
+                element => mcpCanon(element.innerText) === mcpCanon(state.expected)
             );
             const smallest = matches.filter(
                 element => !matches.some(
@@ -536,7 +611,7 @@ _MESSAGE_CONFIRMATION_READY_JS = (
             if (!visible(node)) return false;
             const elements = [node, ...node.querySelectorAll('*')].filter(visible);
             const matches = elements.filter(
-                element => (element.innerText || '') === arg.expected
+                element => mcpCanon(element.innerText) === mcpCanon(arg.expected)
             );
             return matches.filter(
                 element => !matches.some(
@@ -555,9 +630,10 @@ _MESSAGE_CONFIRMATION_READY_JS = (
                 return false;
             }
             const identifier = /^\/in\/([^/]+)/.exec(path)?.[1];
-            return !!identifier && (
-                identifier === arg.profileUrn || `/in/${identifier}/` === arg.profilePath
-            );
+            if (!identifier) return false;
+            let key;
+            try { key = decodeURIComponent(identifier).toLowerCase(); } catch { return false; }
+            return identifier === arg.profileUrn || `/in/${key}/` === arg.profilePath;
         };
         // LinkedIn heads a message with links to its sender's profile
         // (measured). A follow-up from the same sender is assumed to be
@@ -765,6 +841,12 @@ _MESSAGE_COMPOSER_FOCUS_JS = (
 )
 
 _MESSAGE_COMPOSER_PINNED_JS = r"""
+    // Fork extension: multi-line messages. The editor renders one block per line,
+    // so innerText and textContent no longer equal the raw message. Compare a
+    // canonical form on both sides: newline runs (with surrounding blanks)
+    // collapse to one LF. For a single-line message this is only a trim.
+    const mcpCanon = value => String(value || '')
+        .replace(/[ \t ]*\n[\s ]*/g, '\n').trim();
     const visible = element => {
         const visibility = element && getComputedStyle(element).visibility;
         return !!(
@@ -797,8 +879,15 @@ _MESSAGE_COMPOSER_PINNED_JS = r"""
             ) {
                 return null;
             }
+            // Fork extension: compare the decoded, lower-cased slug, the same
+            // rule as scraping/ext_urls.py. LinkedIn emits umlaut slugs
+            // percent-encoded, so a raw compare failed them all.
             const match = /^\/in\/([^/?#]+)(?:\/.*)?$/.exec(url.pathname);
-            return match ? `/in/${match[1]}/` : null;
+            if (!match) return null;
+            let decoded;
+            try { decoded = decodeURIComponent(match[1]); } catch { return null; }
+            if (!decoded || /[\/?#%\s\x00-\x1f\x7f]/.test(decoded)) return null;
+            return `/in/${decoded.toLowerCase()}/`;
         } catch {
             return null;
         }
@@ -947,8 +1036,19 @@ _MESSAGE_COMPOSER_WRITE_JS = (
         ) {
             return 'unsupported';
         }
-        const inserted = document.execCommand('insertText', false, arg.message);
-        if ((editor.innerText || editor.textContent || '') === arg.message) {
+        // Fork extension: one insertText per line, a paragraph between lines.
+        // insertParagraph is an editing command, not a key event, so LinkedIn's
+        // Enter handling never sees it.
+        let inserted = true;
+        arg.message.split('\n').forEach((line, index) => {
+            if (index > 0) {
+                inserted = document.execCommand('insertParagraph', false) === true && inserted;
+            }
+            if (line) {
+                inserted = document.execCommand('insertText', false, line) === true && inserted;
+            }
+        });
+        if (mcpCanon(editor.innerText || editor.textContent) === mcpCanon(arg.message)) {
             pinned.ownedMessage = arg.message;
         }
         if (inserted !== true) return 'unsupported';
@@ -957,7 +1057,7 @@ _MESSAGE_COMPOSER_WRITE_JS = (
             !pinned ||
             document.activeElement !== editor ||
             pinned.ownedMessage !== arg.message ||
-            (editor.innerText || editor.textContent || '') !== arg.message
+            mcpCanon(editor.innerText || editor.textContent) !== mcpCanon(arg.message)
         ) {
             return 'invalid';
         }
@@ -974,7 +1074,7 @@ _MESSAGE_COMPOSER_SUBMIT_READY_JS = (
             !pinned ||
             document.activeElement !== pinned.editor ||
             pinned.ownedMessage !== arg.message ||
-            (pinned.editor.innerText || pinned.editor.textContent || '') !== arg.message
+            mcpCanon(pinned.editor.innerText || pinned.editor.textContent) !== mcpCanon(arg.message)
         ) {
             return 'invalid';
         }
@@ -986,6 +1086,12 @@ _MESSAGE_COMPOSER_SUBMIT_READY_JS = (
 )
 
 _MESSAGE_COMPOSER_CLEANUP_JS = r"""(owner, arg) => {
+    // Fork extension: multi-line messages. The editor renders one block per line,
+    // so innerText and textContent no longer equal the raw message. Compare a
+    // canonical form on both sides: newline runs (with surrounding blanks)
+    // collapse to one LF. For a single-line message this is only a trim.
+    const mcpCanon = value => String(value || '')
+        .replace(/[ \t ]*\n[\s ]*/g, '\n').trim();
     const pinned = owner?.__linkedinMcpComposer;
     if (!pinned || pinned.ownedMessage !== arg.message) return false;
     const {editor, ancestorChain} = pinned;
@@ -1005,7 +1111,7 @@ _MESSAGE_COMPOSER_CLEANUP_JS = r"""(owner, arg) => {
         currentChain.some((scope, index) => scope !== ancestorChain[index]) ||
         !currentChain.includes(owner) ||
         !owner.contains(editor) ||
-        (editor.innerText || editor.textContent || '') !== arg.message
+        mcpCanon(editor.innerText || editor.textContent) !== mcpCanon(arg.message)
     ) {
         return false;
     }
@@ -1029,7 +1135,7 @@ _MESSAGE_COMPOSER_SUBMIT_JS = (
             !pinned ||
             document.activeElement !== pinned.editor ||
             pinned.ownedMessage !== arg.message ||
-            (pinned.editor.innerText || pinned.editor.textContent || '') !== arg.message
+            mcpCanon(pinned.editor.innerText || pinned.editor.textContent) !== mcpCanon(arg.message)
         ) {
             return 'invalid';
         }
@@ -1039,7 +1145,6 @@ _MESSAGE_COMPOSER_SUBMIT_JS = (
 )
 
 _LINKEDIN_MESSAGE_HOST_RE = re.compile(r"^(?:[a-z0-9-]+\.)*linkedin\.com$")
-_PROFILE_PATH_RE = re.compile(r"^/in/[^/?#]+/$")
 # A thread id is base64url and keeps its padding literally. Measured live:
 # /messaging/thread/2-ZDBkMjZiY2Ut...XzEwMA==/ is what LinkedIn redirects an
 # existing conversation to, and rejecting it stopped every send to a member
@@ -1109,19 +1214,22 @@ _BENIGN_PROFILE_QUERIES = {"", "isSelfProfile=false"}
 
 
 def _profile_path_from_url(value: str) -> str | None:
-    parsed = _safe_linkedin_url(value)
-    if (
-        parsed is None
-        or parsed.query not in _BENIGN_PROFILE_QUERIES
-        or not _PROFILE_PATH_RE.fullmatch(parsed.path)
-    ):
+    """Canonical ``/in/<slug>/`` of a profile page URL, or None (fail closed).
+
+    Fork extension: the rule lives in ``scraping/ext_urls.py`` -- benign query
+    keys by allowlist (2026-09-30 ``?isSelfProfile=false`` redirect), no
+    fragment, percent-decoded slug, optional locale segment.
+    """
+    slug = ext_urls.profile_slug_from_url(value)
+    if slug is None:
         return None
     try:
-        username = normalize_person_identifier(parsed._replace(query="").geturl())
+        username = normalize_person_identifier(slug)
     except LinkedInOperationError:
         return None
-    canonical_path = urlparse(person_profile_url(username, "/")).path
-    return parsed.path if parsed.path == canonical_path else None
+    if ext_urls.profile_key(username) != ext_urls.profile_key(slug):
+        return None
+    return ext_urls.canonical_profile_path(username)
 
 
 def _profile_urn_from_compose_url(value: str, *, base: str | None = None) -> str | None:
@@ -1286,7 +1394,11 @@ class MessageSender:
         target: _ProfileMessageTarget,
     ) -> dict[str, str | bool]:
         return {
-            "profilePath": target.profile_path,
+            # The in-page scripts compare decoded, lower-cased slugs.
+            "profilePath": ext_urls.identity_path(
+                unquote(target.profile_path[len("/in/") : -1])
+            )
+            or target.profile_path,
             "profileUrn": target.profile_urn,
         }
 
@@ -1565,6 +1677,18 @@ class MessageSender:
                 "recipient_resolution_failed",
                 "LinkedIn did not expose one unambiguous recipient-specific Message "
                 "action.",
+            )
+
+        # Fork extension: the landed page must be the requested person. The URL
+        # normaliser accepts benign query keys; a redirect to another slug
+        # must not carry the send to someone else.
+        if ext_urls.profile_key(
+            unquote(target.profile_path[len("/in/") : -1])
+        ) != ext_urls.profile_key(linkedin_username):
+            return contracts.message_action_result(
+                profile_url,
+                "recipient_resolution_failed",
+                "The loaded profile is not the requested one (redirect?).",
             )
 
         supplied_urn = _normalize_profile_urn(profile_urn) if profile_urn else None

@@ -152,6 +152,9 @@ _NEWSLETTER_PATH_RE = re.compile(r"^/newsletters/([^/?#]+)")
 _PULSE_PATH_RE = re.compile(r"^/pulse/([^/?#]+)")
 _FEED_PATH_RE = re.compile(r"^/feed/update/([^/?#]+)")
 _MESSAGING_THREAD_PATH_RE = re.compile(r"^/messaging/thread/([^/?#]+)")
+# Fork extension (#1194): the inbox "New message" button links to
+# /messaging/thread/new/, a compose route that is not a conversation.
+_MESSAGING_THREAD_NON_IDS = frozenset({"new", "compose"})
 _MAX_REDIRECT_UNWRAP_DEPTH = 5
 
 # Accept both quoted-string and bare-integer JSON list elements, e.g.
@@ -342,6 +345,8 @@ def classify_link(href: str) -> tuple[ReferenceKind, str] | None:
         return "feed_post", f"/feed/update/{match.group(1)}/"
 
     if match := _MESSAGING_THREAD_PATH_RE.match(path):
+        if match.group(1).lower() in _MESSAGING_THREAD_NON_IDS:
+            return None
         return "conversation", f"/messaging/thread/{match.group(1)}/"
 
     return None

@@ -337,6 +337,111 @@ class ConversationReader:
             )
             await self._session.delay(pause_time)
 
+    # Fork extension (#1150): LinkedIn renders about 20 conversation rows and
+    # appends more only when the list's own scroller reaches its end or the
+    # "Load more conversations" button is pressed. A fixed number of scrolls
+    # stopped short of the limit and silently returned fewer rows.
+    _LOAD_MORE_STAGNANT_ROUNDS = 3
+    _LOAD_MORE_MAX_ROUNDS = 30
+
+    _LOAD_MORE_ROUND_JS = r"""({ target, act }) => {
+        // Rows and the load-more button are looked up inside the conversation
+        // list scroller only -- the nearest ancestor of the last list row that
+        // holds every row -- never in the open thread pane, where a message
+        // bubble may carry its own "See more" / "Mehr anzeigen" button.
+        const main = document.querySelector('main');
+        if (!main) return 0;
+        const listRows = () => main.querySelectorAll('li label[aria-label]');
+        const labels = listRows();
+        const before = labels.length;
+        if (!act || before >= target) return before;
+        const last = labels[labels.length - 1];
+        if (!last) return before;
+        let list = last.closest('ul, ol') || last.parentElement;
+        while (list && list !== main && list.querySelectorAll('li label[aria-label]').length < before) {
+            list = list.parentElement;
+        }
+        // Scroll every scrollable ancestor of the last row, not only the
+        // largest region of main: the conversation list is a nested scroller.
+        let scroller = null;
+        let element = last.parentElement;
+        while (element && element !== document.body) {
+            const style = window.getComputedStyle(element);
+            if (
+                (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
+                element.scrollHeight > element.clientHeight
+            ) {
+                element.scrollTop = element.scrollHeight;
+                // Only a scroller that holds conversation rows and nothing
+                // else in list items -- a region that also wraps the thread's
+                // message items is not the list scroller.
+                if (
+                    !scroller && element !== main && element.contains(list) &&
+                    Array.from(element.querySelectorAll('li')).every(
+                        item => item.querySelector('label[aria-label]')
+                    )
+                ) scroller = element;
+            }
+            element = element.parentElement;
+        }
+        if (last.scrollIntoView) last.scrollIntoView({block: 'end'});
+        // Candidates: buttons inside the list scroller, plus buttons that sit
+        // directly beside the list (a direct child of one of its ancestors up
+        // to main). A button nested in another subtree -- the thread pane, a
+        // message bubble -- is never a candidate.
+        const candidates = [];
+        if (scroller) candidates.push(...scroller.querySelectorAll('button'));
+        let ancestor = list;
+        while (ancestor && ancestor !== document.body) {
+            for (const child of ancestor.children) {
+                if (child.tagName === 'BUTTON') candidates.push(child);
+            }
+            if (ancestor === main) break;
+            ancestor = ancestor.parentElement;
+        }
+        const loadMoreConversationRows = candidates.find(button => {
+            const text = (
+                (button.innerText || button.textContent || '') + ' ' +
+                (button.getAttribute('aria-label') || '')
+            ).replace(/\s+/g, ' ').trim();
+            return /load more|show more|see more|weitere .*laden|mehr .*laden|mehr anzeigen/i.test(text) &&
+                !button.disabled &&
+                (button.getAttribute('aria-disabled') || '').toLowerCase() !== 'true';
+        });
+        if (loadMoreConversationRows) loadMoreConversationRows.click();
+        return before;
+    }"""
+
+    async def _load_conversation_rows(
+        self, target: int, *, pause_time: float = 0.8
+    ) -> int:
+        """Drive the conversation list until ``target`` rows are attached.
+
+        Stops when the target is reached, when the row count has not grown for
+        ``_LOAD_MORE_STAGNANT_ROUNDS`` consecutive rounds, or after
+        ``_LOAD_MORE_MAX_ROUNDS``. Returns the last observed row count; an
+        answer that is not a count ends the loop with the best count so far.
+        """
+        best = 0
+        stagnant = 0
+        for _ in range(self._LOAD_MORE_MAX_ROUNDS):
+            count = await self._session.page.evaluate(
+                self._LOAD_MORE_ROUND_JS, {"target": target, "act": True}
+            )
+            if not isinstance(count, int) or isinstance(count, bool):
+                return best
+            if count >= target:
+                return count
+            if count > best:
+                best = count
+                stagnant = 0
+            else:
+                stagnant += 1
+                if stagnant >= self._LOAD_MORE_STAGNANT_ROUNDS:
+                    return best
+            await self._session.delay(pause_time)
+        return best
+
     async def _extract_conversation_thread_refs(
         self,
         limit: int | None,
@@ -344,6 +449,7 @@ class ConversationReader:
         *,
         name_filter: str | None = None,
         scroll_attempts: int = 0,
+        load_until: int | None = None,
     ) -> _ThreadRefScan:
         """Click each visible conversation item and capture the thread URL.
 
@@ -406,6 +512,8 @@ class ConversationReader:
             await self._scroll_main_scrollable_region(
                 position="bottom", attempts=scroll_attempts, pause_time=0.5
             )
+        if load_until is not None and load_until > 0:
+            await self._load_conversation_rows(load_until)
 
         # The Ember click handler lives on an inner div; the <li> and <label>
         # don't trigger SPA navigation.  No role/aria attributes exist on the
@@ -664,6 +772,7 @@ class ConversationReader:
         await self._scroll_main_scrollable_region(
             position="bottom", attempts=scrolls, pause_time=0.5
         )
+        await self._load_conversation_rows(limit)
 
         raw_result = await self._content._extract_root_content(["main"])
         raw = raw_result["text"]
@@ -681,7 +790,10 @@ class ConversationReader:
         await self._session.check_rate_limit()
         await self._session.dismiss_modal()
         scan = await self._extract_conversation_thread_refs(
-            limit=limit, context="inbox", scroll_attempts=scrolls
+            limit=limit,
+            context="inbox",
+            scroll_attempts=scrolls,
+            load_until=limit,
         )
         if scan.refs:
             references = dedupe_references(scan.refs + references)

@@ -357,11 +357,11 @@ class TestBuildPeopleSearchUrl:
     def test_every_parameter_keeps_its_recorded_position(self):
         assert build_people_search_url(
             "engineer",
-            location="Seattle",
+            location="Germany",
             network=["F"],
             current_company="1115",
         ) == (
-            f"{PEOPLE}keywords=engineer&location=Seattle"
+            f"{PEOPLE}keywords=engineer&geoUrn=%5B%22101282230%22%5D"
             "&network=%5B%22F%22%5D&currentCompany=%5B%221115%22%5D"
         )
 
@@ -450,10 +450,10 @@ class TestBuildPeopleSearchUrl:
             f"{PEOPLE}keywords=engineer"
         )
 
-    def test_location_is_percent_encoded(self):
-        assert build_people_search_url("engineer", location="São Paulo") == (
-            f"{PEOPLE}keywords=engineer&location=S%C3%A3o+Paulo"
-        )
+    def test_unmapped_place_name_is_refused_not_sent(self):
+        # Formerly sent as &location=, which LinkedIn ignores (upstream #710).
+        with pytest.raises(FilterValidationError, match="Unknown location"):
+            build_people_search_url("engineer", location="São Paulo")
 
     def test_network_is_refused_before_a_company_urn_is_looked_at(self):
         # Order matters for the message a caller reads back: both filters are
@@ -558,3 +558,61 @@ class TestBuildContentSearchUrl:
 
         assert repr(date_posted) in str(error.value)
         assert "past-24h" in str(error.value)
+
+
+class TestPeopleLocationGeoUrn:
+    """Upstream #710/#722: location must reach LinkedIn as geoUrn or be refused."""
+
+    @pytest.mark.parametrize(
+        "location,ids",
+        [
+            ("101282230", ["101282230"]),
+            ("  101282230 ", ["101282230"]),
+            ("Germany", ["101282230"]),
+            ("gErMaNy", ["101282230"]),
+            ("Österreich", ["103883259"]),
+            ("ÖSTERREICH", ["103883259"]),
+            ("United   States", ["103644278"]),
+            ("Germany, Austria,Schweiz", ["101282230", "103883259", "106693272"]),
+            ("Germany,Deutschland,101282230", ["101282230"]),
+        ],
+    )
+    def test_resolves(self, location, ids):
+        from linkedin_mcp_server.linkedin.search_urls import resolve_people_geo_ids
+
+        assert resolve_people_geo_ids(location) == ids
+
+    @pytest.mark.parametrize("location", [None, "", "   "])
+    def test_empty_means_no_filter(self, location):
+        url = build_people_search_url("x", location=location)
+        assert url == f"{PEOPLE}keywords=x"
+
+    def test_multiple_ids_encoded_as_json_list(self):
+        url = build_people_search_url("x", location="Germany,103883259")
+        assert url == f"{PEOPLE}keywords=x&geoUrn=%5B%22101282230%22%2C%22103883259%22%5D"
+        assert "location=" not in url
+
+    @pytest.mark.parametrize(
+        "location",
+        [
+            "Exampletown",
+            "Germany,",
+            ",Germany",
+            "Germany,,Austria",
+            "123abc",
+            '101282230"]&network=["F',
+            "101282230&geoUrn=1",
+            "Germany<script>",
+            "-101282230",
+            "1" * 16,
+        ],
+    )
+    def test_unknown_or_injected_location_is_refused(self, location):
+        with pytest.raises(FilterValidationError):
+            build_people_search_url("x", location=location)
+
+    def test_error_names_the_entry_and_remedy(self):
+        with pytest.raises(FilterValidationError) as exc:
+            build_people_search_url("x", location="Exampletown")
+        assert "Exampletown" in str(exc.value)
+        assert "numeric" in str(exc.value)

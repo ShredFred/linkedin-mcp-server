@@ -501,12 +501,12 @@ class TestPersonTool:
 
         serve_extractor(mock_extractor)
         tool_fn = await get_tool_fn(mcp, "search_people")
-        result = await tool_fn("AI engineer", mock_context, location="New York")
+        result = await tool_fn("AI engineer", mock_context, location="Germany")
         assert "search_results" in result["sections"]
         assert "pages_visited" not in result
         mock_extractor.search_people.assert_awaited_once_with(
             "AI engineer",
-            "New York",
+            "Germany",
             network=None,
             current_company=None,
         )
@@ -1702,8 +1702,9 @@ class TestMessagingTools:
 
     @pytest.mark.parametrize(
         "message",
-        [f"First{chr(codepoint)}Second" for codepoint in (*range(32), 127)],
-        ids=[f"U+{codepoint:04X}" for codepoint in (*range(32), 127)],
+        # Fork extension: LF (U+000A) is allowed for multi-line messages.
+        [f"First{chr(cp)}Second" for cp in (*range(32), 127) if cp != 10],
+        ids=[f"U+{cp:04X}" for cp in (*range(32), 127) if cp != 10],
     )
     async def test_send_message_refuses_controls_before_a_session(
         self, mock_context, message

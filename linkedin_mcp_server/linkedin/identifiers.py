@@ -490,3 +490,39 @@ def normalize_profile_urn(value: str) -> str:
             "result returned it, with no URL, path or query around it."
         )
     return value
+
+
+# Fork extension: a profile or company URL that LinkedIn redirects to a different
+# slug was returned under the requested name without a word. A renamed vanity
+# URL is the harmless case; a merged or reassigned page is not, and a caller
+# keying records by the requested slug then stores another subject's text. The
+# landed slug is reported beside the result (not as a section error, so
+# existing consumers keep their success semantics) and the caller decides.
+def landed_identity_mismatch(
+    landed_url: object, kind: str, requested: str
+) -> dict[str, str] | None:
+    """Return a redirect note when ``landed_url`` names another /kind/ slug.
+
+    An opaque id (a numeric company id, an ACo... profile id) always lands on
+    the vanity slug; that is resolution, not a redirect, and is not reported."""
+    if not isinstance(landed_url, str) or not landed_url:
+        return None
+    req = unquote(str(requested or ""))
+    if req.isdigit() or (kind == "in" and re.match(r"^AC[a-zA-Z]", req)):
+        return None
+    try:
+        path = urlparse(landed_url).path
+    except ValueError:
+        # An unparsable landed URL ("https://[broken/...") is no finding.
+        return None
+    parts = [p for p in path.split("/") if p]
+    if len(parts) < 2 or parts[0] != kind:
+        # A company slug that LinkedIn moves to a school or showcase page.
+        if kind == "company" and len(parts) >= 2 and parts[0] in ("school", "showcase"):
+            landed = "/".join(parts[:2])
+            return {"requested": requested, "landed": landed, "landed_url": landed_url}
+        return None
+    landed = unquote(parts[1])
+    if landed.casefold() == unquote(requested).casefold():
+        return None
+    return {"requested": requested, "landed": landed, "landed_url": landed_url}

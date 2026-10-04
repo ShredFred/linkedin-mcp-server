@@ -68,6 +68,8 @@ class LinkedInExtractor:
         self._conversations = ConversationReader(
             session, navigator, content, profile_page
         )
+        # Fork extension: raw collaborators for the fork's own tools (tools/ext.py).
+        self._ext_session, self._ext_navigator = session, navigator
 
     async def get_page_text(self) -> str:
         """Extract innerText from the main content area of the current page."""
@@ -131,6 +133,21 @@ class LinkedInExtractor:
     ) -> dict[str, Any]:
         """Send a LinkedIn connection request or accept an incoming one."""
         return await self._connection.connect_with_person(username, note=note)
+
+    @property
+    def ext_session(self) -> Any:
+        """Fork extension: the raw browser session for the fork's own tools."""
+        return self._ext_session
+
+    @property
+    def ext_navigator(self) -> Any:
+        """Fork extension: the raw navigator for the fork's own tools."""
+        return self._ext_navigator
+
+    @property
+    def invite_send_clicked(self) -> bool:
+        """Whether the last connect_with_person reached a send/accept click."""
+        return self._connection.send_clicked
 
     async def get_sidebar_profiles(self, username: str) -> dict[str, Any]:
         """Extract profile links from sidebar sections on a profile page."""

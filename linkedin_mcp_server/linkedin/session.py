@@ -9,6 +9,8 @@ import time
 
 from patchright.async_api import Page
 
+from linkedin_mcp_server.core.exceptions import RateLimitError
+from linkedin_mcp_server.core.rate_limit_hooks import report_rate_limit
 from linkedin_mcp_server.core.utils import (
     detect_rate_limit,
     handle_modal_close,
@@ -41,7 +43,11 @@ class PageSession:
 
     async def check_rate_limit(self) -> None:
         """Raise when the current page is rate-limited or challenged."""
-        await detect_rate_limit(self.page)
+        try:
+            await detect_rate_limit(self.page)
+        except RateLimitError as exc:
+            report_rate_limit(exc)
+            raise
 
     async def dismiss_modal(self) -> bool:
         """Close an obstructing modal when one is present."""

@@ -53,6 +53,21 @@ class RateLimitError(LinkedInOperationError):
         self.suggested_wait_time = suggested_wait_time
 
 
+class OffSiteNavigationError(LinkedInOperationError):
+    """A navigation ended on a host that is not linkedin.com (issue #786).
+
+    The page that loaded is not the page that was requested; reading it would
+    attribute another site's content to LinkedIn.
+    """
+
+    def __init__(self, requested_url: str, final_url: str):
+        super().__init__(
+            f"Navigation to {requested_url} ended outside LinkedIn at {final_url}"
+        )
+        self.requested_url = requested_url
+        self.final_url = final_url
+
+
 class ElementNotFoundError(LinkedInOperationError):
     """Raised when an expected element is not found."""
 

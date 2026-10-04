@@ -8,13 +8,23 @@ from typing import Any, Literal
 
 import logging
 import re
+from urllib.parse import urlsplit
 
 from linkedin_mcp_server.core.auth import (
     detect_auth_barrier,
     detect_auth_barrier_quick,
     resolve_remember_me_prompt,
 )
-from linkedin_mcp_server.core.exceptions import AuthenticationError
+from linkedin_mcp_server.core.exceptions import (
+    AuthenticationError,
+    OffSiteNavigationError,
+    RateLimitError,
+)
+from linkedin_mcp_server.core.rate_limit_hooks import (
+    check_rate_limit_gate,
+    report_rate_limit,
+    set_rate_limit_hooks,
+)
 from linkedin_mcp_server.core.proxy_errors import (
     raise_if_proxy_error,
     redact_proxy_credentials,
@@ -27,6 +37,81 @@ from linkedin_mcp_server.linkedin.session import PageSession
 logger = logging.getLogger(__name__)
 
 WaitUntil = Literal["commit", "domcontentloaded", "load", "networkidle"]
+
+_LINKEDIN_DOMAIN = "linkedin.com"
+# Paths on linkedin.com that mean "not signed in / challenged", not content.
+_AUTH_PATH_PREFIXES = ("/checkpoint", "/authwall", "/login", "/uas/login")
+# A 429 without Retry-After: wait this long. Retry-After is clamped to the band.
+RATE_LIMIT_DEFAULT_WAIT = 300
+RATE_LIMIT_MIN_WAIT = 60
+RATE_LIMIT_MAX_WAIT = 3600
+
+
+def is_linkedin_host(host: str | None) -> bool:
+    """Exact domain or subdomain of linkedin.com; no substring matching."""
+    if not host:
+        return False
+    host = host.lower().rstrip(".")
+    return host == _LINKEDIN_DOMAIN or host.endswith("." + _LINKEDIN_DOMAIN)
+
+
+def assert_linkedin_destination(requested_url: str, final_url: Any) -> None:
+    """Fail when a navigation ended off LinkedIn (#786).
+
+    Only the host is judged here. An auth path (/login, /checkpoint, ...) on
+    linkedin.com is a barrier the caller may still clear through the
+    remember-me prompt, so it is reported by :func:`is_linkedin_auth_path` and
+    raised only after that attempt failed. Non-string or host-less URLs (mocks,
+    ``about:blank`` before commit) are not judged here.
+    """
+    if not isinstance(final_url, str) or not final_url:
+        return
+    parts = urlsplit(final_url)
+    if parts.scheme not in ("http", "https"):
+        if parts.netloc:
+            raise OffSiteNavigationError(requested_url, final_url)
+        return
+    # urlsplit().hostname drops userinfo, so "https://linkedin.com@evil.example/"
+    # is judged by evil.example, which is what the browser actually loaded.
+    if parts.username is not None or parts.password is not None:
+        raise OffSiteNavigationError(requested_url, final_url)
+    if not is_linkedin_host(parts.hostname):
+        raise OffSiteNavigationError(requested_url, final_url)
+
+
+def is_linkedin_auth_path(final_url: Any) -> bool:
+    """True when ``final_url`` is a LinkedIn sign-in/challenge page."""
+    if not isinstance(final_url, str) or not final_url:
+        return False
+    parts = urlsplit(final_url)
+    if parts.scheme not in ("http", "https") or not is_linkedin_host(parts.hostname):
+        return False
+    path = parts.path.lower()
+    return any(
+        path == prefix or path.startswith(prefix + "/") for prefix in _AUTH_PATH_PREFIXES
+    )
+
+
+def _retry_after_seconds(response: Any) -> int:
+    try:
+        headers = response.headers
+        value = headers.get("retry-after") if isinstance(headers, dict) else None
+        wait = int(str(value).strip()) if value is not None else RATE_LIMIT_DEFAULT_WAIT
+    except (TypeError, ValueError, AttributeError):
+        wait = RATE_LIMIT_DEFAULT_WAIT
+    return max(RATE_LIMIT_MIN_WAIT, min(RATE_LIMIT_MAX_WAIT, wait))
+
+
+def raise_if_rate_limited_response(url: str, response: Any) -> None:
+    """HTTP 429 on the main document is a rate limit, not a page (#957)."""
+    status = getattr(response, "status", None)
+    if isinstance(status, int) and status == 429:
+        raise RateLimitError(
+            f"LinkedIn answered HTTP 429 (too many requests) for {url}.",
+            suggested_wait_time=_retry_after_seconds(response),
+        )
+
+
 
 
 class PageNavigator:
@@ -174,13 +259,18 @@ class PageNavigator:
                 extra={"target_url": url, "wait_until": wait_until},
             )
             try:
-                await page.goto(url, wait_until=wait_until, timeout=30000)
+                response = await page.goto(
+                    url, wait_until=wait_until, timeout=30000
+                )
+                raise_if_rate_limited_response(url, response)
                 await stabilize_navigation(f"goto {url}", logger)
                 await record_page_trace(
                     page,
                     "extractor-after-goto",
                     extra={"target_url": url, "wait_until": wait_until},
                 )
+            except RateLimitError:
+                raise
             except Exception as exc:
                 # Ahead of the traces below: they record the raw exception text,
                 # which for a proxy failure can quote the proxy URL and land a
@@ -242,9 +332,12 @@ class PageNavigator:
                 # callers that branch on it are unaffected.
                 raise redacted_copy(exc) from None
 
+            assert_linkedin_destination(url, page.url)
             barrier = await detect_auth_barrier_quick(page)
             if not barrier:
-                return
+                if not is_linkedin_auth_path(page.url):
+                    return
+                barrier = f"auth redirect: {urlsplit(page.url).path}"
 
             if allow_remember_me and await resolve_remember_me_prompt(page):
                 await stabilize_navigation(f"remember-me retry for {url}", logger)
@@ -277,7 +370,12 @@ class PageNavigator:
     async def _navigate_to_page(self, url: str) -> None:
         """Navigate to a LinkedIn page and fail fast on auth barriers."""
         logger.debug("_navigate_to_page: target=%s", url)
-        await self._goto_with_auth_checks(url)
+        check_rate_limit_gate()
+        try:
+            await self._goto_with_auth_checks(url)
+        except RateLimitError as exc:
+            report_rate_limit(exc)
+            raise
 
     @contextmanager
     def _watching_navigations(self) -> Iterator[list[str]]:

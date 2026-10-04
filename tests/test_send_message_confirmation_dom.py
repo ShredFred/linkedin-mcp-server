@@ -1051,8 +1051,9 @@ class TestComposerRecipientDom:
 class TestSendConfirmationDom:
     @pytest.mark.parametrize(
         "message",
-        ["First\nSecond", "First\rSecond", "First\tSecond", "First\x7fSecond"],
-        ids=["newline", "carriage-return", "tab", "del"],
+        # Fork extension: LF is allowed (multi-line messages), so it left this list.
+        ["First\rSecond", "First\tSecond", "First\x7fSecond"],
+        ids=["carriage-return", "tab", "del"],
     )
     async def test_control_characters_are_rejected_before_dom_interaction(
         self, dom_page, message

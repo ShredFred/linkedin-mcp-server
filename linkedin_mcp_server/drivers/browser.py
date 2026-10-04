@@ -594,16 +594,51 @@ async def get_or_create_browser(
     if headless is not None:
         _headless = headless
 
-    if _browser is not None:
+    if _browser is not None and not _browser_is_dead(_browser):
         return _browser
 
     # Double-checked: only one concurrent caller may create the singleton. The
     # lifecycle lock additionally keeps creation out of an in-progress close,
     # which clears _browser before it has finished tearing Chromium down.
     async with _browser_create_lock, _browser_lifecycle_lock:
+        if _browser is not None and _browser_is_dead(_browser):
+            # Fork extension: a Chromium that crashed or whose window the user
+            # closed stayed the singleton forever, so every later tool call
+            # failed with "Target page, context or browser has been closed"
+            # until the MCP server was restarted. Tear the dead one down
+            # (settling the profile lease) and launch a fresh one instead.
+            logger.warning("Browser is no longer alive; restarting it")
+            await _run_deferring_cancels(_close_browser_locked())
         if _browser is not None:
             return _browser
         return await _create_browser()
+
+
+def _browser_is_dead(browser: BrowserManager) -> bool:
+    """Fork extension: True when the singleton's page or context is gone.
+
+    Reads only private attributes and never raises: a liveness probe that
+    throws would turn a recoverable crash into the permanent failure it is
+    meant to prevent.
+    """
+    try:
+        if not (hasattr(browser, "_context") and hasattr(browser, "_page")):
+            return False  # not a BrowserManager shape; nothing to judge
+        context = browser._context
+        page = browser._page
+        if context is None or page is None:
+            return True
+        is_closed = getattr(page, "is_closed", None)
+        if callable(is_closed) and is_closed() is True:
+            return True
+        ctx_browser = getattr(context, "browser", None)
+        is_connected = getattr(ctx_browser, "is_connected", None)
+        if callable(is_connected) and is_connected() is False:
+            return True
+    except Exception:
+        logger.debug("Browser liveness probe failed", exc_info=True)
+        return False
+    return False
 
 
 async def _create_browser() -> BrowserManager:
