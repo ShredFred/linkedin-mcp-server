@@ -36,6 +36,7 @@ from linkedin_mcp_server.common_utils import utcnow_iso
 from linkedin_mcp_server.config import get_config
 from linkedin_mcp_server.debug_trace import record_page_trace
 from linkedin_mcp_server.debug_utils import stabilize_navigation
+from linkedin_mcp_server.core.exceptions import OffSiteNavigationError
 from linkedin_mcp_server.exceptions import (
     BrowserBusyError,
     BrowserDowngradeError,
@@ -184,16 +185,21 @@ async def _log_feed_failure_context(
     )
 
 
+_FEED_URL = "https://www.linkedin.com/feed/"
+
+
 async def _feed_auth_succeeds(
     browser: BrowserManager,
     *,
     allow_remember_me: bool = True,
 ) -> bool:
     """Validate that /feed/ loads without an auth barrier."""
+    from linkedin_mcp_server.linkedin.navigation import assert_linkedin_destination
+
     try:
         await goto_reporting_proxy_errors(
             browser.page,
-            "https://www.linkedin.com/feed/",
+            _FEED_URL,
             wait_until="domcontentloaded",
         )
         await stabilize_navigation("feed navigation", logger)
@@ -220,7 +226,12 @@ async def _feed_auth_succeeds(
             )
             await _log_feed_failure_context(browser, barrier)
             return False
+        # Off LinkedIn is neither a live session nor a dead one: reporting True
+        # would mark a captive portal or hijacked redirect as authenticated.
+        assert_linkedin_destination(_FEED_URL, browser.page.url)
         return True
+    except OffSiteNavigationError:
+        raise
     except Exception as exc:
         # Before anything else: a proxy fault is not a dead session. Returning
         # False here would have the caller retire a valid profile and tell the

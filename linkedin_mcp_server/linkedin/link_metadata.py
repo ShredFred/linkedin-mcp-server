@@ -271,8 +271,7 @@ def normalize_url(href: str, _depth: int = 0) -> str | None:
     if scheme and scheme not in {"http", "https"}:
         return None
 
-    host = parsed.netloc.lower()
-    if _is_linkedin_host(host) and parsed.path == "/redir/redirect/":
+    if _is_linkedin_host(parsed.hostname) and parsed.path == "/redir/redirect/":
         target = unquote((parse_qs(parsed.query).get("url") or [""])[0]).strip()
         if not target:
             return None
@@ -287,10 +286,9 @@ def normalize_url(href: str, _depth: int = 0) -> str | None:
 def classify_link(href: str) -> tuple[ReferenceKind, str] | None:
     """Classify and canonicalize one normalized URL."""
     parsed = urlparse(href)
-    host = parsed.netloc.lower()
     path = parsed.path or "/"
 
-    if not _is_linkedin_host(host):
+    if not _is_linkedin_host(parsed.hostname):
         return "external", urlunparse(
             (parsed.scheme, parsed.netloc, parsed.path or "/", "", "", "")
         )
@@ -542,5 +540,7 @@ def _is_linkedin_chrome(path: str) -> bool:
     return first == "preload" and second == "custom-invite"
 
 
-def _is_linkedin_host(host: str) -> bool:
+def _is_linkedin_host(host: str | None) -> bool:
+    # Callers pass urlparse().hostname: no port, no userinfo, lower case.
+    host = (host or "").rstrip(".")
     return host == "linkedin.com" or host.endswith(".linkedin.com")

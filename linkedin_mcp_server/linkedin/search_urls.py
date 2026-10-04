@@ -6,6 +6,7 @@ from urllib.parse import quote_plus
 
 import json
 import re
+import unicodedata
 
 from linkedin_mcp_server.linkedin.contracts import FilterValidationError
 
@@ -126,7 +127,7 @@ def resolve_people_geo_ids(location: str) -> list[str]:
         if _GEO_ID_RE.fullmatch(entry):
             geo_id = entry
         else:
-            key = " ".join(entry.casefold().split())
+            key = " ".join(unicodedata.normalize("NFC", entry).casefold().split())
             geo_id = PEOPLE_GEO_IDS.get(key)
             if geo_id is None:
                 raise FilterValidationError(

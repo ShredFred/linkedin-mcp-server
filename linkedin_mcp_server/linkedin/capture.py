@@ -304,7 +304,11 @@ class SectionCapture:
                     break
             else:
                 stale = 0
-        return {"rows": int(state.get("rows") or 0), "rounds": rounds, "stop": stop}
+        rows = int(state.get("rows") or 0)
+        if stop == "round_cap" and rows >= target:
+            # The last permitted click reached the target: that is the limit.
+            stop = "limit"
+        return {"rows": rows, "rounds": rounds, "stop": stop}
 
     async def capture(
         self,

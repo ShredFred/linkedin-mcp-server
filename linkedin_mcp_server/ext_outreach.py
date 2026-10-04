@@ -651,11 +651,21 @@ class PaceExceeded(Exception):
 
 
 RATE_LIMIT_MIN_COOLDOWN = 60
+# Upper bound for a booked cooldown: a ledger value like 1e300 or Infinity
+# would otherwise overflow timedelta and crash every pacer read.
+RATE_LIMIT_MAX_COOLDOWN = 86400
+
+
+def _clamp_cooldown(seconds: Any) -> int:
+    return min(RATE_LIMIT_MAX_COOLDOWN, max(RATE_LIMIT_MIN_COOLDOWN, int(seconds)))
 
 
 def _cooldown_seconds(row: dict[str, Any]) -> int:
     try:
-        return max(RATE_LIMIT_MIN_COOLDOWN, int(row.get("cooldown_seconds")))
+        return _clamp_cooldown(row.get("cooldown_seconds"))
+    except OverflowError:
+        # +/-Infinity: the longest block, not none.
+        return RATE_LIMIT_MAX_COOLDOWN
     except (TypeError, ValueError):
         # Unreadable cooldown: block for the default rather than not at all.
         return 300
@@ -790,7 +800,7 @@ class Pacer:
         """LinkedIn rate-limited a navigation: block every action for *seconds*."""
         row: dict[str, Any] = {
             "kind": "rate_limited",
-            "cooldown_seconds": max(RATE_LIMIT_MIN_COOLDOWN, int(seconds)),
+            "cooldown_seconds": _cooldown_seconds({"cooldown_seconds": seconds}),
             "tool": tool,
         }
         if detail:
