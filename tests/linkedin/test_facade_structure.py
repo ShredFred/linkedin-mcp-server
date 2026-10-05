@@ -122,7 +122,12 @@ FACADE_STATE = {
 } | LINKEDIN_MCP_FORK_FACADE_STATE
 
 # Fork extension: read-only properties the fork's outreach tools consult.
-LINKEDIN_MCP_FORK_PROPERTIES = {"invite_send_clicked", "ext_navigator", "ext_session"}
+LINKEDIN_MCP_FORK_PROPERTIES = {
+    "invite_send_clicked",
+    "message_submit_dispatched",
+    "ext_navigator",
+    "ext_session",
+}
 
 PERMANENT_ALIASES = {
     "ExtractedSection": contracts.ExtractedSection,
@@ -174,7 +179,11 @@ def _assert_facade_shape(source: str) -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     # Fork extension: invite_send_clicked is a read-only property, not a delegate.
-    assert set(methods) == {*PUBLIC_SIGNATURES, "__init__", *LINKEDIN_MCP_FORK_PROPERTIES}
+    assert set(methods) == {
+        *PUBLIC_SIGNATURES,
+        "__init__",
+        *LINKEDIN_MCP_FORK_PROPERTIES,
+    }
     assert all(
         isinstance(methods[name], ast.AsyncFunctionDef) for name in PUBLIC_SIGNATURES
     )

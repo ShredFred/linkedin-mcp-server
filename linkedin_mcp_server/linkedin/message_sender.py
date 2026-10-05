@@ -1413,6 +1413,11 @@ class MessageSender:
         self._session = session
         self._navigator = navigator
         self._page = session.page
+        # fork extension: True from just before the submit click until the
+        # send proves it did not click. Read by the fork's write tools when a
+        # deadline or cancellation lands, so a stop before the click books a
+        # retryable not_sent instead of a permanent unknown.
+        self.submit_dispatched = False
 
     async def _read_profile_message_target(
         self, *, timeout_ms: int = _PROFILE_MESSAGE_TARGET_TIMEOUT_MS
@@ -1771,6 +1776,7 @@ class MessageSender:
             profile_urn: Optional profile URN (e.g. ACoAAB...) to verify against
                 the recipient resolved from the loaded profile snapshot.
         """
+        self.submit_dispatched = False
         refusal = contracts.refuse_an_invalid_message(linkedin_username, message)
         if refusal is not None:
             return refusal
@@ -2043,6 +2049,7 @@ class MessageSender:
                             # reports an error, so an exception from this
                             # round trip is ambiguous.
                             may_have_submitted = True
+                            self.submit_dispatched = True
                             submission = await self._submit_verified_message(
                                 message,
                                 target=target,
@@ -2065,6 +2072,7 @@ class MessageSender:
 
                         if submission != "clicked":
                             may_have_submitted = False
+                            self.submit_dispatched = False
                             return contracts.message_action_result(
                                 self._page.url,
                                 "send_unavailable",

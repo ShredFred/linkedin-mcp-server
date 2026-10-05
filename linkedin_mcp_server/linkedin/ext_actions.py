@@ -474,12 +474,17 @@ class ExtActions(ExtNetworkReader):
         open and scrolled far enough to hold the card (list_sent_invitations
         leaves it so).
         """
+        # Click marker (fork, 2026-10-05): False until just before the first
+        # click, so a deadline or cancellation before it books a retryable
+        # not_done instead of a permanent unknown.
+        self.withdraw_clicked = False
         marked = await self._page.evaluate(_MARK_WITHDRAW_JS, slug)
         if not marked:
             return {"slug": slug, "name": name, "status": "not_found"}
         link = self._page.locator('[data-ext-withdraw="1"]').first
         await link.scroll_into_view_if_needed()
         await self._session.delay(random.uniform(0.8, 1.6))
+        self.withdraw_clicked = True
         await link.click()
         try:
             await self._session.delay(random.uniform(1.5, 2.5))

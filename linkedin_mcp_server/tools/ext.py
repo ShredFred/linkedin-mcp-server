@@ -23,6 +23,7 @@ from datetime import date, datetime, timedelta
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
+import anyio
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import Field
@@ -51,6 +52,9 @@ from linkedin_mcp_server.linkedin.ext_network import (
     project_attendees,
 )
 from linkedin_mcp_server.linkedin.ext_post import ExtPostComposer
+from linkedin_mcp_server.linkedin.message_sender import (
+    _send_budget_deadline as _reply_budget_deadline,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +264,105 @@ async def _run(ctx: Context, name: str, body: Any) -> dict[str, Any]:
     raise AssertionError("unreachable")
 
 
+# -- answering before the tool deadline ---------------------------------------
+#
+# FastMCP runs a tool inside anyio.fail_after(); a deadline that lands there
+# discards whatever the tool would have returned, and the client sees only
+# "Error calling tool" -- no status, no retry_safe. Upstream #1233 fixed that
+# for send_message by running dispatch and confirmation under an earlier
+# budget (message_sender._send_budget_deadline: the tool deadline minus a
+# reserve). Every fork write tool uses the same budget through the helpers
+# below, so it answers itself while the reserve is left:
+#
+# - budget ran out before the click marker was set -> nothing left; the tool
+#   books and answers its not-done status (not_sent / not_posted / not_done)
+#   with retry_safe=true, which releases the ledger block.
+# - budget ran out after the marker -> unknown, retry_safe=false, blocking.
+# - budget ran out in a read-back after a confirmed send -> unverified,
+#   retry_safe=false (see _send_and_verify).
+#
+# A cancellation the budget does not own (client cancel, server shutdown)
+# still propagates; the tools' ``except BaseException`` branches book it by
+# the same click marker. Without the marker set, the click provably did not
+# happen (every reader sets it *before* the click call), so that, too, is a
+# releasing not-done row. A reader without a marker fails closed (unknown).
+
+
+class _DeadlineHit:
+    """The write's budget ran out; ``clicked`` says whether a click may be out."""
+
+    __slots__ = ("clicked",)
+
+    def __init__(self, clicked: bool) -> None:
+        self.clicked = clicked
+
+
+def _marker_set(clicked: Callable[[], Any]) -> bool:
+    """Read a click marker fail-closed: unreadable counts as clicked."""
+    try:
+        return bool(clicked())
+    except Exception:
+        return True
+
+
+def _write_budget() -> float:
+    """When a write tool's work has to stop to still answer (event-loop clock)."""
+    return _reply_budget_deadline()
+
+
+async def _before_deadline(
+    act: Callable[[], Any],
+    clicked: Callable[[], Any],
+    *,
+    budget: float | None = None,
+) -> Any:
+    """Run ``act()`` under the reply budget; a ``_DeadlineHit`` when it ran out.
+
+    Too little time left to start at all is a hit before any click.
+    """
+    end = _write_budget() if budget is None else budget
+    if anyio.current_time() >= end:
+        return _DeadlineHit(False)
+    with anyio.CancelScope(deadline=end):
+        return await act()
+    return _DeadlineHit(_marker_set(clicked))
+
+
+def _deadline_answer(hit: _DeadlineHit, not_done: str) -> dict[str, Any]:
+    """The client-facing part of a budget stop (``not_done`` before the click)."""
+    if hit.clicked:
+        return {
+            "status": "unknown",
+            "retry_safe": False,
+            "deadline_reached": True,
+            "detail": "The tool deadline arrived after the click; the action "
+            "may have gone through. Check by hand, do not retry.",
+        }
+    return {
+        "status": not_done,
+        "retry_safe": True,
+        "deadline_reached": True,
+        "detail": "The tool deadline arrived before the click; nothing was "
+        "done. Safe to retry.",
+    }
+
+
+def _book_deadline(
+    ledger: outreach.Ledger, attempt: str, hit: _DeadlineHit, not_done: str
+) -> dict[str, Any]:
+    """Close the attempt row for a budget stop and return the client answer."""
+    ledger.append(
+        {
+            "attempt": attempt,
+            "status": "unknown" if hit.clicked else not_done,
+            "detail": "tool deadline after the click"
+            if hit.clicked
+            else "tool deadline before the click",
+        }
+    )
+    return _deadline_answer(hit, not_done)
+
+
 async def _send_and_verify(
     extractor: Any,
     ledger: outreach.Ledger,
@@ -312,8 +415,14 @@ async def _send_and_verify(
     )
     if refused:
         return {"recipient": username, "verified": False, **refused}
+    # One budget for send and read-back, read while the whole call is ahead.
+    budget = _write_budget()
     try:
-        sent = await extractor.send_message(username, message, confirm_send=True)
+        sent = await _before_deadline(
+            lambda: extractor.send_message(username, message, confirm_send=True),
+            lambda: _message_dispatched(extractor),
+            budget=budget,
+        )
     except Exception as exc:
         # message_sender's contract: once the submit may have been dispatched
         # it returns send_unconfirmed instead of raising, so an Exception that
@@ -329,11 +438,33 @@ async def _send_and_verify(
         exc.ext_send_status = "not_sent"  # type: ignore[attr-defined]
         raise
     except BaseException:
-        # Cancellation (tool timeout): the click may have happened.
-        ledger.append(
-            {"attempt": attempt, "status": "unknown", "detail": "exception during send"}
-        )
+        # Cancellation the budget does not own (client cancel, shutdown). The
+        # sender sets its dispatch marker before the submit click, so a marker
+        # still unset proves nothing left: releasing not_sent. Set, or an
+        # extractor without one: the click may have happened -> unknown.
+        if _message_dispatched(extractor):
+            ledger.append(
+                {
+                    "attempt": attempt,
+                    "status": "unknown",
+                    "detail": "exception during send",
+                }
+            )
+        else:
+            ledger.append(
+                {
+                    "attempt": attempt,
+                    "status": "not_sent",
+                    "detail": "cancelled before the submit click",
+                }
+            )
         raise
+    if isinstance(sent, _DeadlineHit):
+        return {
+            "recipient": username,
+            "verified": False,
+            **_book_deadline(ledger, attempt, sent, "not_sent"),
+        }
     if not sent.get("sent"):
         status = "not_sent" if sent.get("retry_safe") else "unknown"
         ledger.append(
@@ -346,26 +477,48 @@ async def _send_and_verify(
             "verified": False,
         }
     try:
-        return await _read_back(extractor, ledger, attempt, username, message, sent)
+        read = await _before_deadline(
+            lambda: _read_back(extractor, ledger, attempt, username, message, sent),
+            lambda: True,
+            budget=budget,
+        )
+        if not isinstance(read, _DeadlineHit):
+            return read
+        # The send was confirmed, only the read-back was cut by the budget.
+        _close_unverified(ledger, attempt, "read-back cut by the tool deadline")
+        return {
+            "recipient": username,
+            "status": "unverified",
+            "send": sent,
+            "verified": False,
+            "retry_safe": False,
+            "deadline_reached": True,
+            "detail": "Sent, but the tool deadline cut the read-back. Check "
+            "the thread, do not resend.",
+        }
     except BaseException:
         # R7: a cancellation (tool timeout) during the read-back left the row
         # at "attempted". The send had already answered sent=True, so the row
         # is closed as unverified -- blocking and counted, never not_sent.
         # Synchronous append: an await here would be cancelled again at once.
         # A final row already written (verified) is never downgraded.
-        try:
-            done = ledger.latest_by_attempt().get(attempt, {}).get("status")
-        except Exception:
-            done = None
-        if done not in ("verified", "unverified"):
-            ledger.append(
-                {
-                    "attempt": attempt,
-                    "status": "unverified",
-                    "detail": "read-back interrupted",
-                }
-            )
+        _close_unverified(ledger, attempt, "read-back interrupted")
         raise
+
+
+def _message_dispatched(extractor: Any) -> bool:
+    """The sender's dispatch marker; an extractor without one fails closed."""
+    return _marker_set(lambda: getattr(extractor, "message_submit_dispatched", True))
+
+
+def _close_unverified(ledger: outreach.Ledger, attempt: str, detail: str) -> None:
+    """Close a sent attempt as unverified unless a final row already exists."""
+    try:
+        done = ledger.latest_by_attempt().get(attempt, {}).get("status")
+    except Exception:
+        done = None
+    if done not in ("verified", "unverified"):
+        ledger.append({"attempt": attempt, "status": "unverified", "detail": detail})
 
 
 async def _read_back(
@@ -779,6 +932,11 @@ def register_ext_tools(
         duplicate_text (same text attempted within 30 days; previous holds
         the row), pace_budget_spent (post budget spent: wait), pace_lock_busy
         (retry shortly). All refusals carry posted=false.
+
+        Tool deadline: answered before it with deadline_reached=true and
+        posted=false: not_posted (retry_safe=true, deadline before the
+        publish click) or unknown (retry_safe=false, may be live: check
+        recent activity, do not repost).
         """
         if as_company:
             return {
@@ -862,8 +1020,11 @@ def register_ext_tools(
                 return {"posted": False, **refused}
             composer = _composer(ex)
             try:
-                result = await composer.create_post(
-                    text, image_path=image_path, confirm_post=True
+                result = await _before_deadline(
+                    lambda: composer.create_post(
+                        text, image_path=image_path, confirm_post=True
+                    ),
+                    lambda: getattr(composer, "clicked", True),
                 )
             except BaseException:
                 clicked = getattr(composer, "clicked", True)
@@ -877,6 +1038,11 @@ def register_ext_tools(
                     }
                 )
                 raise
+            if isinstance(result, _DeadlineHit):
+                return {
+                    "posted": False,
+                    **_book_deadline(ledger, attempt, result, "not_posted"),
+                }
             status = _POST_LEDGER_STATUS.get(result.get("status"), "not_posted")
             outcome: dict[str, Any] = {
                 "attempt": attempt,
@@ -923,6 +1089,11 @@ def register_ext_tools(
         control or invisible characters), content_check_failed
         (findings list the rule), message_too_long (over the length cap),
         pace_lock_busy (nothing booked, retry shortly).
+
+        Tool deadline: the tool answers before it instead of failing.
+        deadline_reached=true with not_sent (retry_safe=true: the deadline
+        came before the submit click), unknown (retry_safe=false: after it)
+        or unverified (retry_safe=false: sent, the read-back was cut).
         """
         username, bad = _recipient(linkedin_username)
         if bad:
@@ -1007,7 +1178,10 @@ def register_ext_tools(
         (a recipient was not verified; results[-1].status is verified /
         unverified / unknown / not_sent / duplicate / pace_budget_spent /
         pace_lock_busy -- unknown and unverified must not be resent, remaining
-        excludes them). Other refusals: canary_not_configured (no canary:
+        excludes them; deadline_reached=true marks a stop by the tool deadline,
+        retry_safe says whether that recipient may be sent again),
+        stopped_on_deadline (the next pause would run past the tool deadline;
+        nothing in flight, call again for remaining). Other refusals: canary_not_configured (no canary:
         LINKEDIN_MCP_CANARY unset and none passed), invalid_recipient (bad canary, with
         field=canary), invalid_message, message_too_long, pace_lock_busy
         (retry shortly).
@@ -1121,9 +1295,21 @@ def register_ext_tools(
                 return now if now["messages_left_today"] <= 0 else None
 
             results = []
+            batch_budget = _write_budget()
             for index, username in enumerate(targets[:take]):
                 if index:
-                    await asyncio.sleep(random.uniform(*SEND_GAP))
+                    gap = random.uniform(*SEND_GAP)
+                    if anyio.current_time() + gap >= batch_budget:
+                        # The pause would run into the tool deadline and the
+                        # answer, verified sends included, would be lost.
+                        return {
+                            **plan,
+                            "status": "stopped_on_deadline",
+                            "results": results,
+                            "remaining": targets[index:],
+                            "retry_safe": True,
+                        }
+                    await asyncio.sleep(gap)
                 try:
                     outcome = await _send_and_verify(
                         ex,
@@ -1224,6 +1410,11 @@ def register_ext_tools(
         duplicate (person already invited), cap_reached (today's invite cap;
         continue tomorrow), dry_run (confirm_send=false, quota shown),
         pace_budget_spent (wait), pace_lock_busy (retry shortly).
+
+        Tool deadline: answered before it with a top-level status and
+        deadline_reached=true: not_sent (retry_safe=true, deadline before the
+        send click, no invite booked) or unknown (retry_safe=false, may have
+        left; the person stays blocked).
         """
         username, bad = _recipient(linkedin_username)
         if bad:
@@ -1263,7 +1454,10 @@ def register_ext_tools(
             if refused:
                 return {"recipient": username, **refused}
             try:
-                res = await ex.connect_with_person(username, note=note)
+                res = await _before_deadline(
+                    lambda: ex.connect_with_person(username, note=note),
+                    lambda: getattr(ex, "invite_send_clicked", True),
+                )
             except BaseException:
                 # An extractor without the click marker is treated as clicked:
                 # fail closed, the attempt blocks a retry.
@@ -1278,6 +1472,11 @@ def register_ext_tools(
                     }
                 )
                 raise
+            if isinstance(res, _DeadlineHit):
+                return {
+                    "recipient": username,
+                    **_book_deadline(ledger, attempt, res, "not_sent"),
+                }
             clicked = bool(getattr(ex, "invite_send_clicked", True))
             raw = str(res.get("status", ""))
             # connected/accepted: an invitation left or one was accepted.

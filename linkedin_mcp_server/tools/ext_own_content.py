@@ -123,7 +123,15 @@ async def _operate(
     new_text: str | None,
     dry_run: bool,
 ) -> dict[str, Any]:
-    from linkedin_mcp_server.tools.ext import _book_attempt, _pace, _peek, _run
+    from linkedin_mcp_server.tools.ext import (
+        _before_deadline,
+        _book_attempt,
+        _book_deadline,
+        _DeadlineHit,
+        _pace,
+        _peek,
+        _run,
+    )
 
     ledger = outreach.Ledger.default()
     new_sha = outreach.text_sha(new_text) if new_text is not None else None
@@ -182,7 +190,9 @@ async def _operate(
                 refused = {**refused, "status": "already_attempted"}
             return {**target, **refused}
         try:
-            result = await act(True)
+            result = await _before_deadline(
+                lambda: act(True), lambda: getattr(reader, "clicked", True)
+            )
         except BaseException:
             clicked = getattr(reader, "clicked", True)
             ledger.append(
@@ -195,6 +205,12 @@ async def _operate(
                 }
             )
             raise
+        if isinstance(result, _DeadlineHit):
+            return {
+                **target,
+                "attempt": attempt,
+                **_book_deadline(ledger, attempt, result, "not_done"),
+            }
         status = result["status"] if result.get("done") else "not_done"
         outcome: dict[str, Any] = {
             "attempt": attempt,
@@ -266,6 +282,11 @@ def register_ext_own_content_tools(
         (own profile not resolved: re-check login), pace_lock_busy (retry
         shortly). unverified = the action may have happened: re-read the
         post, never repeat it (the ledger answers already_attempted).
+
+        Tool deadline: answered before it with deadline_reached=true:
+        not_done (retry_safe=true, deadline before the final click, nothing
+        changed) or unknown (retry_safe=false: re-read the post, never
+        repeat).
         """
         activity, _, bad = resolve_target(post_url, None)
         if bad:
@@ -305,6 +326,11 @@ def register_ext_own_content_tools(
         URL/URN, nothing read), own_identity_unknown (own profile not
         resolved: re-check login), pace_lock_busy (retry shortly). unverified = the action may have happened: re-read the
         post, never repeat it (the ledger answers already_attempted).
+
+        Tool deadline: answered before it with deadline_reached=true:
+        not_done (retry_safe=true, deadline before the final click, nothing
+        changed) or unknown (retry_safe=false: re-read the post, never
+        repeat).
         """
         bad = check_text(new_text, POST_MAX)
         if bad:
@@ -346,6 +372,11 @@ def register_ext_own_content_tools(
         comment URN of another post), own_identity_unknown (own profile not
         resolved: re-check login), pace_lock_busy (retry shortly). unverified = the action may have happened: re-read the
         comment, never repeat it (the ledger answers already_attempted).
+
+        Tool deadline: answered before it with deadline_reached=true:
+        not_done (retry_safe=true, deadline before the final click, nothing
+        changed) or unknown (retry_safe=false: re-read the post, never
+        repeat).
         """
         activity, cid, bad = resolve_target(post_url, comment_id)
         if bad:
@@ -389,6 +420,11 @@ def register_ext_own_content_tools(
         post), own_identity_unknown (own profile not resolved: re-check
         login), pace_lock_busy (retry shortly). unverified = the action may have happened: re-read the
         comment, never repeat it (the ledger answers already_attempted).
+
+        Tool deadline: answered before it with deadline_reached=true:
+        not_done (retry_safe=true, deadline before the final click, nothing
+        changed) or unknown (retry_safe=false: re-read the post, never
+        repeat).
         """
         bad = check_text(new_text, COMMENT_MAX)
         if bad:

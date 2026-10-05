@@ -145,6 +145,11 @@ class LinkedInExtractor:
         return self._ext_navigator
 
     @property
+    def message_submit_dispatched(self) -> bool:
+        """Whether the last send_message may have reached its submit click."""
+        return self._message_sender.submit_dispatched
+
+    @property
     def invite_send_clicked(self) -> bool:
         """Whether the last connect_with_person reached a send/accept click."""
         return self._connection.send_clicked

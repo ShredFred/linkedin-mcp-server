@@ -126,7 +126,10 @@ def register_ext_inmail_tools(
     mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
 ) -> None:
     from linkedin_mcp_server.tools.ext import (
+        _before_deadline,
         _book_attempt,
+        _book_deadline,
+        _DeadlineHit,
         _GuardedMcp,
         _pace,
         _peek,
@@ -175,6 +178,10 @@ def register_ext_inmail_tools(
         (safe to retry after a look): composer_not_opened, editor_mismatch.
         unknown / unverified: the InMail may have left and a credit may be
         spent -- never resend, check Sales Navigator's sent folder.
+
+        Tool deadline: answered before it with deadline_reached=true:
+        not_sent (retry_safe=true, deadline before the send click, nothing
+        left, no credit spent) or unknown (retry_safe=false, as above).
         """
         ident = linkedin_username or profile_url
         if not ident:
@@ -256,7 +263,10 @@ def register_ext_inmail_tools(
             if refused:
                 return {"recipient": username, **refused}
             try:
-                result = await reader.inmail(target, subject, body, confirm=True)
+                result = await _before_deadline(
+                    lambda: reader.inmail(target, subject, body, confirm=True),
+                    lambda: getattr(reader, "clicked", True),
+                )
             except BaseException:
                 # Before the send click nothing left: not_sent neither counts
                 # nor blocks. After it the InMail may be out: unknown.
@@ -271,6 +281,11 @@ def register_ext_inmail_tools(
                     }
                 )
                 raise
+            if isinstance(result, _DeadlineHit):
+                return {
+                    "recipient": username,
+                    **_book_deadline(ledger, attempt, result, "not_sent"),
+                }
             status = result["status"] if result.get("sent") else "not_sent"
             ledger.append(
                 {
@@ -343,6 +358,10 @@ def register_ext_inmail_tools(
         edit_form_not_opened, no_more_menu, save_button_unavailable (nothing
         saved, safe to retry), pace_lock_busy (retry shortly). unverified =
         the edit may be saved: re-read the thread before editing again.
+
+        Tool deadline: answered before it with deadline_reached=true:
+        not_sent (retry_safe=true, deadline before the save click, nothing
+        saved) or unknown (retry_safe=false: re-read the thread first).
         """
         try:
             url = thread_url(thread)
@@ -411,7 +430,10 @@ def register_ext_inmail_tools(
             if refused:
                 return {**base, **refused}
             try:
-                result = await reader.edit(url, message, new_text, confirm=True)
+                result = await _before_deadline(
+                    lambda: reader.edit(url, message, new_text, confirm=True),
+                    lambda: getattr(reader, "clicked", True),
+                )
             except BaseException:
                 clicked = getattr(reader, "clicked", True)
                 ledger.append(
@@ -424,6 +446,8 @@ def register_ext_inmail_tools(
                     }
                 )
                 raise
+            if isinstance(result, _DeadlineHit):
+                return {**base, **_book_deadline(ledger, attempt, result, "not_sent")}
             status = result["status"] if result.get("edited") else "not_sent"
             ledger.append(
                 {"attempt": attempt, "status": status, "detail": result["status"]}

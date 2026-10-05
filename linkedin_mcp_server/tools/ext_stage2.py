@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 
+import anyio
 from fastmcp import Context, FastMCP
 from pydantic import Field
 
@@ -37,7 +38,10 @@ from linkedin_mcp_server.linkedin.ext_engagement import (
 from linkedin_mcp_server.tools.ext import (
     BATCH_TIMEOUT_SECONDS,
     TAG,
+    _before_deadline,
     _book_attempt,
+    _book_deadline,
+    _DeadlineHit,
     _GuardedMcp,
     _hidden_format_char,
     _pace,
@@ -45,6 +49,7 @@ from linkedin_mcp_server.tools.ext import (
     _recipient,
     _run,
     _utf16_len,
+    _write_budget,
     pace_lock_busy,
 )
 
@@ -369,6 +374,9 @@ def register_ext_stage2_tools(
         is withdrawn, still_pending, not_found (card gone), not_confirmed
         (dialog did not confirm) or unverified (read-back unclear: re-read
         the sent list before retrying), pace_budget_spent or pace_lock_busy.
+        Tool deadline: the batch answers before it; the stopped entry has
+        deadline_reached=true and status not_done (retry_safe=true, nothing
+        clicked for it) or unknown (retry_safe=false: re-read the sent list).
         Refusals: invalid_recipient, pace_budget_spent (wait, see pace_status),
         pace_lock_busy (nothing booked, retry shortly).
         """
@@ -415,9 +423,23 @@ def register_ext_stage2_tools(
             ledger = outreach.Ledger.default()
             pacer = outreach.Pacer(ledger)
             results = []
+            budget = _write_budget()
             for index, inv in enumerate(picked):
                 if index:
-                    await asyncio.sleep(random.uniform(8.0, 20.0))
+                    gap = random.uniform(8.0, 20.0)
+                    if anyio.current_time() + gap >= budget:
+                        # The pause would run into the tool deadline and lose
+                        # the answer: stop with nothing in flight.
+                        results.append(
+                            {
+                                "slug": inv["slug"],
+                                "status": "not_done",
+                                "retry_safe": True,
+                                "deadline_reached": True,
+                            }
+                        )
+                        break
+                    await asyncio.sleep(gap)
                 # The attempt row is the booking, written under the pacer lock
                 # (withdraw is a ledger kind). A card that is gone (not_found)
                 # ends as an uncounted status and gives the unit back.
@@ -448,10 +470,28 @@ def register_ext_stage2_tools(
                 # Row before the click, closed afterwards: a withdrawal that may
                 # have happened must leave a trace even if the read-back throws.
                 try:
-                    outcome = await actions.withdraw(inv["name"], inv["slug"])
+                    outcome = await _before_deadline(
+                        lambda: actions.withdraw(inv["name"], inv["slug"]),
+                        lambda: getattr(actions, "withdraw_clicked", True),
+                        budget=budget,
+                    )
                 except BaseException:
-                    ledger.append({"attempt": attempt, "status": "unknown"})
+                    clicked = bool(getattr(actions, "withdraw_clicked", True))
+                    ledger.append(
+                        {
+                            "attempt": attempt,
+                            "status": "unknown" if clicked else "not_done",
+                        }
+                    )
                     raise
+                if isinstance(outcome, _DeadlineHit):
+                    results.append(
+                        {
+                            "slug": inv["slug"],
+                            **_book_deadline(ledger, attempt, outcome, "not_done"),
+                        }
+                    )
+                    break
                 ledger.append({"attempt": attempt, "status": outcome["status"]})
                 results.append(outcome)
                 if outcome["status"] != "withdrawn":
@@ -737,6 +777,11 @@ def register_ext_stage2_tools(
         already_commented (an earlier comment on this post may be live),
         already_replied (an earlier reply to this comment may be live),
         pace_budget_spent (comment budget spent: wait), pace_lock_busy.
+
+        Tool deadline (comment and reply alike): answered before it with
+        deadline_reached=true and posted=false: not_posted (retry_safe=true,
+        deadline before the submit click, text released) or unknown
+        (retry_safe=false, may be live: check the post, never comment again).
         """
         # Same checks as a message: LinkedIn counts UTF-16 units (an emoji is
         # two), and an invisible control (zero-width, bidi override) makes the
@@ -904,7 +949,10 @@ def register_ext_stage2_tools(
             # exception before comment() set the marker at all (page load), or
             # a reader without it, stays fail-closed (unknown).
             try:
-                result = await write(actions, True)
+                result = await _before_deadline(
+                    lambda: write(actions, True),
+                    lambda: getattr(actions, "comment_submitted", True),
+                )
             except BaseException:
                 clicked = bool(getattr(actions, "comment_submitted", True))
                 ledger.append(
@@ -917,6 +965,12 @@ def register_ext_stage2_tools(
                     }
                 )
                 raise
+            if isinstance(result, _DeadlineHit):
+                return {
+                    "activity_id": activity_id,
+                    "posted": False,
+                    **_book_deadline(ledger, attempt, result, "not_posted"),
+                }
             # Not posted (no editor, mismatch): release the text for a retry.
             # posted must be literally True; an unknown status with posted=True
             # is at most unverified, never a confirmed post.
@@ -971,6 +1025,11 @@ def register_ext_stage2_tools(
         Refusals (done=false): not_supported (thoughts), invalid_post_url,
         repost_pending (an earlier undo on this post is still unresolved),
         pace_budget_spent (wait), pace_lock_busy.
+
+        Tool deadline: answered before it with deadline_reached=true and
+        done=false: not_done (retry_safe=true, deadline before the menu
+        click) or unknown (retry_safe=false, may have been shared or taken
+        back: look at the post, do not repeat).
         """
         if thoughts is not None:
             return {
@@ -1059,7 +1118,10 @@ def register_ext_stage2_tools(
                     }
                 return {"done": False, **refused}
             try:
-                result = await reposter.repost(activity_id, undo=undo, confirm=True)
+                result = await _before_deadline(
+                    lambda: reposter.repost(activity_id, undo=undo, confirm=True),
+                    lambda: getattr(reposter, "repost_clicked", True),
+                )
             except BaseException:
                 clicked = bool(getattr(reposter, "repost_clicked", True))
                 ledger.append(
@@ -1072,6 +1134,12 @@ def register_ext_stage2_tools(
                     }
                 )
                 raise
+            if isinstance(result, _DeadlineHit):
+                return {
+                    "activity_id": activity_id,
+                    "done": False,
+                    **_book_deadline(ledger, attempt, result, "not_done"),
+                }
             # done must be literally True. menu_missing is not_done: measured
             # 2026-10-02, the button only opens the menu (nothing is shared).
             if result.get("done") is True:

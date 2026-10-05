@@ -556,5 +556,9 @@ def test_real_tool_timeout_books_unknown_after_click(monkeypatch):
             )
 
     res = asyncio.run(asyncio.wait_for(go(), 15))
-    assert res.is_error
+    # Since 2026-10-05 the tool answers before the deadline (upstream #1233
+    # for every fork write tool) instead of failing with a bare error.
+    assert not res.is_error
+    assert res.structured_content["status"] == "unknown"
+    assert res.structured_content["retry_safe"] is False
     assert _final("invite") == "unknown"
