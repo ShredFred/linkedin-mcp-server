@@ -22,9 +22,9 @@ END = "<!-- FORK-EXT:END -->"
 
 # Changes to upstream behaviour that are not a tool of their own.
 BEHAVIOUR_CHANGES = [
-    "`send_message` accepts multi-line text: LF becomes a paragraph via "
-    "`insertParagraph`, never an Enter key, so no half message can be sent. "
-    "CR, tab and other control characters are still refused.",
+    "`send_message` text is stricter than upstream: besides tab and other "
+    "control characters, CR (also as CRLF) and invisible or bidi control "
+    "characters are refused; multi-line text uses upstream's paragraph path.",
     "Profile URLs are normalised in one place (`linkedin/ext_urls.py`): "
     "benign query keys by allowlist (`isSelfProfile=false`, `trk`, ...), no "
     "fragment, percent-decoded slug (umlauts), optional locale segment; the "
