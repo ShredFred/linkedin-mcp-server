@@ -23,6 +23,7 @@ from linkedin_mcp_server import ext_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.linkedin.contracts import is_invisible_control
 from linkedin_mcp_server.linkedin.ext_actions import ExtActions, parse_group_id
+from linkedin_mcp_server.linkedin.ext_own_content import parse_comment_ref
 from linkedin_mcp_server.linkedin.ext_network import (
     _EVENT_ID_RE as _NETWORK_EVENT_ID_RE,
 )
@@ -715,22 +716,29 @@ def register_ext_stage2_tools(
         second post (repeated text is a restriction trigger). Budget: comment
         pacer (8/day).
 
-        reply_to (a comment id) is not implemented yet and is refused.
+        reply_to replies to one comment instead: its numeric comment id or its
+        urn:li:comment:(activity:A,C) (from get_post_engagers). The target is
+        found only by that id, inside its own thread; the post-level comment
+        box is never used for a reply. LinkedIn nests one level, so a reply to
+        a reply lands in the parent's thread (reply_to_reply=true,
+        thread_root_id); no @-mention is added, a prefilled one is removed.
+        Same budget, ledger and text rules; one reply per target comment.
 
-        Result status: posted (read back), unverified (posted=true but not
-        read back: check the post, never comment again), no_editor /
-        editor_mismatch (posted=false, nothing posted: safe to retry), dry_run.
-        Refusals (posted=false): not_supported (reply_to), invalid_text,
-        invalid_post_url, duplicate_text (same text attempted before),
+        Result status: posted (read back; for a reply: a new reply with the
+        text under the target's thread), unverified (posted=true but not read
+        back: check the post, never comment again), no_editor /
+        editor_mismatch / no_submit (posted=false, nothing posted: safe to
+        retry), dry_run. Reply only, nothing posted (posted=false):
+        reply_target_not_found, reply_target_ambiguous, reply_thread_collapsed
+        (target not shown after the bounded "load more" clicks),
+        reply_button_missing, reply_button_ambiguous, reply_editor_missing,
+        reply_editor_not_empty. Refusals (posted=false): invalid_text,
+        invalid_post_url, invalid_reply_target (not a comment id/urn, or a urn
+        of another post), duplicate_text (same text attempted before),
         already_commented (an earlier comment on this post may be live),
+        already_replied (an earlier reply to this comment may be live),
         pace_budget_spent (comment budget spent: wait), pace_lock_busy.
         """
-        if reply_to:
-            return {
-                "status": "not_supported",
-                "posted": False,
-                "message": "Replies to a comment are not implemented yet.",
-            }
         # Same checks as a message: LinkedIn counts UTF-16 units (an emoji is
         # two), and an invisible control (zero-width, bidi override) makes the
         # read-back compare a text the reader never sees.
@@ -750,6 +758,22 @@ def register_ext_stage2_tools(
         activity_id, bad = _activity(post_url)
         if bad:
             return {**bad, "posted": False}
+        target: str | None = None
+        if reply_to is not None:
+            try:
+                in_urn, target = parse_comment_ref(reply_to)
+            except ValueError as wrong:
+                return {
+                    "status": "invalid_reply_target",
+                    "posted": False,
+                    "message": str(wrong)[:300],
+                }
+            if in_urn and in_urn != activity_id:
+                return {
+                    "status": "invalid_reply_target",
+                    "posted": False,
+                    "message": "the comment urn belongs to a different post",
+                }
         ledger = outreach.Ledger.default()
         sha = outreach.text_sha(text)
 
@@ -783,6 +807,9 @@ def register_ext_stage2_tools(
         # Every other open row -- in particular an unknown attempt the delete
         # could not be tied to -- keeps blocking. The same text stays refused
         # through repeat() regardless.
+        # Replies (2026-10-05) are rows of the same kind with reply_to set:
+        # one top-level comment per post, one reply per target comment, and
+        # neither blocks the other.
         def same_post() -> dict[str, Any] | None:
             latest = ledger.latest_by_attempt()
 
@@ -805,6 +832,7 @@ def register_ext_stage2_tools(
                     for r in latest.values()
                     if r.get("kind") == "comment"
                     and r.get("activity") == activity_id
+                    and r.get("reply_to") == target
                     and r.get("status")
                     in {"attempted", "unknown", "posted", "unverified"}
                     and not deleted(r)
@@ -818,7 +846,7 @@ def register_ext_stage2_tools(
         earlier = same_post()
         if earlier and confirm:
             return {
-                "status": "already_commented",
+                "status": "already_replied" if target else "already_commented",
                 "posted": False,
                 "previous": earlier,
             }
@@ -835,8 +863,13 @@ def register_ext_stage2_tools(
                 return refusal
 
         async def body(ex: Any) -> dict[str, Any]:
+            async def write(actions: ExtActions, go: bool) -> dict[str, Any]:
+                if target:
+                    return await actions.reply(activity_id, target, text, go)
+                return await actions.comment(activity_id, text, go)
+
             if not confirm:
-                result = await _actions(ex).comment(activity_id, text, False)
+                result = await write(_actions(ex), False)
                 return {"activity_id": activity_id, **result}
             attempt = uuid.uuid4().hex
             refused = _book_attempt(
@@ -846,6 +879,7 @@ def register_ext_stage2_tools(
                     "attempt": attempt,
                     "kind": "comment",
                     "activity": activity_id,
+                    **({"reply_to": target} if target else {}),
                     "text_sha": sha,
                     "status": "attempted",
                     "started_at": datetime.now()
@@ -857,7 +891,13 @@ def register_ext_stage2_tools(
             )
             if refused:
                 if refused["status"] == "duplicate":
-                    refused = {**refused, "status": "duplicate_text"}
+                    prev = refused.get("previous") or {}
+                    refused = {
+                        **refused,
+                        "status": "already_replied"
+                        if target and sha not in outreach.row_text_shas(prev)
+                        else "duplicate_text",
+                    }
                 return {"posted": False, **refused}
             actions = _actions(ex)
             # R7: comment() resets comment_submitted once the editor is found
@@ -865,7 +905,7 @@ def register_ext_stage2_tools(
             # exception before comment() set the marker at all (page load), or
             # a reader without it, stays fail-closed (unknown).
             try:
-                result = await actions.comment(activity_id, text, True)
+                result = await write(actions, True)
             except BaseException:
                 clicked = bool(getattr(actions, "comment_submitted", True))
                 ledger.append(
@@ -1382,9 +1422,9 @@ def register_ext_stage2_tools(
         return await _run(
             ctx,
             "get_page_followers",
-            lambda ex: ExtEventFinder(
-                ex.ext_session, ex.ext_navigator
-            ).page_followers(page_id.strip(), known=set(), limit=limit),
+            lambda ex: ExtEventFinder(ex.ext_session, ex.ext_navigator).page_followers(
+                page_id.strip(), known=set(), limit=limit
+            ),
         )
 
 
