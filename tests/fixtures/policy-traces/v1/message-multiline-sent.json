@@ -1,8 +1,9 @@
 {
   "call": {
     "arguments": {
-      "cancelled_during": "confirmation",
-      "confirm_send": true
+      "confirm_send": true,
+      "message": "First\n \nSecond\n",
+      "submission_outcome": "sent"
     },
     "method": "send_message"
   },
@@ -220,7 +221,7 @@
     },
     {
       "arg": {
-        "message": "New text",
+        "message": "First\n\nSecond",
         "profilePath": "/in/ada-lovelace/",
         "profileUrn": "ACoAA-policy"
       },
@@ -233,7 +234,27 @@
     },
     {
       "arg": {
-        "message": "New text",
+        "message": "First\n\nSecond",
+        "profilePath": "/in/ada-lovelace/",
+        "profileUrn": "ACoAA-policy"
+      },
+      "call": "send_message",
+      "handle": "handle-1",
+      "kind": "handle.evaluate",
+      "operation": "message_submit_ready",
+      "program_digest": "220ce2e0f441",
+      "section": "message"
+    },
+    {
+      "call": "send_message",
+      "kind": "sleep",
+      "reason": "sleep",
+      "seconds": 0.05,
+      "section": "message"
+    },
+    {
+      "arg": {
+        "message": "First\n\nSecond",
         "profilePath": "/in/ada-lovelace/",
         "profileUrn": "ACoAA-policy"
       },
@@ -246,7 +267,7 @@
     },
     {
       "arg": {
-        "expected": "New text",
+        "expected": "First\n\nSecond",
         "owner": {
           "handle": "handle-1"
         },
@@ -261,7 +282,7 @@
     },
     {
       "arg": {
-        "message": "New text",
+        "message": "First\n\nSecond",
         "profilePath": "/in/ada-lovelace/",
         "profileUrn": "ACoAA-policy"
       },
@@ -274,7 +295,7 @@
     },
     {
       "arg": {
-        "expected": "New text",
+        "expected": "First\n\nSecond",
         "owner": {
           "handle": "handle-1"
         },
@@ -318,8 +339,13 @@
     }
   ],
   "result": {
-    "raised": "CancelledError"
+    "message": "Message submitted and confirmed in the conversation UI.",
+    "recipient_selected": true,
+    "retry_safe": false,
+    "sent": true,
+    "status": "sent",
+    "url": "https://www.linkedin.com/messaging/thread/2-policy-thread==/"
   },
-  "scenario": "send_message__confirmation_cancelled",
+  "scenario": "send_message__sent",
   "schema_version": 1
 }

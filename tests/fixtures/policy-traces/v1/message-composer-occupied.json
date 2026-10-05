@@ -171,7 +171,7 @@
       "call": "send_message",
       "kind": "wait_for_function",
       "operation": "message_composer_ready",
-      "program_digest": "afe2cb6e058f",
+      "program_digest": "9e258ac341e7",
       "section": "message",
       "timeout_ms": null
     },
@@ -183,7 +183,7 @@
       "call": "send_message",
       "kind": "evaluate",
       "operation": "message_composer_state",
-      "program_digest": "0a6874b7ec44",
+      "program_digest": "cf1a3d4ebcc4",
       "section": "message"
     },
     {
@@ -194,7 +194,7 @@
       "call": "send_message",
       "kind": "evaluate",
       "operation": "message_composer_state",
-      "program_digest": "0a6874b7ec44",
+      "program_digest": "cf1a3d4ebcc4",
       "section": "message"
     }
   ],

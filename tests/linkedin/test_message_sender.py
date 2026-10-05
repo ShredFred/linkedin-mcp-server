@@ -1,11 +1,13 @@
 """Tests for the browser-UI message sender."""
 
 from contextlib import ExitStack
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncio
 import logging
 
+import anyio
 from patchright.async_api import Error as PatchrightError
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -16,6 +18,7 @@ from linkedin_mcp_server.linkedin import message_sender as message_sender_module
 from linkedin_mcp_server.linkedin.message_sender import (
     MessageSender,
     _MESSAGE_COMPOSER_OWNER_JS,
+    _MESSAGE_COMPOSER_SUBMIT_READY_JS,
     _MESSAGE_CONFIRMATION_DISPOSE_JS,
     _MESSAGE_CONFIRMATION_PREPARE_JS,
     _MESSAGE_CONFIRMATION_READY_JS,
@@ -241,9 +244,9 @@ class TestSendMessage:
 
     @pytest.mark.parametrize(
         "message",
-        # Fork extension: LF is allowed (multi-line messages), so it left this list.
-        ["First\rSecond", "First\tSecond", "First\x7fSecond"],
-        ids=["carriage-return", "tab", "del"],
+        # Fork extension: CR stays refused; LF is the only line break.
+        ["First\rSecond", "First\tSecond", "First\x7fSecond", "First\u2028Second"],
+        ids=["carriage-return", "tab", "del", "line-separator"],
     )
     async def test_control_message_is_rejected_before_browser_interaction(
         self, mock_page, message
@@ -258,7 +261,7 @@ class TestSendMessage:
 
         assert result["status"] == "invalid_message"
         assert result["message"] == (
-            "Message must not contain control characters or line breaks."
+            "Message must not contain control characters other than line breaks."
         )
         assert result["retry_safe"] is True
         navigate.assert_not_awaited()
@@ -1008,6 +1011,73 @@ class TestSendMessage:
             "confirm:confirmation-token",
         ]
 
+    async def test_every_step_receives_the_normalized_message(self, mock_page):
+        """The editor is written, checked and confirmed with one text."""
+        sender = _sender(mock_page)
+        patches = self._patch_to_composer(sender, mock_page)
+        owner = mock_page.evaluate_handle.return_value
+        with (
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6] as write,
+            patches[7] as submit,
+            patches[8],
+            patches[9] as prepare,
+            patches[10] as confirmed,
+        ):
+            result = await sender.send_message(
+                "testuser", "First\n \nSecond\n", confirm_send=True
+            )
+
+        assert result["status"] == "sent"
+        normalized = "First\n\nSecond"
+        assert write.await_args.args[0] == normalized
+        assert prepare.await_args.args[0] == normalized
+        assert submit.await_args.args[0] == normalized
+        assert confirmed.await_args.args[0] == normalized
+        ready = [
+            call.args[1]["message"]
+            for call in owner.evaluate.await_args_list
+            if call.args[0] is _MESSAGE_COMPOSER_SUBMIT_READY_JS
+        ]
+        assert ready == [normalized]
+
+    async def test_pre_submit_cleanup_receives_the_normalized_message(self, mock_page):
+        sender = _sender(mock_page)
+        patches = self._patch_to_composer(sender, mock_page)
+        owner = mock_page.evaluate_handle.return_value
+        with (
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+            patches[7] as submit,
+            patches[8],
+            patches[9],
+            patches[10],
+            patch.object(
+                sender,
+                "_wait_for_verified_submit",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch.object(
+                sender, "_cleanup_owned_message", new_callable=AsyncMock
+            ) as cleanup,
+        ):
+            result = await sender.send_message(
+                "testuser", "First\n \nSecond\n", confirm_send=True
+            )
+
+        assert result["status"] == "send_unavailable"
+        submit.assert_not_awaited()
+        cleanup.assert_awaited_once_with("First\n\nSecond", owner)
+
     async def test_interrupted_submission_is_not_a_failure(self, mock_page):
         """A click round trip can fail after dispatching the local event."""
         sender = _sender(mock_page)
@@ -1227,6 +1297,170 @@ class TestSendMessage:
             owner=mock_page.evaluate_handle.return_value,
             confirmation=1,
         )
+
+
+async def _stall(*_args, **_kwargs):
+    await anyio.sleep_forever()
+
+
+class TestSendMessageDeadline:
+    """The tool's own deadline never takes the answer of a started send (#889).
+
+    Driven through the in-memory MCP client, because the deadline is FastMCP's
+    `anyio.fail_after()` around the tool, and what matters is what reaches the
+    caller once it fires.
+    """
+
+    _TOOL_TIMEOUT = 0.5
+
+    @staticmethod
+    async def _call(sender, monkeypatch):
+        from fastmcp import Client, FastMCP
+
+        from linkedin_mcp_server.tools.messaging import register_messaging_tools
+
+        monkeypatch.setattr(
+            "linkedin_mcp_server.tools.messaging.get_ready_extractor",
+            AsyncMock(return_value=SimpleNamespace(send_message=sender.send_message)),
+        )
+        mcp = FastMCP("test")
+        register_messaging_tools(
+            mcp, tool_timeout=TestSendMessageDeadline._TOOL_TIMEOUT
+        )
+        async with Client(mcp) as client:
+            return await client.call_tool(
+                "send_message",
+                {
+                    "linkedin_username": "testuser",
+                    "message": "Hello!",
+                    "confirm_send": True,
+                },
+                raise_on_error=False,
+            )
+
+    @staticmethod
+    def _composer(stack, sender, mock_page):
+        patches = TestSendMessage._patch_to_composer(sender, mock_page)
+        # Index 8 replaces `asyncio.sleep` for the whole process, the MCP
+        # session included; the submit wait it exists for answers at once here.
+        for index in range(1, 6):
+            stack.enter_context(patches[index])
+        return SimpleNamespace(
+            write=stack.enter_context(patches[6]),
+            submit=stack.enter_context(patches[7]),
+            prepare=stack.enter_context(patches[9]),
+            confirmed=stack.enter_context(patches[10]),
+        )
+
+    @pytest.mark.parametrize("stage", ["dispatch", "confirmation"])
+    async def test_a_stalled_send_answers_unconfirmed(
+        self, mock_page, monkeypatch, stage
+    ):
+        sender = _sender(mock_page)
+        with ExitStack() as stack:
+            mocks = self._composer(stack, sender, mock_page)
+            if stage == "dispatch":
+                mocks.submit.side_effect = _stall
+            else:
+                mocks.confirmed.side_effect = _stall
+            result = await self._call(sender, monkeypatch)
+
+        assert result.is_error is False, result.content
+        assert result.structured_content is not None
+        assert result.structured_content["status"] == "send_unconfirmed"
+        assert result.structured_content["sent"] is False
+        assert result.structured_content["retry_safe"] is False
+        assert mocks.submit.call_count == 1
+
+    @pytest.mark.parametrize("stage", ["cleanup", "notification"])
+    async def test_a_stalled_ending_keeps_the_answer(
+        self, mock_page, monkeypatch, stage
+    ):
+        from fastmcp import Context
+
+        async def report_progress(self, progress, total=None, message=None):
+            if progress == 100:
+                await anyio.sleep_forever()
+
+        sender = _sender(mock_page)
+        with ExitStack() as stack:
+            mocks = self._composer(stack, sender, mock_page)
+            if stage == "cleanup":
+                mock_page.evaluate_handle.return_value.dispose = AsyncMock(
+                    side_effect=_stall
+                )
+            else:
+                stack.enter_context(
+                    patch.object(Context, "report_progress", report_progress)
+                )
+            result = await self._call(sender, monkeypatch)
+
+        assert result.is_error is False, result.content
+        assert result.structured_content is not None
+        assert result.structured_content["status"] == "sent"
+        assert result.structured_content["sent"] is True
+        assert mocks.submit.call_count == 1
+
+    @pytest.mark.parametrize("stage", ["writing", "budget-spent"])
+    async def test_a_deadline_before_dispatch_sends_nothing(
+        self, mock_page, monkeypatch, stage
+    ):
+        """Nothing left the composer, so the timeout error is the answer.
+
+        `budget-spent` ends preparation inside the reserve the send keeps for
+        its answer: there is still time before the deadline, but not enough
+        to confirm a click, so there is no click.
+        """
+
+        async def prepare(*_args, **_kwargs):
+            deadline = anyio.current_effective_deadline()
+            await anyio.sleep(deadline - anyio.current_time() - 0.02)
+            return "confirmation-token"
+
+        sender = _sender(mock_page)
+        with ExitStack() as stack:
+            mocks = self._composer(stack, sender, mock_page)
+            if stage == "writing":
+                mocks.write.side_effect = _stall
+            else:
+                mocks.prepare.side_effect = prepare
+            result = await self._call(sender, monkeypatch)
+
+        assert result.is_error is True
+        assert result.structured_content is None
+        mocks.submit.assert_not_called()
+
+    async def test_an_outside_cancellation_still_propagates(self, mock_page, caplog):
+        """A client that cancels gets no answer, so the cancellation goes on."""
+        sender = _sender(mock_page)
+        confirming = anyio.Event()
+
+        async def confirmed(*_args, **_kwargs):
+            confirming.set()
+            await anyio.sleep_forever()
+
+        async def send():
+            with anyio.fail_after(30):
+                await sender.send_message("testuser", "Hello!", confirm_send=True)
+
+        with ExitStack() as stack:
+            mocks = self._composer(stack, sender, mock_page)
+            mocks.confirmed.side_effect = confirmed
+            stack.enter_context(
+                caplog.at_level(
+                    logging.WARNING,
+                    logger="linkedin_mcp_server.linkedin.message_sender",
+                )
+            )
+            task = asyncio.create_task(send())
+            await confirming.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert mocks.submit.call_count == 1
+        warnings = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("retry may deliver the message twice" in w for w in warnings)
 
 
 class TestResolveMessageComposeBox:

@@ -395,3 +395,37 @@ def test_follow_up_list_dues_only_old_unanswered(monkeypatch):
     out = _call("follow_up_list", {"follow_up_days": 5}, fake, monkeypatch)
     assert [e["recipient"] for e in out["due"]] == ["anna"]
     assert [e["recipient"] for e in out["replied"]] == ["bert"]
+
+
+def test_upstream_deadline_answer_books_unknown_and_blocks_the_retry(monkeypatch):
+    """#1233: when the tool deadline cuts in after a possible submit, the sender
+    answers ``send_unconfirmed`` with ``retry_safe=False`` instead of raising.
+    The guarded path must book that as ``unknown`` -- blocking and counted,
+    never ``not_sent`` and never ``verified``."""
+    from linkedin_mcp_server.linkedin import contracts
+
+    fake = FakeLinkedIn()
+    _batch(fake, monkeypatch, [])  # canary
+
+    async def deadline(username, message, *, confirm_send):
+        fake.delivered[username] += 1  # the click may have happened
+        return contracts.message_action_result(
+            "https://www.linkedin.com/messaging/",
+            "send_unconfirmed",
+            "The tool deadline arrived before LinkedIn confirmed the send.",
+            recipient_selected=True,
+            retry_safe=False,
+        )
+
+    fake.send_message = deadline
+    _batch(fake, monkeypatch, ["anna"])
+    rows = [
+        row
+        for row in outreach.Ledger.default().latest_by_attempt().values()
+        if row.get("recipient") == "anna"
+    ]
+    assert [row["status"] for row in rows] == ["unknown"]
+    assert _non_canary_counted_today() == 1
+    fake2 = FakeLinkedIn()
+    out = _batch(fake2, monkeypatch, ["anna"])
+    assert out["status"] == "done" and fake2.delivered["anna"] == 0

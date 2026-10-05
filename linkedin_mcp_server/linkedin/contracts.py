@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any
+
+import anyio
 
 from linkedin_mcp_server.linkedin.identifiers import (
     normalize_person_identifier,
@@ -30,18 +33,39 @@ from linkedin_mcp_server.linkedin.link_metadata import Reference
 RATE_LIMITED_SECTION_TEXT = "[Rate limited] LinkedIn blocked this section. Try again later or request fewer sections."
 
 # A submission is in flight from the moment the send is dispatched until the
-# whole path has produced a result, cleanup included, and an interruption in
-# that window cannot be reported. FastMCP runs every tool inside
-# `anyio.fail_after()`, so the deadline raises `CancelledError` past
-# `except Exception` and discards any result returned from the cancelled
-# scope. The caller gets a timeout that carries no `retry_safe`, and this line
-# is then the only record that a message may already have left. Answering the
-# caller instead needs the tool to know its own deadline, which is issue #889.
+# whole path has produced a result, cleanup included, and a cancellation in
+# that window cannot be reported: it raises `CancelledError` past
+# `except Exception`, and a cancelled scope discards whatever is returned from
+# inside it. The tool's own deadline no longer lands there, because the send
+# stops ahead of it and answers `send_unconfirmed` (#889). What is left is
+# cancellation the server does not own, a client that cancels or goes away,
+# and for that this line is the only record that a message may already have
+# left.
 SEND_INTERRUPTED_WARNING = (
     "Message submission was interrupted while in flight. The send outcome is "
     "unknown; check the conversation before retrying, as a retry may deliver "
     "the message twice."
 )
+
+
+def before_the_reply_deadline(
+    limit: float = math.inf, *, shield: bool = False
+) -> anyio.CancelScope:
+    """Bound work that runs while a send's answer waits to leave.
+
+    The scope ends after ``limit`` seconds and never later than halfway to the
+    deadline the call runs under, so what follows keeps the other half to hand
+    the answer back before that deadline discards it (#889). A shielded scope
+    ignores that deadline, so without this bound a slow cleanup outlasts it.
+    Without a deadline, or once the call is already cancelled and its answer
+    gone, only ``limit`` applies.
+    """
+    now = anyio.current_time()
+    end = now + limit
+    deadline = anyio.current_effective_deadline()
+    if now < deadline < math.inf:
+        end = min(end, now + (deadline - now) / 2)
+    return anyio.CancelScope(deadline=end, shield=shield)
 
 
 def rate_limited_section_error() -> dict[str, str]:
@@ -113,6 +137,49 @@ def is_invisible_control(character: str) -> bool:
     )
 
 
+# ECMAScript WhiteSpace without the characters a message may not contain (tab,
+# VT and FF are C0 controls). LinkedIn trims the composed text with JavaScript's
+# `trim()` before sending, so a blank line and the ends of a message are judged
+# by this set, never by Python's `str.isspace()`, which disagrees both ways:
+# it counts U+001C-U+001F and U+0085 and misses U+FEFF.
+_JS_WHITESPACE = frozenset(
+    "\u0020\u00a0\ufeff\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u202f\u205f\u3000"
+)
+# Line structure is LF alone. These three are line or paragraph separators of
+# their own (and U+0085 is one that JavaScript's `trim()` keeps while Python's
+# `strip()` removes it), so they are refused rather than guessed at.
+_REFUSED_SEPARATORS = frozenset("\u0085\u2028\u2029")
+
+
+def _refused_character(character: str) -> bool:
+    code = ord(character)
+    return (
+        (code < 32 and character not in "\r\n")
+        or code == 127
+        or character in _REFUSED_SEPARATORS
+    )
+
+
+def normalize_message_text(message: str) -> str:
+    """Return the text LinkedIn would send for an accepted *message*.
+
+    Callers refuse the message with ``refuse_an_invalid_message`` first, so no
+    refused character reaches this. CRLF and a lone CR end a line like LF. A
+    line made only of whitespace becomes empty, and the whole message is
+    trimmed at both ends, as LinkedIn's own send does. Interior empty lines and
+    spaces inside or at the edges of interior lines are kept.
+    """
+    text = message.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [
+        "" if all(character in _JS_WHITESPACE for character in line) else line
+        for line in text.split("\n")
+    ]
+    edges = "".join(_JS_WHITESPACE) + "\n"
+    return "\n".join(lines).strip(edges)
+
+
 def refuse_an_invalid_message(
     linkedin_username: str, message: str
 ) -> dict[str, Any] | None:
@@ -121,18 +188,21 @@ def refuse_an_invalid_message(
     if not message.strip():
         reason = "Message must contain non-whitespace characters."
     elif any(
-        (ord(character) < 32 and character != "\n") or is_invisible_control(character)
+        _refused_character(character)
+        or character == "\r"
+        or is_invisible_control(character)
         for character in message
     ):
-        # Keep the browser-side insertion contract to plain message text.
-        # Reject every C0 control and DEL before a session is acquired so no
-        # control input can reach the contenteditable surface.
-        # Fork extension: LF is the one exception. The composer never receives it
-        # as a key: message_sender splits on it and inserts a paragraph with
-        # execCommand('insertParagraph'), so no Enter can submit half a message.
-        # CR stays refused -- send "\n", not "\r\n".
-        # The reason text stays upstream's verbatim so fixtures need no rewrite.
-        reason = "Message must not contain control characters or line breaks."
+        # Keep the browser-side insertion contract to plain message text and
+        # line breaks. Reject every other C0 control, DEL and the Unicode
+        # separators before a session is acquired, so no control input can
+        # reach the contenteditable surface.
+        # Fork extension: CR (also in CRLF) and the invisible/bidi controls of
+        # is_invisible_control stay refused -- a line break is "\n" only, and
+        # a reviewed draft must read exactly as it is sent.
+        reason = "Message must not contain control characters other than line breaks."
+    elif not normalize_message_text(message):
+        reason = "Message must contain non-whitespace characters."
     if reason is None:
         return None
     return message_action_result(

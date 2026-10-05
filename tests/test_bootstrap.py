@@ -4307,10 +4307,14 @@ class TestPatchrightInstallStreaming:
 
         blocked = threading.Event()
         release = threading.Event()
+        finished = threading.Event()
 
         def slow_targets() -> dict[str, str]:
             blocked.set()
-            release.wait()
+            # Bounded, so a version that ran this on the event loop stalls the
+            # loop for a while instead of hanging the suite.
+            release.wait(2.0)
+            finished.set()
             return {"chromium-": "1217"}
 
         monkeypatch.setattr(bootstrap, "_patchright_install_targets", slow_targets)
@@ -4320,19 +4324,33 @@ class TestPatchrightInstallStreaming:
             lambda: bootstrap._InstallerTemporaryRoot(tmp_path / "private", 0, 0, None),
         )
         self._patch_proc(monkeypatch, [], 0)
-        fallback = threading.Timer(0.2, release.set)
-        fallback.start()
-        started = asyncio.get_running_loop().time()
+        loop = asyncio.get_running_loop()
+        installing = asyncio.create_task(
+            bootstrap._run_patchright_install("--no-shell")
+        )
         try:
+            # Measured from inside the blocked read, for the reason
+            # test_slow_temporary_root_creation_cannot_block_timeout gives: a
+            # 10ms budget spent before the worker ran proves nothing about it.
+            entry_deadline = loop.time() + 5.0
+            while not blocked.is_set():
+                assert loop.time() < entry_deadline, "the registry read never began"
+                await asyncio.sleep(0.001)
+            assert not finished.is_set(), "the registry read ran on the event loop"
+            started = loop.time()
             with pytest.raises(TimeoutError):
                 async with asyncio.timeout(0.01):
-                    await bootstrap._run_patchright_install("--no-shell")
+                    await installing
+            elapsed = loop.time() - started
+            assert not finished.is_set(), "the timeout waited for the registry read"
         finally:
             release.set()
-            fallback.cancel()
+            if not installing.done():
+                installing.cancel()
+            await asyncio.wait({installing}, timeout=1.0)
 
-        assert blocked.is_set()
-        assert asyncio.get_running_loop().time() - started < 0.1
+        assert installing.done()
+        assert elapsed < 0.1, f"the timeout took {elapsed:.3f}s"
 
     @pytest.mark.parametrize("release", [(3, 12, 0), (3, 12, 3), (3, 13, 15)])
     def test_windows_creates_its_own_acl_on_every_supported_python(
@@ -8059,6 +8077,69 @@ class TestEnsureBrowserInstalled:
         ensure_browser_installed()
 
         assert calls["value"] == 0
+
+    @staticmethod
+    def _terminal(monkeypatch, *, on: tuple[int, ...], foreground: bool) -> None:
+        """Put descriptors *on* a terminal, with this job in its foreground or not."""
+        group = os.getpgrp()
+        monkeypatch.setattr(os, "isatty", lambda fd: fd in on)
+        monkeypatch.setattr(
+            os, "tcgetpgrp", lambda _fd: group if foreground else group + 1
+        )
+
+    @pytest.mark.parametrize(
+        ("on", "foreground", "told_on"),
+        [
+            pytest.param((0, 1, 2), True, "out", id="at-a-terminal"),
+            # ``--status </dev/null`` from a shell: still stopped by Ctrl+Z.
+            pytest.param((1, 2), True, "out", id="stdin-redirected"),
+            # ``--status > status.log``: said where the user is, not in the file.
+            pytest.param((0, 2), True, "err", id="stdout-redirected"),
+            pytest.param((0,), True, None, id="both-outputs-redirected"),
+            pytest.param((0, 1, 2), False, None, id="background-job"),
+            pytest.param((), True, None, id="no-terminal"),
+        ],
+    )
+    def test_a_terminal_user_hears_that_suspending_does_not_pause(
+        self, isolate_profile_dir, monkeypatch, capsys, on, foreground, told_on
+    ):
+        """The installer runs outside the terminal's process group (#792).
+
+        So Ctrl+Z stops the command and the download goes on. Only the
+        foreground job of a terminal receives it, so only that job says so,
+        and on an output that is the terminal.
+        """
+        if os.name == "nt":
+            pytest.skip("Windows has no job control")
+        _patch_targets_and_version(monkeypatch)
+        monkeypatch.setattr(
+            "linkedin_mcp_server.bootstrap.browser_ready", lambda: False
+        )
+        self._stub(monkeypatch)
+        self._terminal(monkeypatch, on=on, foreground=foreground)
+
+        ensure_browser_installed()
+
+        captured = capsys.readouterr()
+        said = {
+            name
+            for name, text in (("out", captured.out), ("err", captured.err))
+            if "does not pause the download" in text
+        }
+        assert said == ({told_on} if told_on else set())
+
+    def test_a_ready_browser_says_nothing_about_suspending(
+        self, isolate_profile_dir, monkeypatch, capsys
+    ):
+        if os.name == "nt":
+            pytest.skip("Windows has no job control")
+        monkeypatch.setattr("linkedin_mcp_server.bootstrap.browser_ready", lambda: True)
+        self._stub(monkeypatch)
+        self._terminal(monkeypatch, on=(0, 1, 2), foreground=True)
+
+        ensure_browser_installed()
+
+        assert "pause" not in capsys.readouterr().out
 
     def test_shell_only_is_not_enough(self, isolate_profile_dir, monkeypatch):
         """A pre-existing shell-only install must still trigger the download.
