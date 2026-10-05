@@ -1,6 +1,6 @@
 """Fork extension: LinkedIn's 2026-09-30 profile redirect to ?isSelfProfile=false.
 
-send_message_verified returned recipient_resolution_failed for every
+send_message returned recipient_resolution_failed for every
 recipient because the top-card page URL now carries this query.
 """
 

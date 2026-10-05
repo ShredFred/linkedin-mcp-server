@@ -1086,7 +1086,10 @@ async def _facade_contract_trace() -> dict[str, Any]:
             "coroutine": inspect.iscoroutinefunction(member),
         }
     if _TOOL_SCHEMAS is None:
-        tools = await create_mcp_server().list_tools()
+        # Fork extension: the upstream originals under their upstream names.
+        from linkedin_mcp_server.ext_upstream_write_guard import upstream_tool_list
+
+        tools = await upstream_tool_list()
         _TOOL_SCHEMAS = {
             tool.name: {
                 "input": tool.parameters,

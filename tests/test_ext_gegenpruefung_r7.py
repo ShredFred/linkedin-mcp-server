@@ -42,7 +42,7 @@ def test_cancel_after_verified_row_keeps_verified(monkeypatch):
     monkeypatch.setattr(m, "_read_back", read_back_then_cancel)
     _with_extractor(monkeypatch, _msg_ex("c"))
     _cancelled(
-        "send_message_verified",
+        "send_message",
         linkedin_username="anna",
         message=TEXT,
         confirm_send=True,

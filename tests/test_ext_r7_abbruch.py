@@ -131,12 +131,12 @@ class _Ex:
     "name,kwargs,kind",
     [
         (
-            "send_message_verified",
+            "send_message",
             {"linkedin_username": "anna", "message": TEXT, "confirm_send": True},
             "message",
         ),
         (
-            "connect_guarded",
+            "connect_with_person",
             {"linkedin_username": "anna", "confirm_send": True},
             "invite",
         ),
@@ -154,7 +154,7 @@ def test_cancel_before_browser_books_nothing(monkeypatch, name, kwargs, kind):
     assert _attempts(kind) == []
 
 
-# -- send_message_verified / send_campaign_batch --------------------------------
+# -- send_message / send_campaign_batch --------------------------------
 
 
 def _msg_ex(phase):
@@ -178,7 +178,7 @@ def _msg_ex(phase):
 
 
 @pytest.mark.parametrize("phase,want", [("b", "unknown"), ("c", "unverified")])
-def test_send_message_verified(monkeypatch, phase, want):
+def test_send_message(monkeypatch, phase, want):
     import linkedin_mcp_server.tools.ext as m
 
     async def no_sleep(_s):
@@ -187,7 +187,7 @@ def test_send_message_verified(monkeypatch, phase, want):
     monkeypatch.setattr(m.asyncio, "sleep", no_sleep)
     _with_extractor(monkeypatch, _msg_ex(phase))
     _cancelled(
-        "send_message_verified",
+        "send_message",
         linkedin_username="anna",
         message=TEXT,
         confirm_send=True,
@@ -209,7 +209,7 @@ def test_send_message_cancel_in_sleep_before_readback(monkeypatch):
     monkeypatch.setattr(m.asyncio, "sleep", cancel_sleep)
     _with_extractor(monkeypatch, _msg_ex("c"))
     _cancelled(
-        "send_message_verified",
+        "send_message",
         linkedin_username="anna",
         message=TEXT,
         confirm_send=True,
@@ -274,13 +274,13 @@ def test_campaign_batch_cancel_keeps_earlier_rows(monkeypatch):
     assert calls == ["anna", "bert"]
 
 
-# -- connect_guarded ---------------------------------------------------------------
+# -- connect_with_person ---------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "phase,want", [("a", "not_sent"), ("b", "unknown"), ("c", "unknown")]
 )
-def test_connect_guarded(monkeypatch, phase, want):
+def test_connect_with_person(monkeypatch, phase, want):
     ex = _Ex()
     ex.invite_send_clicked = False
 
@@ -290,7 +290,7 @@ def test_connect_guarded(monkeypatch, phase, want):
 
     ex.connect_with_person = connect_with_person
     _with_extractor(monkeypatch, ex)
-    _cancelled("connect_guarded", linkedin_username="anna", confirm_send=True)
+    _cancelled("connect_with_person", linkedin_username="anna", confirm_send=True)
     assert _final("invite") == want
     blocked = outreach.Ledger.default().already_contacted("invite", "anna", None)
     assert bool(blocked) is (want not in RELEASING)
@@ -550,7 +550,7 @@ def test_real_tool_timeout_books_unknown_after_click(monkeypatch):
     async def go():
         async with Client(mcp) as c:
             return await c.call_tool(
-                "connect_guarded",
+                "connect_with_person",
                 {"linkedin_username": "anna", "confirm_send": True},
                 raise_on_error=False,
             )

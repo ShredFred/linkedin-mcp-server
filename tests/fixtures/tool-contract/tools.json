@@ -27,52 +27,6 @@
     "_meta": {
       "fastmcp": {
         "tags": [
-          "actions",
-          "person"
-        ]
-      }
-    },
-    "annotations": {
-      "destructiveHint": true,
-      "openWorldHint": true
-    },
-    "description": "Send a LinkedIn connection request or accept an incoming one.\n\nThe tool is annotated with destructiveHint so MCP clients will\nprompt for user confirmation before execution.",
-    "inputSchema": {
-      "additionalProperties": false,
-      "properties": {
-        "linkedin_username": {
-          "description": "LinkedIn username (e.g., \"stickerdaniel\", \"williamhgates\"). A full profile URL is accepted too and is reduced to the username.",
-          "type": "string"
-        },
-        "note": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Optional note to include with the invitation"
-        }
-      },
-      "required": [
-        "linkedin_username"
-      ],
-      "type": "object"
-    },
-    "name": "connect_with_person",
-    "outputSchema": {
-      "additionalProperties": true,
-      "type": "object"
-    },
-    "title": "Connect With Person"
-  },
-  {
-    "_meta": {
-      "fastmcp": {
-        "tags": [
           "company"
         ]
       }
@@ -887,61 +841,5 @@
       "type": "object"
     },
     "title": "Search Posts"
-  },
-  {
-    "_meta": {
-      "fastmcp": {
-        "tags": [
-          "actions",
-          "messaging"
-        ]
-      }
-    },
-    "annotations": {
-      "destructiveHint": true,
-      "openWorldHint": true
-    },
-    "description": "Compose and send a new message to a LinkedIn user.\n\nProfile-based targeting opens LinkedIn's compose flow. It is not a safe\nreply path for an existing recruiter/InMail or messaging thread: it may\ncreate a separate DM even after you inspect that thread with\nget_conversation or search_conversations. Those tools only read an\nexisting thread; they do not send a reply. Until a thread-targeted send\npath is available, do not treat profile-based send_message as a reply.\n\nThe recipient must be directly messageable from the profile page. If\nLinkedIn does not expose a normal Message action, use connect_with_person\nfirst, then retry send_message only after the connection request is\naccepted. A ``status`` of ``enter_to_send_enabled`` means the account\nhas LinkedIn's \"Press Enter to Send\" preference on, which hides the Send\nbutton; relay the returned instructions to the user, who switches it to\n\"Click Send to send\" before retrying. The dry run (confirm_send False)\nreports it too. Recipient authorization comes from validating one\nrecipient-specific Message action carrying the target URN, then following\nits browser navigation and pinning the exact final route. Visible profile\nlinks or recipient URNs in the composer are optional corroboration; any\ncontradiction fails closed. No Voyager or other private API is used. This\nis a write operation when confirm_send is True.",
-    "inputSchema": {
-      "additionalProperties": false,
-      "properties": {
-        "confirm_send": {
-          "description": "Must be True to send the message",
-          "type": "boolean"
-        },
-        "linkedin_username": {
-          "description": "LinkedIn username of the recipient; a full profile URL is accepted too",
-          "type": "string"
-        },
-        "message": {
-          "description": "Single-line message text to send. C0 control characters and\nDEL are rejected, including CR, LF, and tab.",
-          "type": "string"
-        },
-        "profile_urn": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Optional profile URN (e.g. ACoAAB...) to verify against\nthe URN exposed by the loaded profile before opening its Message\naction. It never bypasses recipient verification. Obtain via\nget_person_profile. Note: inbox may not always show all messages;\nuse search_conversations as a fallback."
-        }
-      },
-      "required": [
-        "linkedin_username",
-        "message",
-        "confirm_send"
-      ],
-      "type": "object"
-    },
-    "name": "send_message",
-    "outputSchema": {
-      "additionalProperties": true,
-      "type": "object"
-    },
-    "title": "Send Message"
   }
 ]

@@ -1,9 +1,9 @@
 """fork tools.
 
 Read tools: list_connections, get_event_attendees, list_sent_invitations.
-Write tools: create_post (dry run unless confirm_post), send_message_verified
-(send + read-back), send_campaign_batch (canary -> small staggered batches under
-daily caps with an idempotency ledger), connect_guarded (invite caps), and
+Write tools: create_post (dry run unless confirm_post), send_message
+(dry run unless confirm_send) (send + read-back), send_campaign_batch (canary -> small staggered batches under
+daily caps with an idempotency ledger), connect_with_person (invite caps), and
 outreach_quota (read-only ledger state).
 
 Everything is tagged ``ext`` so the upstream tool-contract test can ignore
@@ -307,7 +307,7 @@ async def _send_and_verify(
         ledger,
         "message",
         row,
-        tool="send_message_verified",
+        tool="send_message",
         duplicate=duplicate,
     )
     if refused:
@@ -892,11 +892,11 @@ def register_ext_tools(
 
     @mcp.tool(
         timeout=tool_timeout,
-        title="Send Message Verified",
+        title="Send Message",
         annotations={"destructiveHint": True, "openWorldHint": True},
         tags={TAG, "messaging", "actions"},
     )
-    async def send_message_verified(
+    async def send_message(
         linkedin_username: str,
         message: str,
         confirm_send: bool,
@@ -904,6 +904,7 @@ def register_ext_tools(
         allow_repeat: bool = False,
     ) -> dict[str, Any]:
         """
+        Without confirm_send=true this is a dry run only: nothing is sent.
         Send one message (multi-line allowed via LF) and read the conversation
         back to confirm the whole text arrived. Every attempt is recorded in the
         outreach ledger; the same text is never sent twice to the same person
@@ -953,12 +954,12 @@ def register_ext_tools(
                 "status": "dry_run",
                 "ledger": str(ledger.path),
             }
-        refusal = _pace("message", tool="send_message_verified")
+        refusal = _pace("message", tool="send_message")
         if refusal:
             return {"recipient": username, **refusal}
         return await _run(
             ctx,
-            "send_message_verified",
+            "send_message",
             lambda ex: _send_and_verify(
                 ex, ledger, username, message, campaign=None, allow_repeat=allow_repeat
             ),
@@ -1188,11 +1189,11 @@ def register_ext_tools(
 
     @mcp.tool(
         timeout=tool_timeout,
-        title="Connect Guarded",
+        title="Connect With Person",
         annotations={"destructiveHint": True, "openWorldHint": True},
         tags={TAG, "network", "actions"},
     )
-    async def connect_guarded(
+    async def connect_with_person(
         linkedin_username: str,
         confirm_send: bool,
         ctx: Context,
@@ -1202,11 +1203,12 @@ def register_ext_tools(
         ] = outreach.INVITES_PER_DAY_DEFAULT,
     ) -> dict[str, Any]:
         """
-        connect_with_person behind the ledger: refuses once today's invite cap
+        Without confirm_send=true this is a dry run only: nothing is sent.
+        Connection request behind the ledger: refuses once today's invite cap
         (default 20, max 25) or the rolling 7-day cap (100) is reached, and never
         invites the same person twice. The attempted row is the booking: it is
         written under the pacer lock, after the duplicate check is repeated
-        there, and before connect_with_person runs -- an attempt that dies
+        there, and before the dialog runs -- an attempt that dies
         mid-dialog may still have sent, so it must count. An unrecognised result
         is recorded as unknown, which blocks a retry. The note is limited to 200
         characters (free account) unless LINKEDIN_MCP_INVITE_NOTE_MAX raises it to at
@@ -1238,7 +1240,7 @@ def register_ext_tools(
             return {"recipient": username, "status": "cap_reached", "quota": q}
         if not confirm_send:
             return {"recipient": username, "status": "dry_run", "quota": q}
-        refusal = _pace("invite", tool="connect_guarded")
+        refusal = _pace("invite", tool="connect_with_person")
         if refusal:
             return {"recipient": username, **refusal}
 
@@ -1255,7 +1257,7 @@ def register_ext_tools(
                 ledger,
                 "invite",
                 row,
-                tool="connect_guarded",
+                tool="connect_with_person",
                 duplicate=lambda: ledger.already_contacted("invite", username, None),
             )
             if refused:
@@ -1306,7 +1308,7 @@ def register_ext_tools(
                 ),
             }
 
-        return await _run(ctx, "connect_guarded", body)
+        return await _run(ctx, "connect_with_person", body)
 
     @mcp.tool(
         timeout=30,

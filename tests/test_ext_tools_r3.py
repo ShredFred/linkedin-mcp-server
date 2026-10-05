@@ -91,7 +91,7 @@ def test_start_page_checked_before_booking(booked, monkeypatch, bad):
     assert m._int_in(bad, 1, 100) is False
 
 
-# (2) connect_guarded: the click marker decides for every pre-click status
+# (2) connect_with_person: the click marker decides for every pre-click status
 class _Ex:
     def __init__(self, status, clicked):
         self.status = status
@@ -116,7 +116,7 @@ def test_click_marker_decides(monkeypatch, raw, clicked, expected):
 
     monkeypatch.setattr(m, "_pace", lambda *a, **k: None)
     _call(
-        "connect_guarded",
+        "connect_with_person",
         {"linkedin_username": "dieter", "confirm_send": True},
         extractor=_Ex(raw, clicked),
         monkeypatch=monkeypatch,

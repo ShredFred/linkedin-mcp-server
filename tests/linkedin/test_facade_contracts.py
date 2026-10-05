@@ -124,7 +124,10 @@ def test_permanent_facade_aliases_are_the_canonical_objects():
 
 
 async def test_registered_tools_match_extractor_delegates():
-    tools = await create_mcp_server().list_tools()
+    # Fork extension: the upstream originals under their upstream names.
+    from linkedin_mcp_server.ext_upstream_write_guard import upstream_tool_list
+
+    tools = await upstream_tool_list()
     # Fork extension: fork tools carry the "ext" tag and are contracted in
     # tests/test_ext_tools.py; the upstream delegate contract stays exact.
     tool_names = {tool.name for tool in tools if "ext" not in tool.tags}

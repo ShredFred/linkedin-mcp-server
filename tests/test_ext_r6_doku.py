@@ -41,9 +41,9 @@ TOOL_EXCEPTIONS: dict[tuple[str, str], str] = {
     **{
         (tool, "campaign_quota_reached"): _NO_QUOTA
         for tool in (
-            "connect_guarded",
+            "connect_with_person",
             "create_post",
-            "send_message_verified",
+            "send_message",
             "comment_on_post",
             "delete_own_comment",
             "delete_own_post",

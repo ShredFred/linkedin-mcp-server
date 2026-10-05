@@ -214,6 +214,9 @@ def create_mcp_server(
         # and then claim to be closing a browser it never had.
         lifespan=browser_lifespan if role.drives_browser else None,
         mask_error_details=True,
+        # Fork extension: a second registration under a taken name is an
+        # error, never a silent replacement (the guarded write tools rely on it).
+        on_duplicate="error",
         auth=_StaticTokenAuth(auth_token) if auth_token is not None else None,
     )
     # Fork extension: outermost on every process that drives the browser, so an
@@ -303,6 +306,13 @@ def create_mcp_server(
         register_messaging_tools(mcp, tool_timeout=tool_timeout)
         register_feed_tools(mcp, tool_timeout=tool_timeout)
         register_post_tools(mcp, tool_timeout=tool_timeout)
+        # Fork extension: the guarded write tools take the upstream names.
+        from linkedin_mcp_server.ext_upstream_write_guard import (
+            assert_write_tool_ownership,
+            claim_upstream_write_names,
+        )
+
+        claim_upstream_write_names(mcp)
         register_ext_tools(mcp, tool_timeout=tool_timeout)  # fork extension
 
         # Inside the gate with the rest, and easy to miss because it is the one
@@ -325,5 +335,7 @@ def create_mcp_server(
                 }
             except Exception as e:
                 raise_tool_error(e, "close_session")  # NoReturn
+
+        assert_write_tool_ownership(mcp)  # fork extension
 
     return mcp

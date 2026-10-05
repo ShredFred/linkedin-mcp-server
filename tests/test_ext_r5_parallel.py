@@ -1,6 +1,6 @@
 """R5: two simultaneous tool calls never drive the shared page at once.
 
-The concern: Claude Code issues ``send_message_verified`` and ``get_inbox`` (or
+The concern: Claude Code issues ``send_message`` and ``get_inbox`` (or
 two sends, or ``delete_own_post`` beside ``get_feed``) in one turn. If both
 bodies could run interleaved, the second call's navigation would land in the
 middle of the first call's typing -- a message to the wrong person or half an
@@ -96,7 +96,7 @@ def test_every_ext_tool_is_served_behind_the_lock():
     mcp = create_mcp_server()
     served = set(asyncio.run(_list(mcp)))
     assert {
-        "send_message_verified",
+        "send_message",
         "send_message",
         "get_inbox",
         "delete_own_post",

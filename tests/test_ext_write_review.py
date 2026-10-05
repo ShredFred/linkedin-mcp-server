@@ -1,4 +1,4 @@
-"""fork review 2026-10-01: invite note and post text, connect_guarded
+"""fork review 2026-10-01: invite note and post text, connect_with_person
 ledger mapping, partial batch report. No browser."""
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ def test_connect_refusal_before_send_does_not_block_retry(monkeypatch, raw):
     monkeypatch.setattr(m, "_pace", lambda *a, **k: None)
     args = {"linkedin_username": "dieter", "confirm_send": True}
     ex = _ExClick(raw, False)
-    _call("connect_guarded", args, extractor=ex, monkeypatch=monkeypatch)
+    _call("connect_with_person", args, extractor=ex, monkeypatch=monkeypatch)
     ledger = outreach.Ledger.default()
     assert not ledger.already_contacted("invite", "dieter", None)
 
@@ -87,7 +87,7 @@ def test_note_upsell_after_a_send_click_still_blocks(monkeypatch):
     monkeypatch.setattr(m, "_pace", lambda *a, **k: None)
     args = {"linkedin_username": "dieter", "confirm_send": True}
     ex = _ExClick("custom_note_limit_reached", True)
-    _call("connect_guarded", args, extractor=ex, monkeypatch=monkeypatch)
+    _call("connect_with_person", args, extractor=ex, monkeypatch=monkeypatch)
     assert outreach.Ledger.default().already_contacted("invite", "dieter", None)
 
 
@@ -97,7 +97,7 @@ def test_connect_send_failed_still_blocks(monkeypatch):
     monkeypatch.setattr(m, "_pace", lambda *a, **k: None)
     args = {"linkedin_username": "dieter", "confirm_send": True}
     _call(
-        "connect_guarded", args, extractor=_Ex("send_failed"), monkeypatch=monkeypatch
+        "connect_with_person", args, extractor=_Ex("send_failed"), monkeypatch=monkeypatch
     )
     assert outreach.Ledger.default().already_contacted("invite", "dieter", None)
 
@@ -133,7 +133,7 @@ def test_connect_unavailable_booked_by_click_marker(
     monkeypatch.setattr(m, "_pace", lambda *a, **k: None)
     args = {"linkedin_username": "dieter", "confirm_send": True}
     ex = _ExClick("connect_unavailable", clicked)
-    _call("connect_guarded", args, extractor=ex, monkeypatch=monkeypatch)
+    _call("connect_with_person", args, extractor=ex, monkeypatch=monkeypatch)
     assert (
         bool(outreach.Ledger.default().already_contacted("invite", "dieter", None))
         is blocked
@@ -147,7 +147,7 @@ def test_connect_unavailable_without_marker_fails_closed(monkeypatch):
     monkeypatch.setattr(m, "_pace", lambda *a, **k: None)
     args = {"linkedin_username": "dieter", "confirm_send": True}
     _call(
-        "connect_guarded",
+        "connect_with_person",
         args,
         extractor=_Ex("connect_unavailable"),
         monkeypatch=monkeypatch,
@@ -163,7 +163,7 @@ def test_connect_exception_booked_by_click_marker(monkeypatch, clicked, blocked)
     args = {"linkedin_username": "dieter", "confirm_send": True}
     ex = _ExClick("connected", clicked, raises=True)
     with pytest.raises(Exception):
-        _call("connect_guarded", args, extractor=ex, monkeypatch=monkeypatch)
+        _call("connect_with_person", args, extractor=ex, monkeypatch=monkeypatch)
     assert (
         bool(outreach.Ledger.default().already_contacted("invite", "dieter", None))
         is blocked

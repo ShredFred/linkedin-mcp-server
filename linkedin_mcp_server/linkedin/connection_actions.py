@@ -1037,7 +1037,7 @@ class ConnectionActions:
                     )
                 if self.send_clicked:
                     # The probe click may have sent (see the probe). follow_only
-                    # is booked not_sent unconditionally by connect_guarded, so
+                    # is booked not_sent unconditionally by connect_with_person, so
                     # report send_failed: it books unknown and blocks a retry.
                     return _connection_result(
                         url,

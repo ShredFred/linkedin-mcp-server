@@ -161,7 +161,7 @@ def register_ext_inmail_tools(
         profile name, ledger (one InMail per person unless allow_repeat), pacer.
 
         Status codes: dry_run, verified, unverified, unknown, first_degree
-        (use send_message_verified), open_profile, no_inmail_credits,
+        (use send_message), open_profile, no_inmail_credits,
         inmail_not_allowed, no_sales_navigator_route, not_an_inmail_composer,
         composer_mismatch, content_check_failed, subject_required, duplicate,
         pace_budget_spent, repeat_not_allowed (allow_repeat to a non-canary),
@@ -209,7 +209,7 @@ def register_ext_inmail_tools(
                 return {
                     "recipient": username,
                     "status": "first_degree",
-                    "hint": "1st-degree connection: use send_message_verified",
+                    "hint": "1st-degree connection: use send_message",
                     "target": target,
                 }
             if target["status"] != "ok":

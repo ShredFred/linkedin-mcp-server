@@ -138,14 +138,14 @@ def test_peek_does_not_book():
             {"linkedin_username": COMPANY_URL, "subject": "S", "body": "B"},
         ),
         (
-            "send_message_verified",
+            "send_message",
             {"linkedin_username": "", "message": "x", "confirm_send": False},
         ),
         (
-            "send_message_verified",
+            "send_message",
             {"linkedin_username": COMPANY_URL, "message": "x", "confirm_send": False},
         ),
-        ("connect_guarded", {"linkedin_username": "  ", "confirm_send": False}),
+        ("connect_with_person", {"linkedin_username": "  ", "confirm_send": False}),
         ("set_contact_note", {"linkedin_username": COMPANY_URL, "note": "x"}),
         ("withdraw_invitations", {"usernames": [COMPANY_URL]}),
         # A valid event id, so the recipient check is what refuses.
@@ -213,7 +213,7 @@ def test_campaign_dedupes_recipients():
 )
 def test_connect_note_checked_before_browser(note, status):
     out = _call(
-        "connect_guarded",
+        "connect_with_person",
         {"linkedin_username": "dieter", "confirm_send": True, "note": note},
     )
     assert out["status"] == status
@@ -222,7 +222,7 @@ def test_connect_note_checked_before_browser(note, status):
 
 def test_connect_unicode_note_passes_dry_run():
     out = _call(
-        "connect_guarded",
+        "connect_with_person",
         {
             "linkedin_username": "jörg-müller",
             "confirm_send": False,
@@ -314,9 +314,9 @@ def _corrupt_ledger():
     [
         ("outreach_quota", {}),
         ("pace_status", {}),
-        ("connect_guarded", {"linkedin_username": "dieter", "confirm_send": False}),
+        ("connect_with_person", {"linkedin_username": "dieter", "confirm_send": False}),
         (
-            "send_message_verified",
+            "send_message",
             {"linkedin_username": "dieter", "message": "Hallo", "confirm_send": False},
         ),
         ("follow_up_list", {}),
@@ -400,7 +400,7 @@ class _Invite:
 def test_invite_budget_booked_before_browser(monkeypatch):
     ex = _Invite()
     out = _call(
-        "connect_guarded",
+        "connect_with_person",
         {"linkedin_username": "dieter", "confirm_send": True},
         extractor=ex,
         monkeypatch=monkeypatch,
@@ -554,7 +554,7 @@ def test_parallel_message_sends_once(monkeypatch):
     _first_two_checks_free(monkeypatch)
     outs = _gather(
         mcp,
-        "send_message_verified",
+        "send_message",
         {
             "linkedin_username": "dieter",
             "message": "Hallo Dieter",
@@ -581,7 +581,7 @@ def test_parallel_invites_send_once(monkeypatch):
     mcp = _register(monkeypatch, ex)
     _first_two_checks_free(monkeypatch)
     outs = _gather(
-        mcp, "connect_guarded", {"linkedin_username": "dieter", "confirm_send": True}
+        mcp, "connect_with_person", {"linkedin_username": "dieter", "confirm_send": True}
     )
     assert sorted(o.get("status", "sent") for o in outs) == ["duplicate", "sent"]
     assert len(_attempted("invite")) == 1
@@ -590,7 +590,7 @@ def test_parallel_invites_send_once(monkeypatch):
 
 def test_connect_unknown_raw_status_blocks(monkeypatch):
     out = _call(
-        "connect_guarded",
+        "connect_with_person",
         {"linkedin_username": "dieter", "confirm_send": True},
         extractor=_Connector(raw="weird_new_state"),
         monkeypatch=monkeypatch,
@@ -638,7 +638,7 @@ class _InboxGuess:
 def test_inbox_fallback_checks_partner(monkeypatch, partner, status):
     _register(monkeypatch, None)  # patches asyncio.sleep
     out = _call(
-        "send_message_verified",
+        "send_message",
         {
             "linkedin_username": "bernd",
             "message": "Hallo Bernd, wie geht es?",
@@ -1323,7 +1323,7 @@ def test_message_send_refuses_unfilled_template(monkeypatch, text):
             raise AssertionError("sent")
 
     out = _call(
-        "send_message_verified",
+        "send_message",
         {"linkedin_username": "dieter", "message": text, "confirm_send": True},
         extractor=_Boom(),
         monkeypatch=monkeypatch,
@@ -1347,7 +1347,7 @@ def test_message_send_refuses_unfilled_template(monkeypatch, text):
 
 def test_message_send_filled_text_passes_content_check():
     out = _call(
-        "send_message_verified",
+        "send_message",
         {
             "linkedin_username": "dieter",
             "message": "Hallo Dieter, kurze Frage zu Ihrem Labor.",
@@ -1359,7 +1359,7 @@ def test_message_send_filled_text_passes_content_check():
 
 def test_allow_repeat_only_for_the_canary():
     out = _call(
-        "send_message_verified",
+        "send_message",
         {
             "linkedin_username": "dieter",
             "message": "Text",
@@ -1369,7 +1369,7 @@ def test_allow_repeat_only_for_the_canary():
     )
     assert out["status"] == "repeat_not_allowed"
     ok = _call(
-        "send_message_verified",
+        "send_message",
         {
             "linkedin_username": outreach.DEFAULT_CANARY,
             "message": "Text",

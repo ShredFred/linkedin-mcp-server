@@ -34,7 +34,7 @@ def _msg_tools(mcp):
 
 
 # Mutation dup_vor_browser_msg: the ledger duplicate check in
-# send_message_verified before the dry-run/browser step removed.
+# send_message before the dry-run/browser step removed.
 @pytest.mark.parametrize("confirm", [False, True])
 def test_message_duplicate_refused_before_browser(confirm):
     text = "Guten Tag, kurze Frage zu Ihrem Labor."
@@ -50,7 +50,7 @@ def test_message_duplicate_refused_before_browser(confirm):
     )
     out = _call(
         _msg_tools,
-        "send_message_verified",
+        "send_message",
         {"linkedin_username": "dieter", "message": text, "confirm_send": confirm},
     )
     assert out["status"] == "duplicate"

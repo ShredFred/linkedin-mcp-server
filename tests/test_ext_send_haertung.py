@@ -238,7 +238,7 @@ def test_dm_length_counted_in_utf16():
 
 def test_dry_run_writes_nothing(monkeypatch):
     out = _call(
-        "send_message_verified",
+        "send_message",
         {"linkedin_username": "dieter", "message": "Hallo", "confirm_send": False},
         None,
         monkeypatch,

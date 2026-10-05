@@ -55,9 +55,10 @@ CONFIGURATION = [
      "The only Calendly account a message may link to (`acme_jane-doe` or "
      "`calendly.com/acme_jane-doe`). Unset: every Calendly link is refused."),
     ("LINKEDIN_MCP_INVITE_NOTE_MAX", "200",
-     "Longest invitation note `connect_guarded` accepts (at most 300)."),
+     "Longest invitation note `connect_with_person` accepts (at most 300)."),
     ("LINKEDIN_MCP_ALLOW_UPSTREAM_WRITES", "unset",
-     "`1` lifts the block on the unguarded upstream write tools. Leave unset."),
+     "`1` also registers the unguarded upstream write tools as "
+     "`send_message_unguarded` / `connect_with_person_unguarded`. Leave unset."),
     ("LINKEDIN_MCP_LEDGER", "~/.linkedin-mcp/outreach-ledger.jsonl",
      "Outreach ledger: every write attempt, its outcome and the pacer bookings."),
     ("LINKEDIN_MCP_NOTES", "~/.linkedin-mcp/contact-notes.json",
@@ -80,9 +81,12 @@ SAFETY_MODEL = [
     "before anything is loaded.",
     "**Read-back.** Messages, posts, comments, invitations and reposts are read "
     "back from the page; only a confirmed read-back counts as `verified`.",
-    "**Unguarded upstream writes are blocked.** `send_message` and "
-    "`connect_with_person` are refused in favour of `send_message_verified` "
-    "and `connect_guarded` (see `LINKEDIN_MCP_ALLOW_UPSTREAM_WRITES`).",
+    "**Unguarded upstream writes are hidden.** The fork's guarded tools take "
+    "the upstream names `send_message` and `connect_with_person` (dry run "
+    "unless `confirm_send=true`); the unguarded upstream originals are not "
+    "registered. `LINKEDIN_MCP_ALLOW_UPSTREAM_WRITES=1` exposes them as "
+    "`send_message_unguarded` / `connect_with_person_unguarded`, for upstream "
+    "debugging only.",
 ]
 
 FORK_SOURCE = "git+https://github.com/ShredFred/linkedin-mcp-server@main"

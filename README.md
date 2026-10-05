@@ -32,7 +32,7 @@
 > **Added tools**
 >
 > - `comment_on_post` — Comment on a post.
-> - `connect_guarded` — connect_with_person behind the ledger: refuses once today's invite cap (default 20, max 25) or the rolling 7-day cap (100) is reached, and never invites the same person twice.
+> - `connect_with_person` — Without confirm_send=true this is a dry run only: nothing is sent.
 > - `create_post` — Compose a post on the signed-in member's personal profile.
 > - `delete_own_comment` — Delete one of your own comments under a post (comment_id: the numeric id from get_post_engagers, or urn:li:comment:(activity:A,C)).
 > - `delete_own_post` — Delete one of your own posts (post URL, activity URN or id; create_post returns activity_id).
@@ -63,7 +63,7 @@
 > - `search_events` — One LinkedIn event search (/search/results/events/?keywords=...).
 > - `send_campaign_batch` — Send the same text to many recipients safely, one small batch per call.
 > - `send_inmail` — Send one InMail through Sales Navigator (spends one credit) to a 2nd/3rd-degree member.
-> - `send_message_verified` — Send one message (multi-line allowed via LF) and read the conversation back to confirm the whole text arrived.
+> - `send_message` — Without confirm_send=true this is a dry run only: nothing is sent.
 > - `set_contact_note` — Local keywords and a short note per contact (~/.linkedin-mcp/contact-notes.json), shown by follow_up_list.
 > - `withdraw_invitations` — Withdraw pending connection invitations older than older_than_days (default 21).
 >
@@ -80,7 +80,7 @@
 > - **Ledger before the click.** An attempt is written to the ledger before the action and closed with its outcome after a read-back. The same text never goes to the same person twice, and an attempt whose outcome is unclear (`unknown`, `unverified`) blocks a retry.
 > - **Pacer.** Each action kind has a daily and a rolling 7-day budget plus a daily total of visible actions (`pace_status`); a spent budget refuses before anything is loaded.
 > - **Read-back.** Messages, posts, comments, invitations and reposts are read back from the page; only a confirmed read-back counts as `verified`.
-> - **Unguarded upstream writes are blocked.** `send_message` and `connect_with_person` are refused in favour of `send_message_verified` and `connect_guarded` (see `LINKEDIN_MCP_ALLOW_UPSTREAM_WRITES`).
+> - **Unguarded upstream writes are hidden.** The fork's guarded tools take the upstream names `send_message` and `connect_with_person` (dry run unless `confirm_send=true`); the unguarded upstream originals are not registered. `LINKEDIN_MCP_ALLOW_UPSTREAM_WRITES=1` exposes them as `send_message_unguarded` / `connect_with_person_unguarded`, for upstream debugging only.
 >
 > **Configuration** (environment of the MCP server process)
 >
@@ -88,8 +88,8 @@
 > | --- | --- | --- |
 > | `LINKEDIN_MCP_CANARY` | unset | Profile slug of an own or colleague account that receives every campaign text first (`send_campaign_batch`) and that `outreach_selftest` loads. Unset: campaigns and the self-test refuse (`canary_not_configured`). |
 > | `LINKEDIN_MCP_CALENDLY_ACCOUNT` | unset | The only Calendly account a message may link to (`acme_jane-doe` or `calendly.com/acme_jane-doe`). Unset: every Calendly link is refused. |
-> | `LINKEDIN_MCP_INVITE_NOTE_MAX` | 200 | Longest invitation note `connect_guarded` accepts (at most 300). |
-> | `LINKEDIN_MCP_ALLOW_UPSTREAM_WRITES` | unset | `1` lifts the block on the unguarded upstream write tools. Leave unset. |
+> | `LINKEDIN_MCP_INVITE_NOTE_MAX` | 200 | Longest invitation note `connect_with_person` accepts (at most 300). |
+> | `LINKEDIN_MCP_ALLOW_UPSTREAM_WRITES` | unset | `1` also registers the unguarded upstream write tools as `send_message_unguarded` / `connect_with_person_unguarded`. Leave unset. |
 > | `LINKEDIN_MCP_LEDGER` | ~/.linkedin-mcp/outreach-ledger.jsonl | Outreach ledger: every write attempt, its outcome and the pacer bookings. |
 > | `LINKEDIN_MCP_NOTES` | ~/.linkedin-mcp/contact-notes.json | Local contact keywords and notes (`set_contact_note`). |
 > | `LINKEDIN_MCP_ENGAGERS_SEEN` | ~/.linkedin-mcp/engagers-seen.json | Which post engagers were already reported (`only_new`). |

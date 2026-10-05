@@ -71,7 +71,7 @@ async def test_probe_click_with_dialog_still_open_is_no_send():
 
 async def test_follow_only_after_a_probe_that_may_have_sent_is_send_failed():
     """follow_only is booked not_sent unconditionally; a possible send must
-    surface as send_failed so connect_guarded books unknown."""
+    surface as send_failed so connect_with_person books unknown."""
     actions = _actions(MagicMock())
     actions._read_main_profile = AsyncMock(
         return_value={"sections": {"main_profile": "X\nFollow"}}
