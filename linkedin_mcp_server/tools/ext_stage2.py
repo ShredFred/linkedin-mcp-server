@@ -21,7 +21,6 @@ from pydantic import Field
 
 from linkedin_mcp_server import ext_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
-from linkedin_mcp_server.linkedin.contracts import is_invisible_control
 from linkedin_mcp_server.linkedin.ext_actions import ExtActions, parse_group_id
 from linkedin_mcp_server.linkedin.ext_own_content import parse_comment_ref
 from linkedin_mcp_server.linkedin.ext_network import (
@@ -746,7 +745,7 @@ def register_ext_stage2_tools(
             not text.strip()
             or _utf16_len(text) > 1250
             or any(
-                (ord(c) < 32 and c != "\n") or ord(c) == 127 or is_invisible_control(c)
+                (ord(c) < 32 and c != "\n") or ord(c) == 127 or _hidden_format_char(c)
                 for c in text
             )
         ):

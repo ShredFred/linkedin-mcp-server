@@ -720,7 +720,10 @@ class ExtActions(ExtNetworkReader):
         new = _matching_comment_keys(
             after.get("replies"), probe
         ) - _matching_comment_keys(before.get("replies"), probe)
-        verified = after.get("roots") == 1 and bool(new)
+        # The before-read must have seen the thread too: an empty before (no
+        # root, evaluate answered nothing) would count a pre-existing reply
+        # with the same text as new.
+        verified = before.get("roots") == 1 and after.get("roots") == 1 and bool(new)
         return {
             "status": "posted" if verified else "unverified",
             "posted": True,

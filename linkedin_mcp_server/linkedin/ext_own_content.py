@@ -46,7 +46,8 @@ ME_URL = "https://www.linkedin.com/in/me/"
 _ATTR = "data-ext-own"
 
 _COMMENT_URN_RE = re.compile(
-    r"comment:\(\s*(?:urn:li:)?(?:activity|ugcPost|share):(\d{16,22})\s*,\s*(\d{10,22})\s*\)"
+    r"comment:\(\s*(?:urn:li:)?(?:activity|ugcPost|share):(\d{16,22})\s*,\s*(\d{10,22})\s*\)",
+    re.ASCII,
 )
 _TRUNCATED_RE = re.compile(
     r"\s*(?:…|\.\.\.)\s*(?:mehr|more|see more|mehr anzeigen)?\s*$", re.IGNORECASE
@@ -81,7 +82,7 @@ DISCARD_WORDS = ["verwerfen", "discard", "änderungen verwerfen"]
 def parse_comment_ref(comment: str) -> tuple[str | None, str]:
     """(activity id or None, comment id) from an id, URN or URL; ValueError else."""
     raw = unquote(unquote((comment or "").strip()))
-    if re.fullmatch(r"\d{10,22}", raw):
+    if re.fullmatch(r"\d{10,22}", raw, re.ASCII):
         return None, raw
     found = {m.groups() for m in _COMMENT_URN_RE.finditer(raw)}
     if len(found) != 1:

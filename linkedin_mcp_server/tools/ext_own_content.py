@@ -22,7 +22,7 @@ from fastmcp import Context, FastMCP
 
 from linkedin_mcp_server import ext_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
-from linkedin_mcp_server.linkedin.contracts import is_invisible_control
+from linkedin_mcp_server.ext_message_checks import hidden_format_char
 from linkedin_mcp_server.linkedin.ext_engagement import parse_activity_id
 from linkedin_mcp_server.linkedin.ext_own_content import (
     ExtOwnContent,
@@ -57,7 +57,7 @@ def check_text(text: str, limit: int) -> dict[str, Any] | None:
         not text
         or not text.strip()
         or units > limit
-        or any((ord(c) < 32 and c != "\n") or is_invisible_control(c) for c in text)
+        or any((ord(c) < 32 and c != "\n") or hidden_format_char(c) for c in text)
     ):
         return {
             "status": "invalid_text",
