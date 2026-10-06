@@ -205,19 +205,32 @@ function rootOf(el) {
     if (p.tagName === 'ARTICLE') root = p;
   return root;
 }
+function makeBox() {
+  const box = document.createElement('form');
+  box.className = 'comments-comment-box--reply reply-box';
+  const prefill = mode() === 'mention' ? '<a class="mention">Person Eins</a>&nbsp;' : '';
+  box.innerHTML = '<div class="ql-editor" contenteditable="true" role="textbox">' + prefill + '</div>' +
+                  '<button type="button" onclick="submitReply(this)">Antworten</button>';
+  return box;
+}
 function openReply(btn) {
   const root = rootOf(btn);
-  if (mode() === 'no_editor' || root.querySelector('.reply-box')) return;
-  const box = document.createElement('div');
-  box.className = 'reply-box';
-  const prefill = mode() === 'mention' ? 'Person ' : '';
-  box.innerHTML = '<div contenteditable="true" role="textbox">' + prefill + '</div>' +
-                  '<button onclick="submitReply(this)">Antworten</button>';
-  root.appendChild(box);
+  const m = mode();
+  if (m === 'no_editor' || document.querySelector('.reply-box[data-for="' + root.getAttribute('componentkey') + '"]')) return;
+  const place = () => {
+    const box = makeBox();
+    box.dataset.for = root.getAttribute('componentkey');
+    if (m === 'sibling' || m === 'late_sibling') root.after(box);
+    else if (m === 'far') document.getElementById('far').appendChild(box);
+    else root.querySelector('.replies').appendChild(box);
+    if (m === 'two') { const b2 = makeBox(); b2.dataset.for = box.dataset.for; root.appendChild(b2); }
+  };
+  if (m === 'late' || m === 'late_sibling') setTimeout(place, 1200); else place();
 }
 function submitReply(btn) {
-  const root = rootOf(btn);
-  const editor = root.querySelector('.reply-box [contenteditable]');
+  const box = btn.closest('.reply-box');
+  const root = document.querySelector('[componentkey="' + box.dataset.for + '"]');
+  const editor = box.querySelector('[contenteditable]');
   document.body.dataset.replied = editor.innerText;
   if (mode() === 'silent') return;
   const text = mode() === 'mismatch' ? 'Etwas ganz anderes' : editor.innerText;
@@ -395,10 +408,99 @@ def test_dom_reply_editor_missing(dom):
 
 
 @pytestmark_dom
-def test_dom_prefilled_mention_is_removed(dom):
+def test_dom_prefilled_mention_is_kept_and_text_appended(dom):
     out, state, _ = _run(dom, _html(THREAD), mode="mention")
     assert out["status"] == "posted"
+    assert " ".join(state["replied"].split()) == "Person Eins Danke, sehr hilfreich"
+
+
+@pytestmark_dom
+def test_dom_dry_run_with_mention_types_nothing(dom):
+    loop, page = dom
+    out, state, _ = _run(dom, _html(THREAD), mode="mention", confirm=False)
+    assert out["status"] == "dry_run" and out["prefill"] == "Person Eins"
+    assert out["expected_text"] == "Person Eins Danke, sehr hilfreich"
+    text = loop.run_until_complete(
+        page.evaluate(
+            "() => document.querySelector('.reply-box [contenteditable]').innerText"
+        )
+    )
+    assert "Danke" not in text and state["replied"] is None
+
+
+@pytestmark_dom
+def test_dom_editor_as_sibling_after_comment(dom):
+    out, state, _ = _run(dom, _html(THREAD), mode="sibling")
+    assert out["status"] == "posted" and out["editor_placement"] == "sibling"
     assert state["replied"] == "Danke, sehr hilfreich"
+
+
+@pytestmark_dom
+def test_dom_editor_renders_late_is_polled(dom):
+    out, _, _ = _run(dom, _html(THREAD), mode="late")
+    assert out["status"] == "posted"
+
+
+@pytestmark_dom
+def test_dom_late_sibling_dry_run(dom):
+    out, state, _ = _run(dom, _html(THREAD), mode="late_sibling", confirm=False)
+    assert out["status"] == "dry_run" and state["replied"] is None
+
+
+@pytestmark_dom
+def test_dom_two_editors_ambiguous(dom):
+    out, state, _ = _run(dom, _html(THREAD), mode="two")
+    assert out["status"] == "reply_editor_ambiguous" and out["count"] == 2
+    assert state["replied"] is None
+
+
+@pytestmark_dom
+def test_dom_editor_beyond_next_thread_not_used(dom):
+    # The box lands after another thread: it is not ours -> missing, and
+    # never the post-level box either.
+    other = _card("7123456789012340042", "Anderer Thread")
+    html = _html(THREAD + other, '<div id="far"></div>')
+    out, state, _ = _run(dom, html, mode="far")
+    assert out["status"] == "reply_editor_missing"
+    assert state["replied"] is None
+
+
+@pytestmark_dom
+def test_dom_preexisting_box_of_other_thread_and_bottom_post_box_ignored(dom):
+    other = _card("7123456789012340042", "Anderer Thread")
+    stale = (
+        '<form class="reply-box"><div contenteditable="true" role="textbox"></div>'
+        "<button>Antworten</button></form>"
+    )
+    bottom = '<div contenteditable="true" role="textbox" id="bottom-box"></div>'
+    out, state, _ = _run(dom, _html(THREAD + other + stale, bottom), mode="sibling")
+    assert out["status"] == "posted" and out["editor_placement"] == "sibling"
+
+
+@pytestmark_dom
+def test_dom_no_sibling_and_only_bottom_post_box_is_missing(dom):
+    bottom = '<div contenteditable="true" role="textbox" id="bottom-box"></div>'
+    out, state, _ = _run(dom, _html(THREAD, bottom), mode="no_editor")
+    assert out["status"] == "reply_editor_missing"
+    assert state["replied"] is None
+
+
+@pytestmark_dom
+def test_dom_english_ui_labels(dom):
+    html = _html(THREAD).replace(">Antworten<", ">Reply<")
+    html = html.replace(
+        '\'<button type="button" onclick="submitReply(this)">Antworten</button>\'',
+        '\'<button type="button" onclick="submitReply(this)">Reply</button>\'',
+    )
+    out, state, _ = _run(dom, html)
+    assert out["status"] == "posted"
+
+
+@pytestmark_dom
+def test_dom_reply_button_scrolled_into_view(dom):
+    spacer = '<div style="height:5000px"></div>'
+    out, _, _ = _run(dom, _html(spacer + THREAD))
+    assert out["status"] == "posted"
 
 
 @pytestmark_dom

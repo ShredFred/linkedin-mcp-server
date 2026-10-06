@@ -23,6 +23,7 @@ Measured 2026-09-29 (headless, de locale):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 import re
@@ -222,6 +223,8 @@ _COMMENT_TEXTS_JS = r"""() => [...document.querySelectorAll('[componentkey^="rep
 # edit/delete_own_comment), so the expanders are a second line only.
 
 REPLY_MAX_EXPANSIONS = 5
+REPLY_EDITOR_TIMEOUT_S = 5.0
+REPLY_EDITOR_POLL_S = 0.25
 _REPLY_ATTR = "data-ext-reply"
 
 _REPLY_COMMON_JS = r"""
@@ -233,6 +236,8 @@ _REPLY_COMMON_JS = r"""
   const clearTag = tag => document.querySelectorAll('[data-ext-reply="' + tag + '"]')
       .forEach(e => e.removeAttribute('data-ext-reply'));
   const outermost = list => list.filter(e => !list.some(o => o !== e && o.contains(e)));
+  const EDITOR = '[contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"], [role="textbox"], .ql-editor';
+  const isEditor = e => vis(e) && e.isContentEditable;
   // The thread root: the outermost comment card around el with another id.
   const rootOf = (el, id) => {
     let root = el;
@@ -248,7 +253,7 @@ _REPLY_LOCATE_JS = (
     "(arg) => {"
     + _REPLY_COMMON_JS
     + r"""
-  ['target', 'root', 'reply-button', 'reply-editor', 'reply-submit'].forEach(clearTag);
+  ['target', 'root', 'scope', 'reply-button', 'reply-editor', 'reply-submit'].forEach(clearTag);
   const isTarget = e => { const k = keyOf(e);
       return k.endsWith(',' + arg.id + ')') && k.includes('activity:' + arg.activity); };
   const hits = outermost([...document.querySelectorAll(CARD)].filter(isTarget));
@@ -281,44 +286,96 @@ _REPLY_EXPAND_JS = (
 }"""
 )
 
-# The reply editor: inside the thread root, owned by the root or the target.
+# Editors already on the page before the reply click (the post-level comment
+# box, other open reply boxes): a sibling-region editor among them never counts.
+_REPLY_MARK_PRE_JS = (
+    "() => {"
+    + _REPLY_COMMON_JS
+    + r"""
+  document.querySelectorAll('[data-ext-reply-pre]').forEach(e => e.removeAttribute('data-ext-reply-pre'));
+  const eds = [...document.querySelectorAll(EDITOR)].filter(isEditor);
+  eds.forEach(e => e.setAttribute('data-ext-reply-pre', '1'));
+  return eds.length;
+}"""
+)
+
+# The reply editor (reworked 2026-10-06 after a live reply_editor_missing): the
+# editor is searched (a) inside the thread root, owned by the root or the
+# target, and (b) in the sibling region after the root -- LinkedIn may render
+# the reply box beside the comment entity rather than inside it. (b) holds
+# only for an editor outside every comment card, after the root in document
+# order, with no other thread between them, sharing an ancestor with the root
+# at most SIBLING_DEPTH levels up, and not present before the click. The
+# post-level box is excluded by all of these. Several hits: the ones that
+# appeared with the click win; still several -> ambiguous.
 _REPLY_EDITOR_JS = (
     "(arg) => {"
     + _REPLY_COMMON_JS
     + r"""
-  clearTag('reply-editor');
+  clearTag('reply-editor'); clearTag('scope');
   const target = document.querySelector('[data-ext-reply="target"]');
-  if (!target) return {count: 0};
+  if (!target) return {count: 0, reason: 'no_target'};
   const root = document.querySelector('[data-ext-reply="root"]') || target;
   const rootId = idOf(keyOf(root));
-  const hits = outermost([...root.querySelectorAll('[contenteditable="true"], [role="textbox"][contenteditable]')]
-      .filter(e => vis(e) && [rootId, arg.id].includes(ownerId(e))));
-  if (hits.length === 1) hits[0].setAttribute('data-ext-reply', 'reply-editor');
-  return {count: hits.length, text: hits.length === 1 ? (hits[0].innerText || '') : null};
+  const SIBLING_DEPTH = 4;
+  const all = outermost([...document.querySelectorAll(EDITOR)].filter(isEditor));
+  const threads = outermost([...document.querySelectorAll(CARD)]);
+  const follows = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const lca = (a, b) => { for (let p = a; p; p = p.parentElement) if (p.contains(b)) return p; return null; };
+  const depthTo = (el, anc) => { let d = 0; for (let p = el; p && p !== anc; p = p.parentElement) d++; return d; };
+  const inside = [], sibling = [];
+  for (const e of all) {
+    if (root.contains(e)) {
+      if ([rootId, arg.id].includes(ownerId(e))) inside.push(e);
+      continue;
+    }
+    if (e.closest(CARD)) continue;               // owned by another comment
+    if (e.hasAttribute('data-ext-reply-pre')) continue;  // there before the click
+    if (!follows(root, e)) continue;             // before the thread: post-level box
+    if (threads.some(t => t !== root && !t.contains(root) && follows(root, t) && follows(t, e))) continue;
+    const anc = lca(root, e);
+    if (!anc || depthTo(root, anc) > SIBLING_DEPTH) continue;
+    sibling.push(e);
+  }
+  let hits = inside.concat(sibling);
+  if (hits.length > 1) {
+    const fresh = hits.filter(e => !e.hasAttribute('data-ext-reply-pre'));
+    if (fresh.length >= 1) hits = fresh;
+  }
+  if (hits.length !== 1) return {count: hits.length, inside: inside.length, sibling: sibling.length};
+  const ed = hits[0];
+  ed.setAttribute('data-ext-reply', 'reply-editor');
+  const scope = root.contains(ed) ? root : lca(root, ed);
+  if (scope !== root) scope.setAttribute('data-ext-reply', 'scope');
+  return {count: 1, text: ed.innerText || '', placement: root.contains(ed) ? 'inside' : 'sibling'};
 }"""
 )
 
 # The reply submit: nearest matching button walking up from the editor, never
-# past the thread root, never the reply control itself.
+# past the thread scope (the root, or the root-editor ancestor for a sibling
+# editor), never the reply control itself.
 _REPLY_SUBMIT_JS = (
     "(editor) => {"
     + _REPLY_COMMON_JS
     + r"""
   clearTag('reply-submit');
-  const root = document.querySelector('[data-ext-reply="root"]') ||
+  const root = document.querySelector('[data-ext-reply="scope"]') ||
+      document.querySelector('[data-ext-reply="root"]') ||
       document.querySelector('[data-ext-reply="target"]');
   if (!root || !root.contains(editor)) return {count: 0};
-  const isSubmit = b => vis(b) && /^(antworten|reply|kommentieren|comment)$/i.test((b.innerText || '').trim()) &&
-      !b.getAttribute('aria-label') && b.getAttribute('data-ext-reply') !== 'reply-button' &&
+  const isSubmit = b => vis(b) && /^(antworten|reply|kommentieren|comment|posten|post|senden|send)$/i.test((b.innerText || '').trim()) &&
+      b.getAttribute('data-ext-reply') !== 'reply-button' &&
+      !/^(antworten|reply).*(auf|to)/i.test(b.getAttribute('aria-label') || '') &&
       ownerId(b) === ownerId(editor);
   let box = editor;
   for (let i = 0; i < 8 && box !== root; i++) {
     box = box.parentElement;
-    if (!box || !root.contains(box)) break;
-    const hits = [...box.querySelectorAll('button')].filter(isSubmit);
+    if (!box || !root.contains(box) && box !== root) break;
+    const hits = [...box.querySelectorAll('button')].filter(isSubmit)
+        .filter(b => !b.closest('[data-ext-reply="reply-button"]'));
     if (hits.length === 1) {
       hits[0].setAttribute('data-ext-reply', 'reply-submit');
-      return {count: 1, disabled: hits[0].disabled, depth: i + 1};
+      return {count: 1, disabled: hits[0].disabled || hits[0].getAttribute('aria-disabled') === 'true', depth: i + 1};
     }
     if (hits.length > 1) return {count: hits.length};
   }
@@ -353,6 +410,11 @@ def reply_permalink(activity_id: str, comment_id: str) -> str:
 
 def _canon(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
+
+
+def _reply_expected(prefill: str, text: str) -> str:
+    """Editor content after typing: a kept @-mention, then the text."""
+    return _canon(f"{prefill} {text}") if prefill else _canon(text)
 
 
 def _matching_comment_keys(comments: Any, probe: str) -> set[str]:
@@ -625,34 +687,54 @@ class ExtActions(ExtNetworkReader):
             "thread_root_id": located["root_id"],
             "reply_to_reply": located["root_id"] != comment_id,
         }
-        await self._page.locator(f'[{_REPLY_ATTR}="reply-button"]').first.click()
+        await self._page.evaluate(_REPLY_MARK_PRE_JS)
+        button = self._page.locator(f'[{_REPLY_ATTR}="reply-button"]').first
+        try:
+            await button.scroll_into_view_if_needed()
+        except Exception:
+            logger.debug("scroll to reply button failed", exc_info=True)
+        await button.click()
         await self._session.delay(random.uniform(1.0, 2.0))
-        pick = await self._page.evaluate(_REPLY_EDITOR_JS, arg) or {"count": 0}
+        pick = await self._poll_reply_editor(arg)
         if pick.get("count") != 1:
             await self._escape_quietly()
             return {
-                "status": "reply_editor_missing",
+                "status": "reply_editor_ambiguous"
+                if (pick.get("count") or 0) > 1
+                else "reply_editor_missing",
                 "posted": False,
                 "count": pick.get("count"),
                 **info,
             }
+        info["editor_placement"] = pick.get("placement")
         editor = self._page.locator(f'[{_REPLY_ATTR}="reply-editor"]').first
+        prefill = _canon(str(pick.get("text") or ""))
         try:
-            if _canon(str(pick.get("text") or "")):
-                # A prefilled text (LinkedIn may insert an @-mention of the
-                # replied-to author; unmeasured) is removed: the reply carries
-                # exactly the given text. Mentions are not supported.
+            if not confirm:
+                # Dry run: the editor and its submit are verified, nothing is
+                # typed (a typed-and-cleared draft can survive a re-render).
+                submit = await editor.evaluate(_REPLY_SUBMIT_JS) or {"count": 0}
+                await self._escape_quietly()
+                if submit.get("count") != 1:
+                    return {"status": "no_submit", "posted": False, **info}
+                return {
+                    "status": "dry_run",
+                    "posted": False,
+                    "prefill": prefill or None,
+                    "expected_text": _reply_expected(prefill, text),
+                    **info,
+                }
+            if prefill and _canon(text).startswith(prefill):
+                # The caller wrote the mention himself: drop LinkedIn's copy
+                # so it is not doubled.
                 await self._clear(editor)
                 if _canon(await editor.inner_text()):
                     await self._clear(editor)
                     await self._escape_quietly()
-                    return {
-                        "status": "reply_editor_not_empty",
-                        "posted": False,
-                        **info,
-                    }
+                    return {"status": "reply_editor_not_empty", "posted": False, **info}
+                prefill = ""
             result = await self._reply_typed(
-                editor, text, confirm, str(located["root_key"])
+                editor, text, confirm, str(located["root_key"]), prefill
             )
             return {**result, **info}
         except BaseException:
@@ -662,6 +744,18 @@ class ExtActions(ExtNetworkReader):
                 except Exception:
                     logger.warning("clearing the reply editor failed", exc_info=True)
             raise
+
+    async def _poll_reply_editor(self, arg: dict[str, Any]) -> dict[str, Any]:
+        """The reply editor renders asynchronously: poll up to
+        REPLY_EDITOR_TIMEOUT_S; an ambiguous answer is also re-polled (a
+        second box may be closing)."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + REPLY_EDITOR_TIMEOUT_S
+        while True:
+            pick = await self._page.evaluate(_REPLY_EDITOR_JS, arg) or {"count": 0}
+            if pick.get("count") == 1 or loop.time() >= deadline:
+                return pick
+            await asyncio.sleep(REPLY_EDITOR_POLL_S)
 
     async def _locate_reply_target(self, arg: dict[str, Any]) -> dict[str, Any]:
         """The target card exactly once, a collapsed thread expanded at most
@@ -697,23 +791,37 @@ class ExtActions(ExtNetworkReader):
         }
 
     async def _reply_typed(
-        self, editor: Any, text: str, confirm: bool, root_key: str
+        self, editor: Any, text: str, confirm: bool, root_key: str, prefill: str = ""
     ) -> dict[str, Any]:
-        await self._insert_text(editor, text)
+        if prefill:
+            # Keep LinkedIn's @-mention and append after it.
+            await editor.click()
+            await self._page.keyboard.press("Control+End")
+            await self._page.keyboard.insert_text(" ")
+            for index, paragraph in enumerate(text.split("\n")):
+                if index:
+                    await self._page.keyboard.press("Shift+Enter")
+                if paragraph:
+                    await self._page.keyboard.insert_text(paragraph)
+            await self._session.delay(random.uniform(0.8, 1.5))
+        else:
+            await self._insert_text(editor, text)
         typed = _canon(await editor.inner_text())
         submit = await editor.evaluate(_REPLY_SUBMIT_JS) or {"count": 0}
-        if typed != _canon(text) or submit.get("count") != 1 or submit.get("disabled"):
+        if (
+            typed != _reply_expected(prefill, text)
+            or submit.get("count") != 1
+            or submit.get("disabled")
+        ):
             await self._clear(editor)
             await self._escape_quietly()
             return {
-                "status": "editor_mismatch" if typed != _canon(text) else "no_submit",
+                "status": "editor_mismatch"
+                if typed != _reply_expected(prefill, text)
+                else "no_submit",
                 "posted": False,
                 "typed": typed,
             }
-        if not confirm:
-            await self._clear(editor)
-            await self._escape_quietly()
-            return {"status": "dry_run", "posted": False, "verified_text": typed}
         # Same rule as a comment: only a reply card that was not under the
         # thread root before the click, and carries the text, counts.
         probe = _canon(text)[:150]

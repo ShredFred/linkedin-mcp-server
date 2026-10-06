@@ -760,7 +760,9 @@ def register_ext_stage2_tools(
         found only by that id, inside its own thread; the post-level comment
         box is never used for a reply. LinkedIn nests one level, so a reply to
         a reply lands in the parent's thread (reply_to_reply=true,
-        thread_root_id); no @-mention is added, a prefilled one is removed.
+        thread_root_id); no @-mention is added, a prefilled one is kept and
+        the text appended after it (dropped if the text already starts with
+        it). A reply dry run verifies editor and submit without typing.
         Same budget, ledger and text rules; one reply per target comment.
 
         Result status: posted (read back; for a reply: a new reply with the
@@ -771,7 +773,7 @@ def register_ext_stage2_tools(
         reply_target_not_found, reply_target_ambiguous, reply_thread_collapsed
         (target not shown after the bounded "load more" clicks),
         reply_button_missing, reply_button_ambiguous, reply_editor_missing,
-        reply_editor_not_empty. Refusals (posted=false): invalid_text,
+        reply_editor_ambiguous, reply_editor_not_empty. Refusals (posted=false): invalid_text,
         invalid_post_url, invalid_reply_target (not a comment id/urn, or a urn
         of another post), duplicate_text (same text attempted before),
         already_commented (an earlier comment on this post may be live),
