@@ -38,6 +38,7 @@ Edit
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 import re
@@ -244,6 +245,7 @@ _MENU_JS = r"""() => [...document.querySelectorAll('[role=menu] a, [role=menu] [
   .map(e => ({t: (e.innerText || '').trim(), h: e.getAttribute('href')}))
   .filter(x => x.t || x.h)"""
 
+_SN_MESSAGE_LABEL = re.compile(r"^\s*(Nachricht( senden)?|InMail( senden)?|Message|Send (InMail|message))\s*$", re.I)
 _SN_DIALOG = 'section[role="dialog"][aria-label^="Unterhaltung mit"], section[role="dialog"][aria-label^="Conversation with"]'
 
 _MESSAGES_JS = r"""() => {
@@ -414,13 +416,29 @@ class ExtInmail(ExtActions):
     ) -> dict[str, Any]:
         await self._goto(target["sales_url"])
         await self._wait(3.0, 5.0)
+        # The lead page renders its action bar late, and the label varies
+        # ("Nachricht", "Nachricht senden", "Message", "Send InMail"): one
+        # look after 3-5 s with an exact label refused every InMail of the
+        # first live run as inmail_not_allowed. Poll up to 15 s, and when
+        # nothing matches say which buttons were visible.
         button = (
             self._page.locator("button:visible")
-            .filter(has_text=re.compile(r"^\s*(Nachricht|Message)\s*$"))
+            .filter(has_text=_SN_MESSAGE_LABEL)
             .first
         )
+        for _ in range(12):
+            if await button.count() > 0:
+                break
+            await asyncio.sleep(1.0)
         if await button.count() == 0:
-            return {"status": "inmail_not_allowed", "sent": False}
+            labels = await self._page.evaluate(
+                "() => [...document.querySelectorAll('button')]"
+                ".filter(b => b.offsetParent !== null)"
+                ".map(b => (b.innerText || b.getAttribute('aria-label') || '').trim())"
+                ".filter(Boolean).slice(0, 40)"
+            )
+            return {"status": "inmail_not_allowed", "sent": False, "visible_buttons": labels,
+                    "page": self._page.url}
         lead_text = await self._page.evaluate(
             "() => document.body.innerText.slice(0, 2500)"
         )
