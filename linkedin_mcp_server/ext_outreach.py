@@ -385,8 +385,13 @@ PACE_BUDGETS: dict[str, dict[str, int]] = {
     "message": {"day": MESSAGES_PER_DAY_MAX, "week": MESSAGES_PER_WEEK_MAX},
     "search": {"day": 80, "week": 400},
     "page_read": {"day": 300, "week": 1500},
-    # InMail spends a paid credit and reaches a stranger (2026-09-30): low caps.
-    "inmail": {"day": 5, "week": 20},
+    # InMail spends a paid credit and reaches a stranger. 5/20 was an agent's
+    # cautious start value (2026-09-30), never an operator decision; in the
+    # first live week it let 5 of 28 due InMails out. Operator, 2026-10-07:
+    # too few. 15/60 stays well inside the 150 credits and keeps a burst from
+    # looking like a campaign blast; the per-company and review gates of the
+    # caller still apply to every single one.
+    "inmail": {"day": 15, "week": 60},
     "message_edit": {"day": 10, "week": 40},
     # Taking back an own post or comment (2026-10-01): rare by design, and a
     # burst of deletions looks like account clean-up to LinkedIn.
