@@ -31,6 +31,12 @@ from linkedin_mcp_server.greenlet_runtime import explain_a_missing_runtime
 # console script and ``python -m``, import this module first.
 explain_a_missing_runtime()
 
+from linkedin_mcp_server.no_console import install as _install_no_console  # noqa: E402
+
+# Every child process, in this interpreter and in helper interpreters started
+# with ``-m linkedin_mcp_server.<module>``, starts without a console window.
+_install_no_console()
+
 try:
     __version__ = version("mcp-server-linkedin")
 except PackageNotFoundError:
