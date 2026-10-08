@@ -165,7 +165,12 @@ def register_ext_inmail_tools(
 
         Status codes: dry_run, verified, unverified, unknown, first_degree
         (use send_message), open_profile, no_inmail_credits,
-        inmail_not_allowed, no_sales_navigator_route, not_an_inmail_composer,
+        inmail_not_allowed (only on a refusal text or a disabled message
+        button; evidence names it), message_button_not_found (no refusal seen;
+        detail.profile_message_button / upsell_visible), no_sales_navigator_route
+        (reason: no_view_link, saved_lead_without_urn, ambiguous_profile_urn;
+        a lead already saved in Sales Navigator is routed by its URN),
+        not_an_inmail_composer,
         composer_mismatch, content_check_failed, subject_required, duplicate,
         pace_budget_spent, repeat_not_allowed (allow_repeat to a non-canary),
         unexpected_inmail_cost, invalid_message, message_too_long. Never

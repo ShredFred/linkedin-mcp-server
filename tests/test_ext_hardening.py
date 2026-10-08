@@ -704,7 +704,8 @@ class _Page:
         return self.body if "textarea" in str(sel) else self.dialog
 
     async def evaluate(self, *a, **k):
-        return "2nd"
+        # The lead page must name the target's surname (lead_mismatch guard).
+        return "Dieter Maier · 2nd"
 
 
 def _fake_inmail_reader(monkeypatch):

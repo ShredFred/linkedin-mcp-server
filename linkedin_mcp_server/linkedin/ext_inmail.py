@@ -246,6 +246,69 @@ _MENU_JS = r"""() => [...document.querySelectorAll('[role=menu] a, [role=menu] [
   .filter(x => x.t || x.h)"""
 
 _SN_MESSAGE_LABEL = re.compile(r"^\s*(Nachricht( senden)?|InMail( senden)?|Message|Send (InMail|message))\s*$", re.I)
+# The same button by aria-label: icon buttons and labels with the name in them
+# ("Nachricht an <Name> senden", "Message <Name>") carry no exact text.
+# "Nachrichten" and "Messaging" (the inbox) are cut off by the word boundary.
+_SN_MESSAGE_ARIA = re.compile(r"^\s*(Nachricht|InMail|Message|Send (InMail|message))\b", re.I)
+# Positive evidence that this member cannot receive an InMail. Only this (or a
+# disabled message button) turns a missing route into inmail_not_allowed
+# (2026-10-08: a profile with a visible "Nachricht" button was refused merely
+# because no button on the lead page matched the exact label).
+_INMAIL_BLOCK_RE = re.compile(
+    r"(keine InMails?\b[^\n]{0,40}(erhalten|empfangen|annehmen)"
+    r"|InMail[^\n]{0,30}nicht (verfügbar|möglich)"
+    r"|nimmt keine InMails"
+    r"|(can(no|')t|cannot|does not|doesn't) (receive|accept) InMails?"
+    r"|InMail[^\n]{0,30}(not available|unavailable))",
+    re.I,
+)
+_SAVED_LEAD_RE = re.compile(
+    r"^\s*(Nicht mehr in Sales Navigator speichern|Unsave( from Sales Navigator)?|Gespeichert|Saved)\s*$",
+    re.I,
+)
+_URN_RE = re.compile(r"urn(?::|%3A)li(?::|%3A)fsd_profile(?::|%3A)(ACoA[A-Za-z0-9_-]+)")
+
+# URNs bound to this profile: next to its own publicIdentifier in the page
+# data, else in the top card. Sorted and distinct; the caller takes only a
+# single one, never the first of several.
+_OWN_URN_JS = r"""(slug) => {
+  const out = new Set();
+  const re = /urn:li:fsd_profile:(ACoA[A-Za-z0-9_-]+)/g;
+  const key = ('"publicIdentifier":"' + slug + '"').toLowerCase();
+  for (const c of document.querySelectorAll('code, script[type="application/json"]')) {
+    const t = (c.textContent || '').replace(/\s*:\s*/g, ':');
+    const low = t.toLowerCase();
+    let i = low.indexOf(key);
+    while (i >= 0) {
+      const win = t.slice(Math.max(0, i - 1500), i + 1500);
+      for (const u of win.matchAll(re)) out.add(u[1]);
+      i = low.indexOf(key, i + 1);
+    }
+  }
+  if (!out.size) {
+    const main = document.querySelector('main') || document.body;
+    const sec = main.querySelector('section') || main;
+    for (const u of (sec.innerHTML || '').matchAll(re)) out.add(u[1]);
+  }
+  return [...out].sort();
+}"""
+
+_BUTTON_LABELS_JS = (
+    "() => [...document.querySelectorAll('button, [role=button]')]"
+    ".filter(b => b.getClientRects().length)"
+    ".map(b => ({t: (b.innerText || '').trim(), a: (b.getAttribute('aria-label') || '').trim(),"
+    " d: b.disabled === true || b.getAttribute('aria-disabled') === 'true'}))"
+    ".filter(x => x.t || x.a).slice(0, 60)"
+)
+
+_TOP_BUTTONS_JS = (
+    "() => { const main = document.querySelector('main') || document.body;"
+    " const sec = main.querySelector('section') || main;"
+    " return [...sec.querySelectorAll('button, [role=button]')]"
+    ".filter(b => b.getClientRects().length)"
+    ".map(b => ({t: (b.innerText || '').trim(), a: (b.getAttribute('aria-label') || '').trim()}))"
+    ".filter(x => x.t || x.a); }"
+)
 _SN_DIALOG = 'section[role="dialog"][aria-label^="Unterhaltung mit"], section[role="dialog"][aria-label^="Conversation with"]'
 
 _MESSAGES_JS = r"""() => {
@@ -345,6 +408,9 @@ async def first_match(scope: Any, chain: tuple[Any, ...], *, last: bool = False)
     return None
 
 
+_MESSAGE_BUTTON_POLL_SECONDS = 1.0
+
+
 class ExtInmail(ExtActions):
     """InMail send and message edit. Every write sits behind ``confirm``."""
 
@@ -381,13 +447,45 @@ class ExtInmail(ExtActions):
             (i["h"] for i in items if i.get("h") and "/sales/people/" in i["h"]), None
         )
         result["menu"] = [i["t"] for i in items if i.get("t")]
-        if not sn:
-            # 2026-10-08: a lead already saved in Sales Navigator shows
-            # "Nicht mehr in Sales Navigator speichern" and no "view" link; the
-            # page carries no unambiguous URN to build the lead URL from.
-            saved = any(re.match(r"^\s*(Nicht mehr in Sales Navigator speichern|Unsave)", t) for t in result["menu"])
-            return {**result, "status": "no_sales_navigator_route", **({"saved_lead": True} if saved else {})}
-        return {**result, "status": "ok", "sales_url": sn}
+        top = await self._page.evaluate(_TOP_BUTTONS_JS)
+        # A visible "Nachricht" in the top card of a 2nd/3rd-degree profile:
+        # Open Profile or Premium InMail, a message without a connection.
+        result["profile_message_button"] = any(
+            _SN_MESSAGE_LABEL.match(b.get("t") or "") for b in top
+        )
+        if sn:
+            return {**result, "status": "ok", "sales_url": sn, "route": "view_link"}
+        # 2026-10-08: a lead already saved in Sales Navigator shows "Nicht mehr
+        # in Sales Navigator speichern" / "Gespeichert" and no "view" link. It
+        # is still a valid route: the lead page is addressed by the profile URN,
+        # taken from the compose link in the menu or bound to the own slug.
+        saved = any(_SAVED_LEAD_RE.match(t) for t in result["menu"]) or any(
+            _SAVED_LEAD_RE.match(b.get("t") or "") for b in top
+        )
+        urns = sorted(
+            {m.group(1) for i in items for m in [_URN_RE.search(i.get("h") or "")] if m}
+        )
+        route = "compose_link"
+        if not urns and saved:
+            urns = await self._page.evaluate(_OWN_URN_JS, username)
+            route = "profile_urn"
+        if saved:
+            result["saved_lead"] = True
+        if len(urns) == 1:
+            # The surname check on the lead page in inmail() still guards
+            # against a wrong recipient.
+            return {
+                **result,
+                "status": "ok",
+                "sales_url": f"https://www.linkedin.com/sales/people/{urns[0]},name",
+                "route": route,
+            }
+        reason = (
+            "ambiguous_profile_urn" if urns
+            else "saved_lead_without_urn" if saved
+            else "no_view_link"
+        )
+        return {**result, "status": "no_sales_navigator_route", "reason": reason}
 
     async def inmail(
         self,
@@ -425,24 +523,22 @@ class ExtInmail(ExtActions):
         # look after 3-5 s with an exact label refused every InMail of the
         # first live run as inmail_not_allowed. Poll up to 15 s, and when
         # nothing matches say which buttons were visible.
-        button = (
+        by_text = (
             self._page.locator("button:visible")
             .filter(has_text=_SN_MESSAGE_LABEL)
             .first
         )
+        button = None
         for _ in range(12):
-            if await button.count() > 0:
+            if await by_text.count() > 0:
+                button = by_text
                 break
-            await asyncio.sleep(1.0)
-        if await button.count() == 0:
-            labels = await self._page.evaluate(
-                "() => [...document.querySelectorAll('button')]"
-                ".filter(b => b.offsetParent !== null)"
-                ".map(b => (b.innerText || b.getAttribute('aria-label') || '').trim())"
-                ".filter(Boolean).slice(0, 40)"
-            )
-            return {"status": "inmail_not_allowed", "sent": False, "visible_buttons": labels,
-                    "page": self._page.url}
+            button = await self._message_button_by_aria()
+            if button is not None:
+                break
+            await asyncio.sleep(_MESSAGE_BUTTON_POLL_SECONDS)
+        if button is None or await button.is_disabled():
+            return await self._no_message_button(target, disabled=button is not None)
         lead_text = await self._page.evaluate(
             "() => document.body.innerText.slice(0, 2500)"
         )
@@ -535,6 +631,49 @@ class ExtInmail(ExtActions):
             "delivered_in_dialog": delivered,
             "credits_after": credits_after,
             "url": sent_url,
+        }
+
+    async def _message_button_by_aria(self) -> Any:
+        """Visible message button found by its aria-label, else None."""
+        loc = self._page.locator(
+            "button[aria-label]:visible, [role=button][aria-label]:visible"
+        )
+        try:
+            n = await loc.count()
+            for i in range(min(n, 60)):
+                el = loc.nth(i)
+                if _SN_MESSAGE_ARIA.match(await el.get_attribute("aria-label") or ""):
+                    return el
+        except Exception:
+            logger.debug("aria message button lookup failed", exc_info=True)
+        return None
+
+    async def _no_message_button(
+        self, target: dict[str, Any], *, disabled: bool
+    ) -> dict[str, Any]:
+        """inmail_not_allowed only on positive evidence; else a reason code."""
+        buttons = await self._page.evaluate(_BUTTON_LABELS_JS)
+        labels = [b.get("t") or b.get("a") for b in buttons]
+        text = await self._page.evaluate("() => document.body.innerText.slice(0, 6000)")
+        block = _INMAIL_BLOCK_RE.search(text or "")
+        base = {"sent": False, "visible_buttons": labels[:40], "page": self._page.url}
+        if block:
+            return {**base, "status": "inmail_not_allowed", "evidence": block.group(0)}
+        if disabled:
+            return {**base, "status": "inmail_not_allowed",
+                    "evidence": "message_button_disabled"}
+        upsell = any(
+            re.search(r"Premium|Upgrade|Sales Navigator (testen|kostenlos)|Try Sales Navigator",
+                      x or "", re.I)
+            for x in labels
+        )
+        return {
+            **base,
+            "status": "message_button_not_found",
+            "detail": {
+                "profile_message_button": bool(target.get("profile_message_button")),
+                "upsell_visible": upsell,
+            },
         }
 
     async def _close_sn_dialog(self, dialog: Any) -> None:
