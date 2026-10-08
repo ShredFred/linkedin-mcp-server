@@ -13,8 +13,8 @@ without loosening identity:
 * A fragment fails closed. It carries nothing we need and is the easiest
   place to smuggle a second path.
 * The slug is compared percent-decoded and case-folded. LinkedIn emits
-  ``/in/dieter-k%C3%B6hler-.../`` (measured 2026-09-30) while our identifiers
-  hold ``dieter-köhler-...``; a raw string compare made every umlaut slug a
+  ``/in/test-%C3%BCber-.../`` (measured 2026-09-30) while our identifiers
+  hold ``test-über-...``; a raw string compare made every umlaut slug a
   mismatch, and the vanityName selector in the connect path silently never
   matched them (two of the eight connect_unavailable results of 2026-09-29).
 * Any further path segment fails closed, a two-letter "locale" one

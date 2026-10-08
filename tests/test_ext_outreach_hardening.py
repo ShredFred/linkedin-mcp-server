@@ -31,8 +31,8 @@ from linkedin_mcp_server.linkedin.connection_actions import ConnectionActions
 from linkedin_mcp_server.linkedin.navigation import PageNavigator
 from linkedin_mcp_server.linkedin.session import PageSession
 
-USER = "dieter-köhler-1b0000000"
-USER_HREF = "dieter-k%C3%B6hler-1b0000000"
+USER = "test-über-1b0000000"
+USER_HREF = "test-%C3%BCber-1b0000000"
 PROFILE = f"https://www.linkedin.com/in/{USER_HREF}/?isSelfProfile=false"
 
 
@@ -47,7 +47,7 @@ PROFILE = f"https://www.linkedin.com/in/{USER_HREF}/?isSelfProfile=false"
         (PROFILE, f"/in/{USER_HREF}/"),
         # LinkedIn has emitted lower-case hex; same person.
         (
-            "https://www.linkedin.com/in/dieter-k%c3%b6hler-1b0000000/",
+            "https://www.linkedin.com/in/test-%c3%bcber-1b0000000/",
             f"/in/{USER_HREF}/",
         ),
         (
@@ -79,7 +79,7 @@ def test_profile_path_normalisation(url: str, expected: str | None) -> None:
 
 def test_identity_key_folds_encoding_and_case() -> None:
     assert ext_urls.identity_path(USER) == ext_urls.identity_path(
-        "Dieter-K%C3%B6hler-1B0000000"
+        "Test-%C3%9Cber-1B0000000"
     )
     assert ext_urls.identity_path("sascha-pleßer-6a") == "/in/sascha-pleßer-6a/"
 
@@ -328,7 +328,7 @@ async def test_connect_in_more_menu_sends_via_deeplink(mock_page) -> None:
     assert result["status"] == "connected"
     assert result["connect_via"] == "more_menu"
     (url,), _ = nav.call_args
-    assert url.endswith("vanityName=dieter-k%C3%B6hler-1b0000000")
+    assert url.endswith("vanityName=test-%C3%BCber-1b0000000")
 
 
 async def test_connect_only_card_without_message_opens_more(mock_page) -> None:
