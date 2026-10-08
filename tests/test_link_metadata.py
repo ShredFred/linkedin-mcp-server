@@ -995,6 +995,29 @@ class TestClassifyLink:
             "search_results",
         )
         assert [r["url"] for r in references] == ["/messaging/thread/2-abc123/"]
+    @pytest.mark.parametrize("section", ["inbox", "search_results"])
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/messaging/thread/new/",
+            "/messaging/thread/new",
+            "/messaging/thread/new/?recipient=ACoAAB",
+            "/messaging/thread/%6Eew/#draft",
+        ],
+    )
+    def test_compose_link_is_not_a_conversation(self, section, path):
+        references = build_references(
+            [
+                {"href": f"https://www.linkedin.com{path}", "text": "New message"},
+                {
+                    "href": "https://www.linkedin.com/messaging/thread/new-existing/",
+                    "text": "Ada",
+                },
+            ],
+            section,
+        )
+
+        assert [ref["url"] for ref in references] == ["/messaging/thread/new-existing/"]
 
     def test_inbox_references_include_threads(self):
         references = build_references(

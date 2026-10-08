@@ -9,7 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from linkedin_mcp_server import ext_outreach as outreach
-from linkedin_mcp_server.core.exceptions import OffSiteNavigationError
+from linkedin_mcp_server.core.exceptions import (
+    OffLinkedInLandingError,
+    OffSiteNavigationError,
+)
 from linkedin_mcp_server.drivers.browser import _feed_auth_succeeds
 from linkedin_mcp_server.linkedin.capture import (
     COMPANY_PEOPLE_MAX_ROUNDS,
@@ -47,7 +50,8 @@ async def test_feed_auth_off_site_landing_is_not_success():
             new_callable=AsyncMock,
         ),
     ):
-        with pytest.raises(OffSiteNavigationError):
+        # Upstream #1235 refuses the landing first; the fork check stays behind it.
+        with pytest.raises((OffSiteNavigationError, OffLinkedInLandingError)):
             await _feed_auth_succeeds(browser)
 
 

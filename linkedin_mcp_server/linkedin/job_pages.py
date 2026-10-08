@@ -134,11 +134,13 @@ PROMOTED_JOB_IDS_JS = (
 }"""
 )
 
-# This posting's apply control and state, once they render. Easy Apply is found
-# by its URL, an anchor into the posting's own `/apply/` route that the "More
-# jobs" cards, each linking its own posting, cannot match. It is an
-# `<a href=".../jobs/view/<id>/apply/?openSDUIApplyFlow=true">` (measured on
-# 2026-09-14).
+# This posting's apply control and state, once they render. Easy Apply comes in
+# two shapes. The anchor into the posting's own `/apply/` route
+# (`<a href=".../jobs/view/<id>/apply/?openSDUIApplyFlow=true">`, measured on
+# 2026-09-14) is found by its URL, which the "More jobs" cards, each linking its
+# own posting, cannot match. The `<button>` with no href that replaced it
+# (measured on 2026-09-25) is found by its text, above the description only; the
+# cards below show the same words, as text inside their links.
 #
 # The external control is an `<a target="_blank">` into the off-site
 # interstitial, which names the employer's page in its href (measured on
@@ -159,8 +161,8 @@ PROMOTED_JOB_IDS_JS = (
 # poll runs this program on every frame for up to ten seconds.
 APPLY_SIGNALS_JS = r"""(opts) => {
     const {
-        applyPath, redirectPath, externalLabel, descriptionHeadings, closedLines,
-        appliedPattern,
+        applyPath, redirectPath, easyApplyLabel, externalLabel, descriptionHeadings,
+        closedLines, appliedPattern,
     } = opts;
     const main = document.querySelector('main');
     if (!main) return null;
@@ -192,16 +194,19 @@ APPLY_SIGNALS_JS = r"""(opts) => {
         && pathOf(anchor) === redirectPath);
     return {
         bounded: Boolean(heading),
-        easy_apply: anchors.some((anchor) => pathOf(anchor) === applyPath),
+        easy_apply: anchors.some((anchor) => pathOf(anchor) === applyPath)
+            || [...main.querySelectorAll('button')].some((el) => above(el)
+                && (el.innerText || '').trim() === easyApplyLabel),
         external_link: link ? link.href : null,
         applied: top.some((line) => applied.test(line)),
         closed: top.some((line) => closedLines.includes(line)),
     };
 }"""
 
-# Ready once the description heading and a signal are both in. Easy Apply is
-# found without the heading, but the applied and closed lines are not, so a
-# read that settled on the anchor alone could call such a posting open.
+# Ready once the description heading and a signal are both in. The Easy Apply
+# anchor is found without the heading (the button is not), but the applied and
+# closed lines are not, so a read that settled on the anchor alone could call
+# such a posting open.
 APPLY_READY_JS = (
     "(opts) => {\n    const signals = (" + APPLY_SIGNALS_JS + ")(opts);\n"
     "    return Boolean(signals && signals.bounded && (signals.easy_apply\n"
@@ -316,6 +321,7 @@ class JobPageReader:
         opts = {
             "applyPath": f"/jobs/view/{job_id}/apply",
             "redirectPath": SAFETY_REDIRECT_PATH,
+            "easyApplyLabel": text.easy_apply_label,
             "externalLabel": text.external_apply_label,
             "descriptionHeadings": list(text.description_headings),
             "closedLines": list(text.closed_lines),
@@ -328,7 +334,7 @@ class JobPageReader:
         except PlaywrightTimeoutError:
             logger.debug("No apply control or posting state rendered on %s", url)
 
-        signals = await page.evaluate(APPLY_SIGNALS_JS, opts)
+        signals = await self._session.run_on_linkedin(APPLY_SIGNALS_JS, opts)
         # Both states before any control, so a posting in either never reads
         # as open.
         if signals and signals["applied"]:
@@ -356,7 +362,7 @@ class JobPageReader:
             scoped: Read only the results rail, chosen by the same rule the
                 sidebar scroll uses. Off for lists that have no rail.
         """
-        result = await self._session.page.evaluate(
+        result = await self._session.run_on_linkedin(
             JOB_IDS_JS, {"selector": _JOB_CARD_SELECTOR, "scoped": scoped}
         )
         if scoped and not result["scoped"]:
@@ -379,7 +385,7 @@ class JobPageReader:
         treating this as best effort cannot mistake a failed read for a page
         without promoted jobs.
         """
-        result = await self._session.page.evaluate(
+        result = await self._session.run_on_linkedin(
             PROMOTED_JOB_IDS_JS, {"selector": _JOB_CARD_SELECTOR, "label": label}
         )
         if not isinstance(result, list):
@@ -584,7 +590,7 @@ class JobPageReader:
         selector is the only reliable way to read it. Gracefully returns ``None`` if
         LinkedIn renames the class — pagination just falls back to ``max_pages``.
         """
-        text = await self._session.page.evaluate(
+        text = await self._session.run_on_linkedin(
             """() => {
                 const el = document.querySelector(
                     '.jobs-search-pagination__page-state'
@@ -752,7 +758,7 @@ class JobPageReader:
         ``None`` — pagination then falls back to ``max_pages`` and the
         no-new-ids early stop.
         """
-        value = await self._session.page.evaluate(
+        value = await self._session.run_on_linkedin(
             """() => {
                 const buttons = document.querySelectorAll(
                     'ul.artdeco-pagination__pages li button'

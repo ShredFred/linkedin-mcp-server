@@ -24,6 +24,8 @@ from linkedin_mcp_server.linkedin.connection_actions import ConnectionActions
 from linkedin_mcp_server.linkedin.navigation import PageNavigator
 from linkedin_mcp_server.linkedin.session import PageSession
 
+from .support.navigation import held_in
+
 PREMIUM_MESSAGE = (
     "Wysyłaj nieograniczoną liczbę spersonalizowanych zaproszeń dzięki Premium"
 )
@@ -287,6 +289,9 @@ class TestConnectWithPerson:
         buttons.count = AsyncMock(return_value=2)
         target = MagicMock()
         target.click = AsyncMock(side_effect=RuntimeError("intercepted"))
+        target.evaluate = AsyncMock(return_value="https://www.linkedin.com/in/testuser/")
+        target.dispose = AsyncMock()
+        target.element_handle = AsyncMock(return_value=target)
         buttons.nth = MagicMock(return_value=target)
         mock_page.locator = MagicMock(return_value=buttons)
 
@@ -789,7 +794,7 @@ class TestInviteDialog:
         actions = _actions(mock_page)
         textarea = MagicMock()
         textarea.count = AsyncMock(return_value=0)
-        add_note_button = MagicMock()
+        add_note_button = held_in(MagicMock())
         add_note_button.click = AsyncMock(return_value=None)
         buttons = MagicMock()
         buttons.count = AsyncMock(return_value=3)
@@ -848,7 +853,7 @@ class TestInviteDialog:
         actions = _actions(mock_page)
         textarea = MagicMock()
         textarea.count = AsyncMock(return_value=0)
-        add_note_button = MagicMock()
+        add_note_button = held_in(MagicMock())
         add_note_button.click = AsyncMock(return_value=None)
         buttons = MagicMock()
         buttons.count = AsyncMock(return_value=2)
@@ -1041,7 +1046,7 @@ class TestInviteDialog:
 
         buttons = MagicMock()
         buttons.count = AsyncMock(return_value=2)
-        primary_button = MagicMock()
+        primary_button = held_in(MagicMock())
         primary_button.focus = AsyncMock()
         buttons.nth.return_value = primary_button
 
@@ -1167,7 +1172,7 @@ class TestInviteDialog:
         clicks: list[int] = []
 
         def button_at(index: int):
-            button = MagicMock()
+            button = held_in(MagicMock())
 
             async def click(*_args, **_kwargs):
                 clicks.append(index)
@@ -1226,7 +1231,7 @@ class TestInviteDialog:
 
         # Two button locators inside the gating dialog: nth(0) "Add a
         # note" reveals the textarea, nth(1) "Send without a note".
-        button_locators = [MagicMock(), MagicMock()]
+        button_locators = [held_in(MagicMock()), held_in(MagicMock())]
         for idx, btn in enumerate(button_locators):
 
             def make_click(i: int):
@@ -1251,6 +1256,7 @@ class TestInviteDialog:
         )
         textarea_locator.first = textarea_locator
         textarea_locator.fill = AsyncMock()
+        held_in(textarea_locator)
 
         # Route page.locator() calls by selector — buttons vs textarea —
         # so the gating dialog's button collection is distinguishable

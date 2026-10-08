@@ -12,6 +12,7 @@ from linkedin_mcp_server.linkedin.link_metadata import (
     Reference,
     _SEARCH_RESULTS_REFERENCE_CAP,
 )
+from linkedin_mcp_server.linkedin.text import JobApplyTextTable
 
 
 def reconcile_search_references(
@@ -244,11 +245,16 @@ SCROLL_BUDGET_TOTAL = 60.0
 # server registered for the tool, including directly constructed servers.
 SEARCH_TIMEOUT_FRACTION = 0.8
 
-SAVED_JOBS_URL = "https://www.linkedin.com/my-items/saved-jobs/"
-# Where a saved-jobs navigation may legitimately end. LinkedIn redirects the
-# first to the second and drops the query doing so, so the tool navigates to
-# one and arrives at the other.
+# The job tracker, which lists the account's jobs one stage at a time with
+# `?stage=`. The old `/my-items/saved-jobs/` redirects here and drops the
+# query on the way, so the tool navigates here directly.
+SAVED_JOBS_URL = "https://www.linkedin.com/jobs-tracker/"
+# Where a tracker navigation may legitimately end. The old route stays allowed
+# for accounts the redirect has not reached.
 SAVED_JOBS_PATHS = frozenset({"/my-items/saved-jobs", "/jobs-tracker"})
+# The tracker tabs, as LinkedIn spells them in `?stage=`. A page without the
+# parameter shows saved jobs.
+JobsTrackerStage = Literal["saved", "in_progress", "applied", "archived"]
 
 # The my-items lists page in 10s, unlike job search. Verified live: ?start=10
 # returns the 11th saved job, while ?start=25 lands past the end of a two-page
@@ -256,6 +262,33 @@ SAVED_JOBS_PATHS = frozenset({"/my-items/saved-jobs", "/jobs-tracker"})
 SAVED_JOBS_PAGE_SIZE = 10
 
 ApplyType = Literal["easy_apply", "external", "applied", "closed", "unknown"]
+
+
+def posting_state(
+    text: str, table: JobApplyTextTable
+) -> Literal["applied", "closed"] | None:
+    """The state a posting's captured text shows above its description, if any.
+
+    The same reading `get_job_apply_url` makes on the page, on the same lines,
+    so `get_job_details` answers it without a second navigation.
+    Applied is read first, as there. None covers an open posting and a capture
+    without any of its description headings alike: the lines are only trusted
+    above the earliest one, and without it there is no boundary.
+    """
+    lines = [line.strip() for line in text.splitlines()]
+    end = next(
+        (i for i, line in enumerate(lines) if line in table.description_headings),
+        None,
+    )
+    if end is None:
+        return None
+    top = lines[:end]
+    if any(table.applied_pattern.match(line) for line in top):
+        return "applied"
+    if any(line in table.closed_lines for line in top):
+        return "closed"
+    return None
+
 
 # LinkedIn's interstitial for links that leave the site, with the destination in
 # its `url` parameter. Measured on 2026-09-19: an external posting's Apply is

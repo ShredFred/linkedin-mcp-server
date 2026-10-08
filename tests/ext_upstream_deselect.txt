@@ -1,0 +1,6 @@
+# Fork extension: upstream tests deselected from the fork's browser-free run.
+# One pytest node id per line, then " # " and the reason. Only for a test that
+# fails identically on a clean upstream/main checkout on the fork's runner
+# (Windows), so it says nothing about the fork. Remove the line once upstream
+# makes the test pass there.
+tests/linkedin/test_message_sender.py::TestSendMessageDeadline::test_a_late_snapshot_keeps_the_thread_when_disposal_stalls # 20 ms deadline margin, below the Windows timer resolution; red on clean upstream 60bb77f (2026-10-08)

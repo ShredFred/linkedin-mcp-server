@@ -14,6 +14,7 @@ import pytest
 
 from linkedin_mcp_server import ext_outreach as outreach
 from linkedin_mcp_server.core.exceptions import (
+    OffLinkedInLandingError,
     OffSiteNavigationError,
     RateLimitError,
 )
@@ -105,5 +106,6 @@ async def test_offsite_cleanup_redirect_raises():
     page = _page(
         [(ext_post.SHARE_URL, 200), ("https://linkedin.com.evil.example/feed/", 200)]
     )
-    with pytest.raises(OffSiteNavigationError):
+    # Upstream #1235 refuses the landing first; the fork check stays behind it.
+    with pytest.raises((OffSiteNavigationError, OffLinkedInLandingError)):
         await _composer(page).create_post("Text", image_path=None, confirm_post=False)

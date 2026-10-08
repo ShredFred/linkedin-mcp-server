@@ -20,6 +20,10 @@ def _probe_page(*, click_raises: bool, dialog_left: int) -> MagicMock:
     buttons.count = AsyncMock(return_value=3)
     button = MagicMock()
     button.click = AsyncMock(side_effect=RuntimeError("detached") if click_raises else None)
+    # Upstream #1235 clicks through a handle checked for a LinkedIn document.
+    button.evaluate = AsyncMock(return_value="https://www.linkedin.com/in/testuser/")
+    button.dispose = AsyncMock()
+    button.element_handle = AsyncMock(return_value=button)
     buttons.nth = MagicMock(return_value=button)
     textarea = MagicMock()
     textarea.count = AsyncMock(return_value=0)

@@ -313,7 +313,7 @@ class ConversationReader:
     ) -> None:
         """Scroll the largest scrollable region inside main when one exists."""
         for _ in range(attempts):
-            await self._session.page.evaluate(
+            await self._session.run_on_linkedin(
                 """({ position }) => {
                     const main = document.querySelector('main');
                     if (!main) return false;
@@ -520,7 +520,7 @@ class ConversationReader:
         # clickable element, so class-name selectors are unavoidable here.
         # The aria-label value flows through unmodified — Python strips any
         # known locale prefix to derive a clean participant name for refs.
-        outcome: dict[str, Any] = await self._session.page.evaluate(
+        outcome: dict[str, Any] = await self._session.run_on_linkedin(
             """async ({ limit, nameFilter }) => {
                 const labels = Array.from(document.querySelectorAll(
                     'main li label[aria-label]'
@@ -543,7 +543,12 @@ class ConversationReader:
                     const match = location.pathname.match(
                         /^\\/messaging\\/thread\\/([^/]+)\\/?$/
                     );
-                    return match ? match[1] : null;
+                    if (!match) return null;
+                    try {
+                        return decodeURIComponent(match[1]) === 'new' ? null : match[1];
+                    } catch {
+                        return null;
+                    }
                 };
                 const outcome = {
                     rows: [],

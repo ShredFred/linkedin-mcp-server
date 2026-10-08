@@ -199,6 +199,13 @@ async def dom_page():
         pytest.skip(f"chromium unavailable: {exc}")
     page = await browser.new_page()
     try:
+        # On a LinkedIn address, because the reads refuse any other page
+        # (upstream #1235), and `set_content` keeps the address it replaces.
+        await page.route(
+            "https://www.linkedin.com/**",
+            lambda route: route.fulfill(content_type="text/html", body=""),
+        )
+        await page.goto("https://www.linkedin.com/in/testuser/")
         yield page
     finally:
         await browser.close()
