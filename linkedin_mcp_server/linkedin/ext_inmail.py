@@ -381,6 +381,19 @@ class ExtInmail(ExtActions):
             (i["h"] for i in items if i.get("h") and "/sales/people/" in i["h"]), None
         )
         result["menu"] = [i["t"] for i in items if i.get("t")]
+        if not sn and any(
+            re.match(r"^\s*(Nicht mehr in Sales Navigator speichern|Unsave from Sales Navigator)", t)
+            for t in result["menu"]
+        ):
+            # A lead already saved in Sales Navigator shows "unsave" instead of
+            # the "view" link (seen 2026-10-08): build the lead URL from the
+            # profile URN in the top card instead (not the whole page: the
+            # sidebar carries other people's URNs). The composer name check
+            # in inmail() still guards against a wrong recipient.
+            html = await self._page.locator("main section").first.inner_html()
+            m = re.search(r"urn:li:fsd_profile:(ACoA[A-Za-z0-9_-]+)", html)
+            if m:
+                sn = f"https://www.linkedin.com/sales/people/{m.group(1)},name"
         if not sn:
             return {**result, "status": "no_sales_navigator_route"}
         return {**result, "status": "ok", "sales_url": sn}
@@ -444,6 +457,13 @@ class ExtInmail(ExtActions):
         )
         if parse_degree(lead_text) == 1:
             return {"status": "first_degree", "sent": False}
+        name = (target.get("name") or "").strip()
+        last = name.split()[-1] if name else ""
+        if last and last.casefold() not in lead_text.casefold():
+            # The lead page must show the profile's surname; the URN fallback
+            # route above must never reach another person.
+            return {"status": "lead_mismatch", "sent": False, "expected": name,
+                    "page": self._page.url}
         await button.click()
         dialog = self._page.locator(_SN_DIALOG).last
         try:
