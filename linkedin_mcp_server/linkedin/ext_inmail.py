@@ -381,21 +381,12 @@ class ExtInmail(ExtActions):
             (i["h"] for i in items if i.get("h") and "/sales/people/" in i["h"]), None
         )
         result["menu"] = [i["t"] for i in items if i.get("t")]
-        if not sn and any(
-            re.match(r"^\s*(Nicht mehr in Sales Navigator speichern|Unsave from Sales Navigator)", t)
-            for t in result["menu"]
-        ):
-            # A lead already saved in Sales Navigator shows "unsave" instead of
-            # the "view" link (seen 2026-10-08): build the lead URL from the
-            # profile URN in the top card instead (not the whole page: the
-            # sidebar carries other people's URNs). The composer name check
-            # in inmail() still guards against a wrong recipient.
-            html = await self._page.locator("main section").first.inner_html()
-            m = re.search(r"urn:li:fsd_profile:(ACoA[A-Za-z0-9_-]+)", html)
-            if m:
-                sn = f"https://www.linkedin.com/sales/people/{m.group(1)},name"
         if not sn:
-            return {**result, "status": "no_sales_navigator_route"}
+            # 2026-10-08: a lead already saved in Sales Navigator shows
+            # "Nicht mehr in Sales Navigator speichern" and no "view" link; the
+            # page carries no unambiguous URN to build the lead URL from.
+            saved = any(re.match(r"^\s*(Nicht mehr in Sales Navigator speichern|Unsave)", t) for t in result["menu"])
+            return {**result, "status": "no_sales_navigator_route", **({"saved_lead": True} if saved else {})}
         return {**result, "status": "ok", "sales_url": sn}
 
     async def inmail(
