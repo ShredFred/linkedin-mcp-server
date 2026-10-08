@@ -405,7 +405,7 @@ def test_parse_comment_ref_only_value_error_and_ids_from_input():
 
 def test_normalize_person_identifier_raises_only_invalid_reference_and_is_idempotent():
     rng = random.Random(SEED + 13)
-    slugs = ["dieter-k", "jürgen-müller-12a", "ACoAAB12", "me", "x", "a.b"]
+    slugs = ["test-u", "jürgen-müller-12a", "ACoAAB12", "me", "x", "a.b"]
     for case in range(CASES):
         base = rng.choice(slugs + [_text(rng, 15)])
         text = rng.choice(
