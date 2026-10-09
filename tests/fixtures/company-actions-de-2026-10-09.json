@@ -27,7 +27,7 @@
   "limits": {
     "english_interface": "Setting the lang cookie to v=2&lang=en-us plus Accept-Language: LinkedIn rewrote the cookie to v=2&lang=de-de on the next load and served html lang=de; also with ?locale=en_US. Only the account setting switches the interface.",
     "page_composer_tags": "Tag suggestions and the chosen pill carry no identifier (pill: 'button aria-label=<name> verwerfen', text only; no data attribute, no link).",
-    "page_composer_video": "A 4 s 640x360 H.264 test video: 'Weiter' stayed disabled for 20 s, no preview.",
+    "page_composer_video": "Round 3: a 4 s 640x360 H.264 clip without audio kept 'Weiter' disabled for 20 s. Round 4: H.264/AAC 1280x720, 30 fps, 6 s, yuv420p, faststart (188 KB) -- editor 'Bearbeiten' with 'Untertitel', 'Weiter' enabled at once and still after 90 s, composer then shows a <video> preview, 'Medienvorschau bearbeiten', 'Medieninhalt entfernen', 'Posten' enabled. Built.",
     "member_composer_document": "Content types offer only 'Event' and 'Stellenanzeige'.",
     "messaging_mentions": "'@' plus a name start in a 1:1 thread and in a group thread: an empty listbox, no options; the text stays plain."
   },

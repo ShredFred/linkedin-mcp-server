@@ -96,13 +96,15 @@ async def _no_nav(url):
     raise AssertionError("no navigation expected")
 
 
-async def test_video_member_composer(page, tmp_path) -> None:
+@pytest.mark.parametrize("kinds", [("image", "video"), ("image", "video", "document")],
+                         ids=["member", "page"])
+async def test_video_member_composer(page, tmp_path, kinds) -> None:
     f = tmp_path / "clip.mp4"
     f.write_bytes(b"\x00")
     items, bad = check_media([{"path": str(f)}])
     assert bad is None and items[0]["kind"] == "video"
     await page.set_content(_html())
-    got = await _attacher(page, ("image", "video")).attach(items, navigate=_no_nav)
+    got = await _attacher(page, kinds).attach(items, navigate=_no_nav)
     assert got["status"] == "attached", got
 
 

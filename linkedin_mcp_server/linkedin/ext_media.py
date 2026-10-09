@@ -46,8 +46,9 @@ from linkedin_mcp_server.linkedin.ext_mentions import (
 )
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-# Measured 2026-10-09 (round 3): a single video through the member composer's
-# media control (editor with "Untertitel"/"Miniaturbild", then a <video>
+# Measured 2026-10-09 (rounds 3/4): a single video through either composer's
+# media control (the page composer accepts a regular H.264/AAC 1280x720 file
+# at once; a 4 s silent 640x360 clip kept its 'Weiter' disabled) (editor with "Untertitel"/"Miniaturbild", then a <video>
 # preview); a document through the page composer's "Mehr" -> "Dokument
 # hinzufügen" (title field, "Fertig", preview iframe titled
 # "Dokument-Wiedergabe: <title>").
@@ -292,9 +293,8 @@ class MediaAttacher:
             return {
                 "status": "media_kind_unmeasured",
                 "kind": kind,
-                "message": "Measured 2026-10-09: video only through the member "
-                "composer (the page composer kept 'Weiter' disabled), documents "
-                "only through the page composer (the member composer offers none).",
+                "message": "Measured 2026-10-09: documents only through the page "
+                "composer (the member composer offers none).",
             }
         if kind == "video":
             return await self._video(items[0])

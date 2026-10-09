@@ -110,8 +110,9 @@ def register_ext_company_post_tools(
                 mode=schedule, at least 5 minutes ahead and at most 90 days.
             media: as in create_post, without tags (media_tag_unverifiable:
                 the page composer's tag suggestions and the chosen pill carry
-                no identifier, measured as Super-Admin), without video (the
-                page composer kept 'Weiter' disabled), plus one document:
+                no identifier, measured as Super-Admin), one video (mp4/mov;
+                measured with H.264/AAC 1280x720 -- a 4 s silent 640x360
+                clip was not accepted, media_upload_incomplete), or one document:
                 [{"path": "<pdf/ppt/doc>", "title": "..."}] -- title typed and
                 read back from the preview (document_title_required,
                 document_control_unavailable, document_title_not_taken,
