@@ -25,6 +25,7 @@ from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.linkedin.ext_company_post import (
     ExtCompanyPostComposer,
     check_mode,
+    check_page_id,
     check_schedule,
 )
 from linkedin_mcp_server.tools.ext import (
@@ -68,6 +69,7 @@ def register_ext_company_post_tools(
         tags={TAG, "post", "actions"},
     )
     async def create_company_post(
+        page_id: str,
         page_name: str,
         text: str,
         ctx: Context,
@@ -78,19 +80,22 @@ def register_ext_company_post_tools(
     ) -> dict[str, Any]:
         """
         Compose a post authored by a company page the signed-in member
-        administers. Without confirm=true this is a dry run: the author is
-        switched and verified, the text written and verified, then everything
-        is discarded -- nothing is published, no image is uploaded and the
-        schedule dialog is only located, not opened.
+        administers. The composer is opened from the page's own admin view,
+        so the page is the author by construction -- this tool verifies that
+        author, it does not switch one. Without confirm=true this is a dry
+        run: the composer is opened, the author verified, the text written
+        and verified, then everything is discarded -- nothing is published,
+        no image is uploaded and the schedule dialog is only located.
 
         Three modes. ``draft`` saves it to the page's drafts and publishes
         nothing. ``schedule`` hands LinkedIn a time, after which **it publishes
         by itself, with no further click**. ``publish`` posts immediately.
 
         Args:
-            page_name: The page as it is written in the composer's author list,
-                e.g. "MiViA". Matched case-insensitively as a substring; more
-                than one match is refused.
+            page_id: Numeric page id, e.g. 81728804 for MiViA. It addresses
+                the admin view the composer is opened from.
+            page_name: The page name as the composer writes it, e.g. "MiViA".
+                Verified as a case-insensitive substring of the author button.
             text: Post text; LF separates paragraphs.
             mode: draft (default), schedule or publish.
             confirm: Must be true to actually draft, schedule or publish.
@@ -104,7 +109,7 @@ def register_ext_company_post_tools(
         schedule_unconfirmed / post_unconfirmed (may be live or scheduled: do
         NOT retry, check the page). dry_run did nothing. Stops before any
         commit, safe to fix and retry: author_control_unavailable,
-        author_option_unavailable, author_not_confirmed, author_lost,
+        composer_opener_unavailable, author_not_confirmed, author_lost,
         text_not_written, media_button_unavailable,
         schedule_control_unavailable, schedule_not_filled,
         schedule_confirm_unavailable, schedule_not_confirmed,
@@ -114,7 +119,11 @@ def register_ext_company_post_tools(
         invalid_text, schedule_too_soon, schedule_too_far, duplicate_text,
         pace_budget_spent, pace_lock_busy.
         """
-        bad = check_mode(mode) or check_schedule(mode, scheduled_at)
+        bad = (
+            check_page_id(page_id)
+            or check_mode(mode)
+            or check_schedule(mode, scheduled_at)
+        )
         if bad:
             return {"posted": False, **bad}
         if not page_name.strip():
@@ -164,6 +173,7 @@ def register_ext_company_post_tools(
                 ctx,
                 "create_company_post",
                 lambda ex: _composer(ex).create_company_post(
+                    page_id,
                     page_name,
                     text,
                     image_path=image_path,
@@ -189,6 +199,7 @@ def register_ext_company_post_tools(
                     "text_head": outreach.text_head(text),
                     "status": "attempted",
                     "page": page_name,
+                    "page_id": page_id,
                     "mode": mode,
                     "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                 },
@@ -201,6 +212,7 @@ def register_ext_company_post_tools(
             composer = _composer(ex)
             try:
                 result = await composer.create_company_post(
+                    page_id,
                     page_name,
                     text,
                     image_path=image_path,

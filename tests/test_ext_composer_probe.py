@@ -89,7 +89,7 @@ def test_a_harmless_label_passes() -> None:
 async def test_an_element_whose_own_wording_could_publish_is_not_clicked() -> None:
     page = FakePage(mark={"count": 1, "refused": "posten"})
     result = await probe(page).probe(
-        "https://www.linkedin.com/company/mivia/", click_label="Beitrag erstellen", limit=10
+        "https://www.linkedin.com/company/mivia/", click_labels=["Beitrag erstellen"], limit=10
     )
     assert result["status"] == "refused_click"
     assert not page.clicked
@@ -101,7 +101,7 @@ async def test_an_element_whose_own_wording_could_publish_is_not_clicked() -> No
 async def test_an_ambiguous_click_target_is_not_guessed_but_still_reported() -> None:
     page = FakePage(mark={"count": 3})
     result = await probe(page).probe(
-        "https://www.linkedin.com/company/mivia/", click_label="Beitrag erstellen", limit=10
+        "https://www.linkedin.com/company/mivia/", click_labels=["Beitrag erstellen"], limit=10
     )
     assert result["status"] == "click_target_not_unique"
     assert result["matches"] == 3
@@ -113,10 +113,10 @@ async def test_an_ambiguous_click_target_is_not_guessed_but_still_reported() -> 
 async def test_a_plain_probe_navigates_reports_and_clicks_nothing() -> None:
     page = FakePage()
     result = await probe(page).probe(
-        "https://www.linkedin.com/company/mivia/", click_label=None, limit=10
+        "https://www.linkedin.com/company/mivia/", click_labels=[], limit=10
     )
     assert result["status"] == "probed"
-    assert result["clicked"] is None
+    assert result["clicked"] == []
     assert not page.clicked
     assert page.goto_urls == ["https://www.linkedin.com/company/mivia/"]
 
@@ -125,6 +125,6 @@ async def test_a_plain_probe_navigates_reports_and_clicks_nothing() -> None:
 async def test_one_click_at_most_and_only_the_marked_element() -> None:
     page = FakePage()
     await probe(page).probe(
-        "https://www.linkedin.com/company/mivia/", click_label="Beitrag erstellen", limit=10
+        "https://www.linkedin.com/company/mivia/", click_labels=["Beitrag erstellen"], limit=10
     )
     assert page.clicked == ["[data-ext-probe]"]

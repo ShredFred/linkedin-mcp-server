@@ -4,51 +4,39 @@ Built 2026-10-09, after the MiViA page (81728804) granted the signed-in member
 a Content-Admin role. ``create_post`` deliberately refuses ``as_company``; this
 module is the implementation it pointed at.
 
-Three things make this riskier than a personal post, and each one is answered
-by a verification rather than by a hopeful click:
+**The entry point is the whole design, and the first attempt got it wrong.**
+``/feed/?shareActive=true`` opens the *member* composer: measured on 2026-10-09
+it carries five buttons, no author control and no schedule clock, so posting as
+a page from there would have meant switching an author that cannot be switched.
+The page's own admin view does carry them. Opening the composer from
+``/company/<id>/admin/page-posts/published/`` means **the author is the page by
+construction** -- so this module never switches an author, it only *verifies*
+one, which is a much smaller thing to get wrong.
 
-1. **The author.** The share composer opens as the *member*. Posting as a page
-   means switching the author first, and a switch that silently fails publishes
-   company content under a private name. The author shown in the composer is
-   therefore read back and compared against the page before anything is
-   clicked, and again right before the final click.
-2. **The wording.** Author menu, schedule dialog and draft prompt are plain
-   localised text with no stable attributes. Every lookup demands *exactly one*
-   visible match; zero or several is a stop, never a guess.
-3. **Scheduling publishes later.** A scheduled post goes out without a further
-   click, so a half-finished schedule is worse than a failed one: it can leave
-   a live post nobody is watching. The schedule is confirmed by reading the
-   composer's own summary back before the final click, and the result says
-   plainly when it could not be confirmed (``unverified``).
+Measured controls inside that dialog (de locale, 2026-10-09):
 
-A dry run never uploads an image, never opens the schedule dialog beyond
-reading it, and leaves the composer discarded.
+* author and audience: a button reading ``MiViA Auf Alle posten``
+* editor: ``[role="textbox"]`` inside the dialog -- note that this is *not*
+  ``componentkey="ShareBox_textEditor"``, which belongs to the member composer
+* media: ``aria-label="Mediendatei hinzufügen"``
+* schedule: ``aria-label="Termin für Beitrag festlegen"``
+* publish: a button reading ``Posten``, disabled while the editor is empty
+
+Everything is fail-closed: every lookup demands exactly one visible match, the
+author is re-read immediately before the commit click, and a schedule is only
+committed when the composer shows the time back. A dry run never uploads an
+image and discards the composer at the end.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from linkedin_mcp_server.linkedin.ext_post import (
-    _CLEAR_JS,
-    _CLOSE_LABELS,
-    _DISCARD_JS,
-    _DISCARD_WORDS,
-    _EDITOR,
-    _IMAGE_SUFFIXES,
-    _MEDIA_LABELS,
-    _MEDIA_PRESENT_JS,
-    _NEXT_WORDS,
-    _POST_WORDS,
-    _WRITE_JS,
-    FEED_URL,
-    SHARE_URL,
-)
+from linkedin_mcp_server.linkedin.ext_post import _IMAGE_SUFFIXES
 from linkedin_mcp_server.linkedin.navigation import PageNavigator
 from linkedin_mcp_server.linkedin.session import PageSession
 
@@ -56,31 +44,32 @@ logger = logging.getLogger(__name__)
 
 MODES = ("draft", "schedule", "publish")
 
-# The control that opens the author list. LinkedIn renders it as a button
-# carrying the current author's name; its aria-label or adjacent text is the
-# only locale-independent-ish anchor we have, so several spellings are tried
-# and more than one hit is a stop.
-_AUTHOR_BUTTON_LABELS = [
-    "posten als",
-    "post as",
-    "beitrag verfassen als",
-    "autor auswählen",
-    "select author",
-    "author",
-    "veröffentlichen als",
-    "publish as",
-]
-_SCHEDULE_LABELS = [
-    "beitrag planen",
-    "planen",
-    "schedule post",
-    "schedule",
-    "zeitplan",
-]
-_SCHEDULE_CONFIRM_WORDS = ["planen", "schedule", "weiter", "next", "fertig", "done"]
-_DRAFT_WORDS = ["als entwurf speichern", "save as draft", "entwurf speichern", "save draft"]
+ADMIN_POSTS_URL = "https://www.linkedin.com/company/{page_id}/admin/page-posts/published/"
 
-_TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+# Opens the page composer from the admin view. Text, not aria-label.
+_START_WORDS = ["beitrag beginnen", "start a post", "beitrag erstellen", "create a post"]
+_MEDIA_LABELS = ["mediendatei hinzufügen", "add media", "medieninhalte", "foto hinzufügen"]
+_SCHEDULE_LABELS = [
+    "termin für beitrag festlegen",
+    "termin fuer beitrag festlegen",
+    "schedule post",
+    "beitrag planen",
+]
+_POST_WORDS = ["posten", "post", "veröffentlichen", "publish"]
+_SCHEDULE_CONFIRM_WORDS = ["weiter", "next", "fertig", "done", "planen", "schedule"]
+_DISCARD_LABELS = ["verwerfen", "discard", "schließen", "close", "dismiss"]
+_DRAFT_WORDS = [
+    "als entwurf speichern",
+    "save as draft",
+    "entwurf speichern",
+    "save draft",
+    "speichern",
+]
+_NEXT_WORDS = ["weiter", "next", "fertig", "done"]
+
+# The editor of the page composer. Dialog-scoped and locale-independent: the
+# aria-label is German here and would not survive a locale switch.
+_EDITOR_IN_DIALOG = '[role="dialog"] [role="textbox"], dialog [role="textbox"]'
 
 
 def check_mode(mode: str) -> dict[str, Any] | None:
@@ -93,12 +82,22 @@ def check_mode(mode: str) -> dict[str, Any] | None:
     return None
 
 
+def check_page_id(page_id: str) -> dict[str, Any] | None:
+    if not str(page_id).strip().isdigit():
+        return {
+            "status": "invalid_input",
+            "field": "page_id",
+            "message": "page_id is the numeric page id, e.g. 81728804.",
+        }
+    return None
+
+
 def check_schedule(mode: str, scheduled_at: str | None) -> dict[str, Any] | None:
     """A schedule must be a future wall-clock time, to the minute.
 
-    LinkedIn only accepts times on its own grid and at least a few minutes
-    ahead; a past time silently becomes "now" in some locales, which would
-    publish immediately. Refused here rather than discovered in the dialog.
+    LinkedIn accepts times on its own grid and a few minutes ahead only; a past
+    time can silently become "now", which would publish immediately. Refused
+    here rather than discovered in the dialog.
     """
     if mode != "schedule":
         if scheduled_at:
@@ -137,74 +136,78 @@ def check_schedule(mode: str, scheduled_at: str | None) -> dict[str, Any] | None
     return None
 
 
-# Read the author currently selected in the composer. Returns the visible text
-# of the author control, which carries the page or member name.
-_AUTHOR_READ_JS = r"""(arg) => {
-  const dialog = document.querySelector(arg.selector)?.closest('[role="dialog"], dialog');
-  if (!dialog) return null;
-  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-  const norm = v => String(v || '').trim().toLowerCase();
-  const buttons = [...dialog.querySelectorAll('button')].filter(visible);
-  const hits = buttons.filter(b =>
-    arg.labels.includes(norm(b.getAttribute('aria-label'))) ||
-    arg.labels.some(l => norm(b.getAttribute('aria-label')).startsWith(l)) ||
-    arg.labels.some(l => norm(b.innerText).startsWith(l)));
-  // Fall back to the first button that sits above the editor and shows a name.
-  const text = b => (b.innerText || '').replace(/\s+/g, ' ').trim();
-  return {
-    count: hits.length,
-    texts: hits.map(text).slice(0, 5),
-    all: buttons.slice(0, 12).map(b => ({
-      text: text(b).slice(0, 80),
-      label: (b.getAttribute('aria-label') || '').slice(0, 80),
-    })),
-  };
-}"""
-
-# Mark the author control for clicking; exactly one match or nothing happens.
+# Mark exactly one visible control, inside the dialog or on the page.
+# Returns what it saw when the match is not unique, so a failure measures.
 _MARK_JS = r"""(arg) => {
   document.querySelectorAll('[data-ext-company]').forEach(e => e.removeAttribute('data-ext-company'));
-  const root = arg.scope === 'dialog'
-    ? document.querySelector(arg.selector)?.closest('[role="dialog"], dialog')
-    : document;
-  if (!root) return {count: 0};
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-  const norm = v => String(v || '').trim().toLowerCase();
-  const nodes = [...root.querySelectorAll(arg.tagname || 'button')].filter(visible);
-  const hits = nodes.filter(b =>
-    arg.labels.some(l => norm(b.getAttribute('aria-label')) === l) ||
-    arg.words.some(w => norm(b.innerText) === w));
+  const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const dialog = document.querySelector('[role="dialog"], dialog');
+  const root = arg.scope === 'dialog' ? dialog : document;
+  if (!root) return {count: 0, no_dialog: true};
+  const sel = 'button, [role="button"], [role="menuitem"]';
+  const nodes = [...root.querySelectorAll(sel)].filter(visible);
+  const hits = nodes.filter(el =>
+    arg.labels.some(l => norm(el.getAttribute('aria-label')) === l) ||
+    arg.words.some(w => norm(el.innerText) === w));
   if (hits.length !== 1) {
     return {count: hits.length,
-            seen: nodes.slice(0, 15).map(b => ({
-              text: (b.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 60),
-              label: (b.getAttribute('aria-label') || '').slice(0, 60)}))};
+            seen: nodes.slice(0, 20).map(el => ({
+              text: norm(el.innerText).slice(0, 60),
+              label: norm(el.getAttribute('aria-label')).slice(0, 60)}))};
   }
   hits[0].setAttribute('data-ext-company', arg.tag);
   return {count: 1,
-          disabled: hits[0].disabled || hits[0].getAttribute('aria-disabled') === 'true'};
+          disabled: hits[0].disabled === true || hits[0].getAttribute('aria-disabled') === 'true'};
 }"""
 
-# Pick the page in the opened author list: an option whose text contains the
-# page name. Exactly one, otherwise nothing is clicked.
-_PICK_AUTHOR_JS = r"""(arg) => {
+# The author/audience button of the page composer, e.g. "MiViA Auf Alle posten".
+# Read, never clicked: opening the composer from the page's admin view already
+# makes the page the author.
+_AUTHOR_JS = r"""(arg) => {
+  const dialog = document.querySelector('[role="dialog"], dialog');
+  if (!dialog) return {ok: false, why: 'no_dialog'};
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-  const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
-  const want = norm(arg.name);
-  const options = [...document.querySelectorAll(
-      '[role="radio"], [role="option"], [role="menuitem"], [role="menuitemradio"], label')]
-    .filter(visible);
-  const hits = options.filter(o => norm(o.innerText).includes(want));
-  if (hits.length !== 1) {
-    return {count: hits.length,
-            seen: options.slice(0, 15).map(o => norm(o.innerText).slice(0, 60))};
-  }
-  hits[0].setAttribute('data-ext-company', 'author-option');
-  return {count: 1};
+  const norm = v => String(v || '').replace(/\s+/g, ' ').trim();
+  const buttons = [...dialog.querySelectorAll('button, [role="button"]')].filter(visible);
+  const texts = buttons.map(b => norm(b.innerText)).filter(Boolean);
+  const want = String(arg.name || '').toLowerCase();
+  return {ok: texts.some(t => t.toLowerCase().includes(want)), texts: texts.slice(0, 8)};
 }"""
 
-# Fill the schedule dialog: a date input and a time input. Values are set via
-# the native setter plus input/change so React picks them up.
+_WRITE_JS = r"""(arg) => {
+  const canon = v => String(v || '').replace(/[ \t ]*\n[\s ]*/g, '\n').trim();
+  const editor = document.querySelector(arg.selector);
+  if (!editor) return 'missing';
+  if (canon(editor.innerText)) return 'occupied';
+  editor.focus();
+  if (document.activeElement !== editor) return 'unfocused';
+  let ok = true;
+  arg.text.split('\n').forEach((line, index) => {
+    if (index > 0) ok = document.execCommand('insertParagraph', false) === true && ok;
+    if (line) ok = document.execCommand('insertText', false, line) === true && ok;
+  });
+  if (!ok) return 'unsupported';
+  return canon(editor.innerText) === canon(arg.text) ? 'written' : 'mismatch';
+}"""
+
+_CLEAR_JS = r"""(selector) => {
+  const editor = document.querySelector(selector);
+  if (!editor) return false;
+  editor.focus();
+  document.execCommand('selectAll', false);
+  document.execCommand('delete', false);
+  return !(editor.innerText || '').trim();
+}"""
+
+_MEDIA_PRESENT_JS = r"""(selector) => {
+  const dialog = document.querySelector(selector)?.closest('[role="dialog"], dialog');
+  if (!dialog) return 0;
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  return [...dialog.querySelectorAll('img, video')]
+      .filter(el => visible(el) && (el.width > 80 || el.videoWidth > 80)).length;
+}"""
+
 _SET_SCHEDULE_JS = r"""(arg) => {
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(visible);
@@ -212,23 +215,21 @@ _SET_SCHEDULE_JS = r"""(arg) => {
   if (!root) return {ok: false, why: 'no_dialog'};
   const inputs = [...root.querySelectorAll('input')].filter(visible);
   const setter = (el, v) => {
-    const proto = Object.getPrototypeOf(el);
-    const d = Object.getOwnPropertyDescriptor(proto, 'value');
+    const d = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
     if (d && d.set) d.set.call(el, v); else el.value = v;
     el.dispatchEvent(new Event('input', {bubbles: true}));
     el.dispatchEvent(new Event('change', {bubbles: true}));
   };
-  const byKind = k => inputs.find(i =>
-    (i.type || '').toLowerCase() === k ||
-    /date/i.test(i.getAttribute('aria-label') || '') && k === 'date' ||
-    /time|uhrzeit/i.test(i.getAttribute('aria-label') || '') && k === 'time');
-  const dateInput = byKind('date');
-  const timeInput = byKind('time');
+  const label = i => String(i.getAttribute('aria-label') || '').toLowerCase();
+  const dateInput = inputs.find(i => (i.type || '').toLowerCase() === 'date')
+                 || inputs.find(i => /datum|date/.test(label(i)));
+  const timeInput = inputs.find(i => (i.type || '').toLowerCase() === 'time')
+                 || inputs.find(i => /zeit|uhrzeit|time/.test(label(i)));
   if (!dateInput || !timeInput) {
     return {ok: false, why: 'inputs_missing',
-            seen: inputs.map(i => ({type: i.type,
-                                    label: (i.getAttribute('aria-label') || '').slice(0, 50),
-                                    value: i.value}))};
+            seen: inputs.slice(0, 10).map(i => ({type: i.type,
+                                                 label: label(i).slice(0, 50),
+                                                 value: i.value}))};
   }
   setter(dateInput, arg.date);
   setter(timeInput, arg.time);
@@ -236,11 +237,11 @@ _SET_SCHEDULE_JS = r"""(arg) => {
           date: dateInput.value, time: timeInput.value};
 }"""
 
-# After the schedule is accepted the composer shows it; read it back.
-_SCHEDULE_SUMMARY_JS = r"""(selector) => {
-  const dialog = document.querySelector(selector)?.closest('[role="dialog"], dialog');
-  if (!dialog) return '';
-  return (dialog.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+_DIALOG_TEXT_JS = r"""() => {
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(visible);
+  const root = dialogs[dialogs.length - 1];
+  return root ? (root.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 500) : '';
 }"""
 
 
@@ -263,91 +264,35 @@ class ExtCompanyPostComposer:
         words: list[str] | None = None,
         labels: list[str] | None = None,
         scope: str = "dialog",
-        tagname: str = "button",
     ) -> dict[str, Any]:
         return await self._page.evaluate(
             _MARK_JS,
-            {
-                "selector": _EDITOR,
-                "words": words or [],
-                "labels": labels or [],
-                "tag": tag,
-                "scope": scope,
-                "tagname": tagname,
-            },
+            {"words": words or [], "labels": labels or [], "tag": tag, "scope": scope},
         )
 
     async def _discard(self, result: dict[str, Any]) -> None:
         """Fail-safe cleanup; never raises, never clicks a publish button."""
         try:
-            arg = {
-                "close": _CLOSE_LABELS,
-                "discard": _DISCARD_WORDS,
-                "post": _POST_WORDS,
-                "discard_only": False,
-            }
-            steps = await self._page.evaluate(_DISCARD_JS, arg)
-            await asyncio.sleep(1.0)
-            second = await self._page.evaluate(_DISCARD_JS, {**arg, "discard_only": True})
-            if second != "nothing_to_close":
-                steps = f"{steps}+{second}"
-            result["cleanup"] = steps
-            await self._navigator._navigate_to_page(FEED_URL)
+            found = await self._mark("discard", labels=_DISCARD_LABELS)
+            if found.get("count") == 1:
+                await self._page.click('[data-ext-company="discard"]')
+                await asyncio.sleep(1.0)
+                # A discard prompt may appear; confirm it, never a post button.
+                again = await self._mark("discard2", words=["verwerfen", "discard"], scope="document")
+                if again.get("count") == 1:
+                    await self._page.click('[data-ext-company="discard2"]')
+                result["cleanup"] = "discarded"
+            else:
+                result["cleanup"] = "nothing_to_discard"
         except Exception as exc:  # noqa: BLE001 - cleanup must not raise
             result["cleanup_error"] = f"{type(exc).__name__}: {exc}"[:200]
 
-    async def _author_text(self) -> dict[str, Any] | None:
-        return await self._page.evaluate(
-            _AUTHOR_READ_JS, {"selector": _EDITOR, "labels": _AUTHOR_BUTTON_LABELS}
-        )
-
-    async def _switch_author(self, page_name: str, result: dict[str, Any]) -> bool:
-        """Switch the composer author to *page_name*; True only when verified."""
-        opener = await self._mark("author", labels=_AUTHOR_BUTTON_LABELS)
-        if opener.get("count") != 1:
-            result["status"] = "author_control_unavailable"
-            result["found"] = opener
-            result["message"] = (
-                "The author control of the share composer was not uniquely "
-                "identifiable; nothing was clicked."
-            )
-            return False
-        await self._page.click('[data-ext-company="author"]')
-        await self._session.delay(1.5)
-
-        picked = await self._page.evaluate(_PICK_AUTHOR_JS, {"name": page_name})
-        if picked.get("count") != 1:
-            result["status"] = "author_option_unavailable"
-            result["found"] = picked
-            result["message"] = (
-                f"No single author entry matching {page_name!r}. Is the member a "
-                "page admin? Nothing was clicked."
-            )
-            return False
-        await self._page.click('[data-ext-company="author-option"]')
-        await self._session.delay(1.5)
-
-        # Some locales need an explicit confirm in the author sheet.
-        confirm = await self._mark("author-done", words=_NEXT_WORDS, scope="document")
-        if confirm.get("count") == 1:
-            await self._page.click('[data-ext-company="author-done"]')
-            await self._session.delay(1.5)
-
-        shown = await self._author_text()
-        texts = " ".join((shown or {}).get("texts") or [])
-        if page_name.lower() not in texts.lower():
-            result["status"] = "author_not_confirmed"
-            result["author_shown"] = shown
-            result["message"] = (
-                f"The composer does not show {page_name!r} as author after the "
-                "switch; nothing was written."
-            )
-            return False
-        result["author"] = page_name
-        return True
+    async def _author_ok(self, page_name: str) -> dict[str, Any]:
+        return await self._page.evaluate(_AUTHOR_JS, {"name": page_name})
 
     async def create_company_post(
         self,
+        page_id: str,
         page_name: str,
         text: str,
         *,
@@ -356,8 +301,10 @@ class ExtCompanyPostComposer:
         scheduled_at: str | None,
         confirm: bool,
     ) -> dict[str, Any]:
+        url = ADMIN_POSTS_URL.format(page_id=page_id)
         result: dict[str, Any] = {
-            "url": SHARE_URL,
+            "url": url,
+            "page_id": page_id,
             "page": page_name,
             "mode": mode,
             "posted": False,
@@ -373,37 +320,59 @@ class ExtCompanyPostComposer:
                     "message": f"not an image file: {image}",
                 }
 
-        await self._navigator._navigate_to_page(SHARE_URL)
+        await self._navigator._navigate_to_page(url)
         await self._session.check_rate_limit()
+        await self._session.delay(3.0)
+
+        # 1. Open the page composer from the admin view. This is what makes the
+        #    page the author; there is no author switch to get wrong.
+        opener = await self._mark("start", words=_START_WORDS, scope="document")
+        if opener.get("count") != 1:
+            return {
+                **result,
+                "status": "composer_opener_unavailable",
+                "found": opener,
+                "message": "No single 'start a post' control on the page admin view. "
+                "Is the member still a page admin?",
+            }
+        await self._page.click('[data-ext-company="start"]')
+        await self._session.delay(3.0)
+
         try:
-            await self._page.wait_for_selector(_EDITOR, timeout=15_000)
+            await self._page.wait_for_selector(_EDITOR_IN_DIALOG, timeout=15_000)
         except Exception:
             return {
                 **result,
                 "status": "composer_unavailable",
-                "message": "share editor did not open",
+                "message": "the page composer did not open",
             }
 
-        leftover = await self._page.evaluate(_MEDIA_PRESENT_JS, _EDITOR)
+        # 2. Verify the author. Not switched -- verified.
+        author = await self._author_ok(page_name)
+        if not author.get("ok"):
+            result["status"] = "author_not_confirmed"
+            result["author_shown"] = author
+            result["message"] = (
+                f"The composer does not name {page_name!r}; nothing was written."
+            )
+            await self._discard(result)
+            return result
+        result["author"] = page_name
+
+        leftover = await self._page.evaluate(_MEDIA_PRESENT_JS, _EDITOR_IN_DIALOG)
         if leftover:
-            await self._navigator._navigate_to_page(FEED_URL)
-            return {
-                **result,
-                "status": "editor_has_media",
-                "attached": leftover,
-                "message": "The share composer already carries attached media "
-                "(a restored draft). Remove it in the browser first; nothing was written.",
-            }
-
-        # 1. Author first. Writing into a composer that still belongs to the
-        #    member and switching afterwards risks losing the text.
-        if not await self._switch_author(page_name, result):
+            result["status"] = "editor_has_media"
+            result["attached"] = leftover
+            result["message"] = (
+                "The composer already carries attached media (a restored draft). "
+                "Remove it in the browser first; nothing was written."
+            )
             await self._discard(result)
             return result
 
-        # 2. Text.
+        # 3. Text.
         written = await self._page.evaluate(
-            _WRITE_JS, {"selector": _EDITOR, "text": text}
+            _WRITE_JS, {"selector": _EDITOR_IN_DIALOG, "text": text}
         )
         if written != "written":
             result["status"] = "text_not_written"
@@ -411,8 +380,8 @@ class ExtCompanyPostComposer:
             await self._discard(result)
             return result
 
-        # 3. Image. A dry run never uploads: an attached image cannot be taken
-        #    out again and LinkedIn keeps it as a restored draft.
+        # 4. Image. A dry run never uploads: an attached image cannot be taken
+        #    out again and LinkedIn restores it as a draft.
         if image is not None:
             media = await self._mark("media", labels=_MEDIA_LABELS)
             if media.get("count") != 1:
@@ -424,11 +393,11 @@ class ExtCompanyPostComposer:
                 result["image"] = image.name
                 result["image_step"] = "not_uploaded_dry_run"
             else:
-                async with self._page.expect_file_chooser(timeout=10_000) as info:
+                async with self._page.expect_file_chooser(timeout=15_000) as info:
                     await self._page.click('[data-ext-company="media"]')
                 chooser = await info.value
                 await chooser.set_files(str(image))
-                await self._session.delay(5.0)
+                await self._session.delay(6.0)
                 nxt = await self._mark("media-next", words=_NEXT_WORDS, scope="document")
                 if nxt.get("count") == 1:
                     await self._page.click('[data-ext-company="media-next"]')
@@ -436,9 +405,9 @@ class ExtCompanyPostComposer:
                 result["image"] = image.name
                 result["image_step"] = "uploaded"
 
-        # 4. Schedule, when asked for.
+        # 5. Schedule.
         if mode == "schedule":
-            assert scheduled_at  # checked by check_schedule before we got here
+            assert scheduled_at  # guaranteed by check_schedule
             day, clock = scheduled_at.split(" ")
             opener = await self._mark("schedule", labels=_SCHEDULE_LABELS)
             if opener.get("count") != 1:
@@ -450,7 +419,7 @@ class ExtCompanyPostComposer:
                 result["schedule_step"] = "not_opened_dry_run"
             else:
                 await self._page.click('[data-ext-company="schedule"]')
-                await self._session.delay(1.5)
+                await self._session.delay(2.0)
                 filled = await self._page.evaluate(
                     _SET_SCHEDULE_JS, {"date": day, "time": clock}
                 )
@@ -469,7 +438,7 @@ class ExtCompanyPostComposer:
                     return result
                 await self._page.click('[data-ext-company="schedule-done"]')
                 await self._session.delay(2.0)
-                summary = await self._page.evaluate(_SCHEDULE_SUMMARY_JS, _EDITOR)
+                summary = await self._page.evaluate(_DIALOG_TEXT_JS)
                 result["composer_summary"] = summary
                 if clock not in summary:
                     result["status"] = "schedule_not_confirmed"
@@ -481,44 +450,42 @@ class ExtCompanyPostComposer:
                     return result
                 result["scheduled_at"] = scheduled_at
 
-        # 5. Dry run ends here: clear the text and leave.
+        # 6. Dry run ends here.
         if not confirm:
-            cleared = await self._page.evaluate(_CLEAR_JS, _EDITOR)
+            cleared = await self._page.evaluate(_CLEAR_JS, _EDITOR_IN_DIALOG)
             if not cleared:
                 logger.warning("create_company_post dry run: editor not cleared")
             await self._discard(result)
             return {**result, "status": "dry_run"}
 
-        # 6. The author is read once more: everything above could have
-        #    re-rendered the composer, and this is the last moment at which a
-        #    wrong author is still harmless.
-        shown = await self._author_text()
-        texts = " ".join((shown or {}).get("texts") or [])
-        if page_name.lower() not in texts.lower():
+        # 7. Last look at the author: everything above could have re-rendered
+        #    the dialog, and this is the last harmless moment.
+        author = await self._author_ok(page_name)
+        if not author.get("ok"):
             result["status"] = "author_lost"
-            result["author_shown"] = shown
+            result["author_shown"] = author
             result["message"] = (
-                "The composer no longer shows the page as author; nothing was published."
+                "The composer no longer names the page; nothing was published."
             )
             await self._discard(result)
             return result
 
-        # 7. Commit.
+        # 8. Commit.
         if mode == "draft":
-            close = await self._mark("close", labels=_CLOSE_LABELS)
+            close = await self._mark("close", labels=_DISCARD_LABELS)
             if close.get("count") != 1:
                 result["status"] = "close_unavailable"
                 result["found"] = close
                 return result
             await self._page.click('[data-ext-company="close"]')
-            await self._session.delay(1.5)
+            await self._session.delay(2.0)
             save = await self._mark("draft", words=_DRAFT_WORDS, scope="document")
             if save.get("count") != 1:
                 result["status"] = "draft_prompt_unavailable"
                 result["found"] = save
                 result["message"] = (
-                    "The discard/draft prompt did not offer a single save entry; "
-                    "the composer may still be open. Check the browser."
+                    "The close prompt offered no single save-as-draft entry; the "
+                    "composer may still be open. Check the browser."
                 )
                 return result
             self.clicked = True
@@ -540,10 +507,10 @@ class ExtCompanyPostComposer:
 
         self.clicked = True
         await self._page.click('[data-ext-company="post"]')
-        await self._session.delay(4.0)
+        await self._session.delay(5.0)
 
         gone = await self._page.evaluate(
-            "(s) => !document.querySelector(s)", _EDITOR
+            "(s) => !document.querySelector(s)", _EDITOR_IN_DIALOG
         )
         if mode == "schedule":
             status = "scheduled" if gone else "schedule_unconfirmed"

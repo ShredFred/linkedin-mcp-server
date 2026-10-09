@@ -43,7 +43,7 @@ def register_ext_composer_probe_tools(
     async def composer_probe(
         url: str,
         ctx: Context,
-        click_label: str | None = None,
+        click_labels: Annotated[list[str] | None, Field(max_length=4)] = None,
         limit: Annotated[int, Field(ge=1, le=200)] = 60,
     ) -> dict[str, Any]:
         """
@@ -51,23 +51,28 @@ def register_ext_composer_probe_tools(
         aria-label, text, componentkey, disabled state and whether the element
         sits inside a dialog. Read-only; nothing is typed anywhere.
 
-        Optionally opens one thing first: click_label is matched as the exact
-        aria-label or exact text of one visible control, and the click happens
-        only when exactly one matches. A label that could publish, send,
+        Optionally opens things first: each entry of click_labels is matched
+        as the exact aria-label or exact text of one visible control and
+        clicked in order, each only when exactly one matches. A sequence is
+        needed because a dialog is only reachable through the control that
+        opens it; at most four. A label that could publish, send,
         schedule, delete, follow, connect or apply is refused -- checked
         against the caller's label and against the element's own wording, so a
         renamed button cannot slip through.
 
         Args:
             url: A linkedin.com URL. Anything else is refused.
-            click_label: Exact aria-label or text of one control to open first.
+            click_labels: Exact aria-labels or texts to click, in order.
             limit: Maximum elements reported (default 60).
 
         Statuses: probed, click_target_not_unique (nothing clicked; the report
         is still returned so the right wording can be read off it),
         refused_click, invalid_input, pace_budget_spent, pace_lock_busy.
         """
-        bad = check_url(url) or check_click_label(click_label)
+        labels = list(click_labels or [])
+        bad = check_url(url)
+        for label in labels:
+            bad = bad or check_click_label(label)
         if bad:
             return bad
         refusal = _pace("page_read", tool="composer_probe")
@@ -76,5 +81,5 @@ def register_ext_composer_probe_tools(
         return await _run(
             ctx,
             "composer_probe",
-            lambda ex: _probe(ex).probe(url, click_label=click_label, limit=limit),
+            lambda ex: _probe(ex).probe(url, click_labels=labels, limit=limit),
         )

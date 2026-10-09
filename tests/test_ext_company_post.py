@@ -1,15 +1,18 @@
 """Fork extension: posting as a company page.
 
-The whole point of this module is that a *page* publishes, not the member. Two
-failure modes are worse than not posting at all, and both are tested here
-rather than hoped for:
+The whole point is that a *page* publishes, not the member. The design that
+makes that safe is the entry point: the composer is opened from the page's own
+admin view, so the page is the author by construction and this module only has
+to *verify* one -- measured on 2026-10-09, after the first attempt through the
+member composer at /feed/?shareActive=true found no author control at all.
 
-* the author switch silently does not take, and company content appears under
-  a private name -- caught before the text is written and again before the
-  commit click,
-* a schedule is half-accepted and LinkedIn publishes later without anyone
-  watching -- the time must be readable back in the composer or nothing is
-  clicked.
+Three failures would be worse than not posting, and each is tested:
+
+* the dialog does not name the page -- company content would appear under a
+  private name; caught before the text is written and again before the commit,
+* a schedule is half-accepted and LinkedIn publishes later with nobody
+  watching -- the time must read back out of the composer,
+* a control is missing and the code falls through to the publish button.
 """
 
 from __future__ import annotations
@@ -21,11 +24,14 @@ import pytest
 
 from linkedin_mcp_server.linkedin import ext_company_post as mod
 from linkedin_mcp_server.linkedin.ext_company_post import (
+    ADMIN_POSTS_URL,
     ExtCompanyPostComposer,
     check_mode,
+    check_page_id,
     check_schedule,
 )
 
+PAGE_ID = "81728804"
 PAGE = "MiViA"
 
 
@@ -34,29 +40,26 @@ class FakePage:
         self,
         *,
         author_texts: list[str] | None = None,
-        author_after_switch: list[str] | None = None,
+        author_after_write: list[str] | None = None,
         mark_counts: dict[str, int] | None = None,
-        pick_count: int = 1,
         schedule_ok: bool = True,
-        summary: str = "Geplant für 09.10.2026 13:30",
+        summary: str = "MiViA Geplant für 09.10.2026 14:30",
         leftover: int = 0,
         editor_gone: bool = True,
+        write: str = "written",
     ) -> None:
-        self.leftover = leftover
-        self.editor_gone = editor_gone
-        self.author_texts = author_texts if author_texts is not None else [PAGE]
-        self.author_after_switch = author_after_switch
+        self.author_texts = author_texts if author_texts is not None else [f"{PAGE} Auf Alle posten"]
+        self.author_after_write = author_after_write
         self.mark_counts = mark_counts or {}
-        self.pick_count = pick_count
         self.schedule_ok = schedule_ok
         self.summary = summary
+        self.leftover = leftover
+        self.editor_gone = editor_gone
+        self.write = write
         self.text = ""
         self.clicked: list[str] = []
         self.goto_urls: list[str] = []
         self._author_reads = 0
-
-    async def goto(self, url: str, **_: Any) -> None:
-        self.goto_urls.append(url)
 
     async def wait_for_selector(self, *_: Any, **__: Any) -> None:
         return None
@@ -67,38 +70,34 @@ class FakePage:
     async def evaluate(self, script: str, arg: Any = None) -> Any:
         if script is mod._MEDIA_PRESENT_JS:
             return self.leftover
-        if script is mod._AUTHOR_READ_JS:
+        if script is mod._AUTHOR_JS:
             self._author_reads += 1
             texts = self.author_texts
-            if self._author_reads > 1 and self.author_after_switch is not None:
-                texts = self.author_after_switch
-            return {"count": len(texts), "texts": texts, "all": []}
-        if script is mod._PICK_AUTHOR_JS:
-            return {"count": self.pick_count, "seen": []}
+            if self._author_reads > 1 and self.author_after_write is not None:
+                texts = self.author_after_write
+            want = str(arg["name"]).lower()
+            return {"ok": any(want in t.lower() for t in texts), "texts": texts}
         if script is mod._MARK_JS:
             tag = arg["tag"]
             return {"count": self.mark_counts.get(tag, 1), "disabled": False, "seen": []}
         if script is mod._SET_SCHEDULE_JS:
             return {"ok": self.schedule_ok, "date": arg["date"], "time": arg["time"]}
-        if script is mod._SCHEDULE_SUMMARY_JS:
+        if script is mod._DIALOG_TEXT_JS:
             return self.summary
         if script is mod._WRITE_JS:
-            self.text = arg["text"]
-            return "written"
+            if self.write == "written":
+                self.text = arg["text"]
+            return self.write
         if script is mod._CLEAR_JS:
             self.text = ""
             return True
-        if script is mod._DISCARD_JS:
-            return "closed"
         if script.startswith("(s) => !document.querySelector"):
-            # The composer closes when the commit went through; that is what
-            # separates "scheduled" from "schedule_unconfirmed".
             return self.editor_gone
         return ""
 
     @property
     def committed(self) -> bool:
-        """Did anything that publishes or saves get clicked?"""
+        """Did anything that publishes, schedules or saves get clicked?"""
         return any(
             s.endswith('"post"]') or s.endswith('"draft"]') for s in self.clicked
         )
@@ -127,18 +126,34 @@ def composer(page: FakePage) -> ExtCompanyPostComposer:
     return ExtCompanyPostComposer(FakeSession(page), FakeNavigator(page))  # type: ignore[arg-type]
 
 
+async def run(page: FakePage, **kw: Any) -> dict[str, Any]:
+    args: dict[str, Any] = {
+        "image_path": None,
+        "mode": "publish",
+        "scheduled_at": None,
+        "confirm": True,
+    }
+    args.update(kw)
+    return await composer(page).create_company_post(PAGE_ID, PAGE, "Text", **args)
+
+
 def soon(minutes: int) -> str:
     return (datetime.now().astimezone() + timedelta(minutes=minutes)).strftime(
         "%Y-%m-%d %H:%M"
     )
 
 
-# -- the guards that run before the browser is touched ------------------------
+# -- guards that run before the browser is touched ----------------------------
 
 
 def test_mode_must_be_one_of_the_three() -> None:
     assert check_mode("publish") is None
     assert check_mode("veroeffentlichen")["status"] == "invalid_input"
+
+
+def test_page_id_must_be_the_numeric_id() -> None:
+    assert check_page_id("81728804") is None
+    assert check_page_id("mivia")["field"] == "page_id"
 
 
 def test_a_schedule_in_the_past_is_refused_rather_than_sent_as_now() -> None:
@@ -157,18 +172,33 @@ def test_a_schedule_an_hour_out_passes() -> None:
 def test_schedule_needs_a_time_and_a_time_needs_schedule() -> None:
     assert check_schedule("schedule", None)["field"] == "scheduled_at"
     assert check_schedule("publish", soon(60))["field"] == "scheduled_at"
-    assert check_schedule("schedule", "09.10.2026 13:30")["field"] == "scheduled_at"
+    assert check_schedule("schedule", "09.10.2026 14:30")["field"] == "scheduled_at"
 
 
-# -- the author is the whole point --------------------------------------------
+# -- the entry point is what makes the page the author ------------------------
 
 
 @pytest.mark.asyncio
-async def test_without_a_confirmed_author_nothing_is_written_or_clicked() -> None:
-    page = FakePage(author_texts=["Frederik Stadler"])
-    result = await composer(page).create_company_post(
-        PAGE, "Text", image_path=None, mode="publish", scheduled_at=None, confirm=True
-    )
+async def test_the_composer_is_opened_from_the_page_admin_view() -> None:
+    page = FakePage()
+    await run(page, confirm=False)
+    assert page.goto_urls == [ADMIN_POSTS_URL.format(page_id=PAGE_ID)]
+    assert '[data-ext-company="start"]' in page.clicked
+
+
+@pytest.mark.asyncio
+async def test_without_the_opener_nothing_is_written_or_clicked() -> None:
+    page = FakePage(mark_counts={"start": 0})
+    result = await run(page)
+    assert result["status"] == "composer_opener_unavailable"
+    assert page.text == ""
+    assert not page.committed
+
+
+@pytest.mark.asyncio
+async def test_a_dialog_that_does_not_name_the_page_stops_before_the_text() -> None:
+    page = FakePage(author_texts=["Frederik Stadler Auf Alle posten"])
+    result = await run(page)
     assert result["status"] == "author_not_confirmed"
     assert result["posted"] is False
     assert page.text == ""
@@ -176,23 +206,12 @@ async def test_without_a_confirmed_author_nothing_is_written_or_clicked() -> Non
 
 
 @pytest.mark.asyncio
-async def test_an_ambiguous_author_entry_is_not_guessed() -> None:
-    page = FakePage(pick_count=2)
-    result = await composer(page).create_company_post(
-        PAGE, "Text", image_path=None, mode="publish", scheduled_at=None, confirm=True
-    )
-    assert result["status"] == "author_option_unavailable"
-    assert not page.committed
-
-
-@pytest.mark.asyncio
 async def test_an_author_lost_after_the_text_stops_before_the_commit() -> None:
-    # Confirmed during the switch, gone when re-read right before the click.
-    page = FakePage(author_texts=[PAGE], author_after_switch=["Frederik Stadler"])
-    page._author_reads = 0
-    result = await composer(page).create_company_post(
-        PAGE, "Text", image_path=None, mode="publish", scheduled_at=None, confirm=True
+    page = FakePage(
+        author_texts=[f"{PAGE} Auf Alle posten"],
+        author_after_write=["Frederik Stadler"],
     )
+    result = await run(page)
     assert result["status"] in {"author_not_confirmed", "author_lost"}
     assert not page.committed
 
@@ -203,14 +222,7 @@ async def test_an_author_lost_after_the_text_stops_before_the_commit() -> None:
 @pytest.mark.asyncio
 async def test_the_dry_run_writes_verifies_and_discards_without_uploading() -> None:
     page = FakePage()
-    result = await composer(page).create_company_post(
-        PAGE,
-        "Erste Zeile\n\nzweite",
-        image_path=None,
-        mode="publish",
-        scheduled_at=None,
-        confirm=False,
-    )
+    result = await run(page, confirm=False)
     assert result["status"] == "dry_run"
     assert result["author"] == PAGE
     assert page.text == ""  # cleared again
@@ -218,14 +230,30 @@ async def test_the_dry_run_writes_verifies_and_discards_without_uploading() -> N
 
 
 @pytest.mark.asyncio
-async def test_a_restored_draft_with_media_stops_before_the_author_switch() -> None:
+async def test_the_dry_run_does_not_upload_an_image() -> None:
+    page = FakePage()
+    result = await run(page, confirm=False, image_path=__file__)
+    # __file__ is not an image, so the guard fires first -- which is itself the
+    # point: an unusable path never reaches the browser.
+    assert result["status"] == "invalid_image"
+    assert not page.goto_urls
+
+
+@pytest.mark.asyncio
+async def test_a_restored_draft_with_media_stops_before_writing() -> None:
     page = FakePage(leftover=1)
-    result = await composer(page).create_company_post(
-        PAGE, "Text", image_path=None, mode="publish", scheduled_at=None, confirm=True
-    )
+    result = await run(page)
     assert result["status"] == "editor_has_media"
     assert page.text == ""
-    assert not page.clicked
+    assert not page.committed
+
+
+@pytest.mark.asyncio
+async def test_text_that_does_not_verify_stops_the_run() -> None:
+    page = FakePage(write="mismatch")
+    result = await run(page)
+    assert result["status"] == "text_not_written"
+    assert not page.committed
 
 
 # -- scheduling publishes later, so it must be read back ----------------------
@@ -233,15 +261,8 @@ async def test_a_restored_draft_with_media_stops_before_the_author_switch() -> N
 
 @pytest.mark.asyncio
 async def test_a_schedule_the_composer_does_not_show_is_not_committed() -> None:
-    page = FakePage(summary="Sofort veröffentlichen")
-    result = await composer(page).create_company_post(
-        PAGE,
-        "Text",
-        image_path=None,
-        mode="schedule",
-        scheduled_at="2026-10-09 13:30",
-        confirm=True,
-    )
+    page = FakePage(summary="MiViA Auf Alle posten")
+    result = await run(page, mode="schedule", scheduled_at="2026-10-09 14:30")
     assert result["status"] == "schedule_not_confirmed"
     assert result["posted"] is False
     assert not page.committed
@@ -249,33 +270,27 @@ async def test_a_schedule_the_composer_does_not_show_is_not_committed() -> None:
 
 @pytest.mark.asyncio
 async def test_a_confirmed_schedule_reports_scheduled_and_not_posted() -> None:
-    page = FakePage(summary="Geplant für 09.10.2026 13:30")
-    result = await composer(page).create_company_post(
-        PAGE,
-        "Text",
-        image_path=None,
-        mode="schedule",
-        scheduled_at="2026-10-09 13:30",
-        confirm=True,
-    )
+    page = FakePage(summary="MiViA Geplant für 09.10.2026 14:30")
+    result = await run(page, mode="schedule", scheduled_at="2026-10-09 14:30")
     assert result["status"] == "scheduled"
     # posted stays False: nothing is live yet, LinkedIn publishes later.
     assert result["posted"] is False
-    assert result["scheduled_at"] == "2026-10-09 13:30"
+    assert result["scheduled_at"] == "2026-10-09 14:30"
 
 
 @pytest.mark.asyncio
 async def test_a_missing_schedule_control_stops_instead_of_posting_now() -> None:
     page = FakePage(mark_counts={"schedule": 0})
-    result = await composer(page).create_company_post(
-        PAGE,
-        "Text",
-        image_path=None,
-        mode="schedule",
-        scheduled_at="2026-10-09 13:30",
-        confirm=True,
-    )
+    result = await run(page, mode="schedule", scheduled_at="2026-10-09 14:30")
     assert result["status"] == "schedule_control_unavailable"
+    assert not page.committed
+
+
+@pytest.mark.asyncio
+async def test_a_schedule_dialog_that_does_not_take_the_time_stops() -> None:
+    page = FakePage(schedule_ok=False)
+    result = await run(page, mode="schedule", scheduled_at="2026-10-09 14:30")
+    assert result["status"] == "schedule_not_filled"
     assert not page.committed
 
 
@@ -285,9 +300,7 @@ async def test_a_missing_schedule_control_stops_instead_of_posting_now() -> None
 @pytest.mark.asyncio
 async def test_a_draft_without_a_save_entry_does_not_fall_back_to_posting() -> None:
     page = FakePage(mark_counts={"draft": 0})
-    result = await composer(page).create_company_post(
-        PAGE, "Text", image_path=None, mode="draft", scheduled_at=None, confirm=True
-    )
+    result = await run(page, mode="draft")
     assert result["status"] == "draft_prompt_unavailable"
     assert result["posted"] is False
     assert not page.committed
@@ -296,8 +309,40 @@ async def test_a_draft_without_a_save_entry_does_not_fall_back_to_posting() -> N
 @pytest.mark.asyncio
 async def test_a_saved_draft_is_not_reported_as_posted() -> None:
     page = FakePage()
-    result = await composer(page).create_company_post(
-        PAGE, "Text", image_path=None, mode="draft", scheduled_at=None, confirm=True
-    )
+    result = await run(page, mode="draft")
     assert result["status"] == "draft_saved"
+    assert result["posted"] is False
+
+
+# -- publish -------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_publish_button_is_not_clicked() -> None:
+    page = FakePage()
+
+    async def evaluate(script: str, arg: Any = None) -> Any:
+        if script is mod._MARK_JS and arg["tag"] == "post":
+            return {"count": 1, "disabled": True}
+        return await FakePage.evaluate(page, script, arg)
+
+    page.evaluate = evaluate  # type: ignore[method-assign]
+    result = await run(page)
+    assert result["status"] == "post_button_disabled"
+    assert not page.committed
+
+
+@pytest.mark.asyncio
+async def test_a_published_post_that_closed_the_composer_is_reported_unverified() -> None:
+    page = FakePage(editor_gone=True)
+    result = await run(page)
+    assert result["status"] == "posted_unverified"
+    assert result["posted"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_composer_still_open_after_the_click_is_unconfirmed() -> None:
+    page = FakePage(editor_gone=False)
+    result = await run(page)
+    assert result["status"] == "post_unconfirmed"
     assert result["posted"] is False

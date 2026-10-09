@@ -16,7 +16,9 @@ It never publishes:
   look like a publish, send, schedule-confirm or delete control -- the refusal
   list is checked against the caller's label *and* against the element's own
   text, so a renamed button cannot slip through;
-* at most one click per call, and nothing is typed anywhere.
+* clicks happen only in the order the caller names, at most four per call,
+  and nothing is typed anywhere. A sequence is needed because a dialog can
+  only be reached through the control that opens it.
 
 The report is deliberately verbose: tag, role, aria-label, text, enabled state
 and whether the element sits inside a dialog. That is what distinguishes "the
@@ -141,35 +143,37 @@ class ExtComposerProbe:
         self,
         url: str,
         *,
-        click_label: str | None,
+        click_labels: list[str],
         limit: int,
     ) -> dict[str, Any]:
-        result: dict[str, Any] = {"url": url, "clicked": None}
+        result: dict[str, Any] = {"url": url, "clicked": []}
         await self._navigator._navigate_to_page(url)
         await self._session.check_rate_limit()
         await self._session.delay(3.0)
 
-        if click_label:
+        for label in click_labels:
             marked = await self._page.evaluate(
                 _MARK_BY_LABEL_JS,
-                {"label": click_label, "forbidden": list(FORBIDDEN_CLICK)},
+                {"label": label, "forbidden": list(FORBIDDEN_CLICK)},
             )
             if marked.get("refused"):
                 result["status"] = "refused_click"
+                result["stopped_at"] = label
                 result["message"] = (
                     f"The element's own wording contains {marked['refused']!r}; "
-                    "nothing was clicked."
+                    "it was not clicked."
                 )
                 result["elements"] = await self._page.evaluate(_REPORT_JS, limit)
                 return result
             if marked.get("count") != 1:
                 result["status"] = "click_target_not_unique"
+                result["stopped_at"] = label
                 result["matches"] = marked.get("count")
                 result["elements"] = await self._page.evaluate(_REPORT_JS, limit)
                 return result
             await self._page.click("[data-ext-probe]")
             await self._session.delay(3.0)
-            result["clicked"] = click_label
+            result["clicked"].append(label)
 
         result["status"] = "probed"
         result["current_url"] = self._page.url
