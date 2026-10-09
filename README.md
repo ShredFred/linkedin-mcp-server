@@ -32,7 +32,9 @@
 > **Added tools**
 >
 > - `comment_on_post` — Comment on a post.
+> - `composer_probe` — Report the visible interactive controls of a LinkedIn page: tag, role, aria-label, text, componentkey, disabled state and whether the element sits inside a dialog.
 > - `connect_with_person` — Without confirm_send=true this is a dry run only: nothing is sent.
+> - `create_company_post` — Compose a post authored by a company page the signed-in member administers.
 > - `create_post` — Compose a post on the signed-in member's personal profile.
 > - `delete_own_comment` — Delete one of your own comments under a post (comment_id: the numeric id from get_post_engagers, or urn:li:comment:(activity:A,C)).
 > - `delete_own_post` — Delete one of your own posts (post URL, activity URN or id; create_post returns activity_id).
@@ -72,6 +74,9 @@
 > - `send_message` text is stricter than upstream: besides tab and other control characters, CR (also as CRLF) and invisible or bidi control characters are refused; multi-line text uses upstream's paragraph path.
 > - Profile URLs are normalised in one place (`linkedin/ext_urls.py`): benign query keys by allowlist (`isSelfProfile=false`, `trk`, ...), no fragment, percent-decoded slug (umlauts), optional locale segment; the recipient stays pinned by its profile URN and anything else fails closed.
 > - `connect_with_person` reads the 2026 More menu: `pending` when the invitation is only shown there, Connect from the menu (`connect_via: more_menu`), and a distinct `follow_only` next to `connect_unavailable`.
+> - `create_post` keeps refusing `as_company` and points at `create_company_post`, which opens the composer from the page's own admin view (`/company/<id>/admin/page-posts/published/`). That makes the page the author by construction, so the fork verifies an author instead of switching one -- the member composer at `/feed/?shareActive=true` carries no author control at all (measured 2026-10-09).
+> - A dialog is identified by what it contains, never by its position: the composer is the dialog holding an editor *and* a commit button, the schedule dialog the one holding a date field. LinkedIn's messaging overlay is a `role="dialog"` with its own `role="textbox"`, so "first" and "last" both pick the wrong window.
+> - Scheduling picks the time from the quarter-hour list rather than typing it: the combobox reads a written value back and discards it on confirm (a 15:00 request became 14:45). A minute off the 15-minute grid is refused up front, and the composer must show the time back.
 > - Every fork tool answers a refusal or outcome with a `status` and names its statuses in its own description. Shared by all of them: `pace_budget_spent` (pacer budget spent; wait, see `pace_status`), `pace_lock_busy` (pacer lock held; nothing booked, retry shortly) and `ledger_corrupt` (the outreach ledger has an unreadable row; repair it, nothing was sent or booked). For write tools `unknown` and `unverified` mean the action may have happened: never retry, check the thread or post by hand. `tests/test_ext_r6_doku.py` keeps descriptions and code in step.
 >
 > **Safety model**
