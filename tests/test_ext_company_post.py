@@ -43,7 +43,9 @@ class FakePage:
         author_after_write: list[str] | None = None,
         mark_counts: dict[str, int] | None = None,
         schedule_ok: bool = True,
-        summary: str = "MiViA Geplant für 09.10.2026 14:30",
+        time_offered: int = 1,
+        time_taken: bool = True,
+        summary: str = "MiViA Veröffentlichung: Fr, 9. Okt. um 14:30 Bearbeiten Planen",
         leftover: int = 0,
         editor_gone: bool = True,
         write: str = "written",
@@ -52,6 +54,9 @@ class FakePage:
         self.author_after_write = author_after_write
         self.mark_counts = mark_counts or {}
         self.schedule_ok = schedule_ok
+        self.time_offered = time_offered
+        self.time_taken = time_taken
+        self.want_time = ""
         self.summary = summary
         self.leftover = leftover
         self.editor_gone = editor_gone
@@ -82,17 +87,22 @@ class FakePage:
             return {"count": self.mark_counts.get(tag, 1), "disabled": False, "seen": []}
         if script is mod._SET_SCHEDULE_JS:
             # The dialog learns its format from the pre-filled sample, so the
-            # call carries today's and the target's numbers, not strings.
+            # call carries today's and the target's numbers, not strings. The
+            # time is no longer written here; it is picked from the list.
             t = arg["target"]
-            wrote_time = f"{t['hh']:02d}:{t['mm']:02d}"
+            self.want_time = f"{t['hh']:02d}:{t['mm']:02d}"
             return {
                 "ok": self.schedule_ok,
                 "sample": "9.10.2026",
                 "wrote_date": f"{t['d']}.{t['m']}.{t['y']}",
-                "wrote_time": wrote_time,
+                "want_time": self.want_time,
                 "date": f"{t['d']}.{t['m']}.{t['y']}",
-                "time": wrote_time,
+                "time": "14:45",
             }
+        if script is mod._PICK_TIME_JS:
+            return {"count": self.time_offered, "seen": []}
+        if script is mod._TIME_VALUE_JS:
+            return self.want_time if self.time_taken else "14:45"
         if script is mod._DIALOG_TEXT_JS:
             return self.summary
         if script is mod._WRITE_JS:
@@ -149,9 +159,10 @@ async def run(page: FakePage, **kw: Any) -> dict[str, Any]:
 
 
 def soon(minutes: int) -> str:
-    return (datetime.now().astimezone() + timedelta(minutes=minutes)).strftime(
-        "%Y-%m-%d %H:%M"
-    )
+    """A time `minutes` ahead, snapped up to the next quarter hour."""
+    when = datetime.now().astimezone() + timedelta(minutes=minutes)
+    when += timedelta(minutes=(15 - when.minute % 15) % 15)
+    return when.replace(second=0, microsecond=0).strftime("%Y-%m-%d %H:%M")
 
 
 # -- guards that run before the browser is touched ----------------------------
@@ -168,12 +179,31 @@ def test_page_id_must_be_the_numeric_id() -> None:
 
 
 def test_a_schedule_in_the_past_is_refused_rather_than_sent_as_now() -> None:
-    past = (datetime.now().astimezone() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M")
+    past = (datetime.now().astimezone() - timedelta(hours=1)).replace(
+        minute=0, second=0, microsecond=0
+    ).strftime("%Y-%m-%d %H:%M")
     assert check_schedule("schedule", past)["status"] == "schedule_too_soon"
 
 
 def test_a_schedule_two_minutes_out_is_refused() -> None:
-    assert check_schedule("schedule", soon(2))["status"] == "schedule_too_soon"
+    two = (datetime.now().astimezone() + timedelta(minutes=2)).replace(
+        second=0, microsecond=0
+    )
+    two -= timedelta(minutes=two.minute % 15)
+    assert check_schedule(
+        "schedule", two.strftime("%Y-%m-%d %H:%M")
+    )["status"] == "schedule_too_soon"
+
+
+def test_a_time_off_the_quarter_hour_is_refused() -> None:
+    # LinkedIn offers quarter hours only; 14:37 would silently become another
+    # time, which is how a 15:00 request once became 14:45.
+    off = (datetime.now().astimezone() + timedelta(hours=2)).replace(
+        minute=37, second=0, microsecond=0
+    )
+    assert check_schedule(
+        "schedule", off.strftime("%Y-%m-%d %H:%M")
+    )["status"] == "schedule_off_grid"
 
 
 def test_a_schedule_an_hour_out_passes() -> None:
@@ -184,6 +214,24 @@ def test_schedule_needs_a_time_and_a_time_needs_schedule() -> None:
     assert check_schedule("schedule", None)["field"] == "scheduled_at"
     assert check_schedule("publish", soon(60))["field"] == "scheduled_at"
     assert check_schedule("schedule", "09.10.2026 14:30")["field"] == "scheduled_at"
+
+
+@pytest.mark.asyncio
+async def test_a_time_the_list_does_not_offer_is_not_scheduled() -> None:
+    page = FakePage(time_offered=0)
+    result = await run(page, mode="schedule", scheduled_at="2026-10-09 14:30")
+    assert result["status"] == "time_not_offered"
+    assert not page.committed
+
+
+@pytest.mark.asyncio
+async def test_a_time_the_field_does_not_take_is_not_scheduled() -> None:
+    # The exact failure of 2026-10-09: the field reads back something else.
+    page = FakePage(time_taken=False)
+    result = await run(page, mode="schedule", scheduled_at="2026-10-09 14:30")
+    assert result["status"] == "time_not_taken"
+    assert result["shown"] == "14:45"
+    assert not page.committed
 
 
 # -- the entry point is what makes the page the author ------------------------
@@ -281,7 +329,7 @@ async def test_a_schedule_the_composer_does_not_show_is_not_committed() -> None:
 
 @pytest.mark.asyncio
 async def test_a_confirmed_schedule_reports_scheduled_and_not_posted() -> None:
-    page = FakePage(summary="MiViA Geplant für 09.10.2026 14:30")
+    page = FakePage(summary="MiViA Veröffentlichung: Fr, 9. Okt. um 14:30 Planen")
     result = await run(page, mode="schedule", scheduled_at="2026-10-09 14:30")
     assert result["status"] == "scheduled"
     # posted stays False: nothing is live yet, LinkedIn publishes later.

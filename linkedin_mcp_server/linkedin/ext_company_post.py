@@ -64,6 +64,14 @@ _SCHEDULE_COMMIT_WORDS = ["planen", "schedule"]
 # commit button. Both wordings count, because the button renames itself to
 # "Planen" once a time is set.
 COMPOSER_WORDS = ["posten", "post", "veröffentlichen", "publish", "planen", "schedule"]
+# The time is a combobox over a quarter-hour list. Writing into it looks
+# like it works -- the field reads the new value -- and the component
+# throws it away on confirm, which is how a 15:00 request became 14:45.
+# So the time is picked from the list instead of typed.
+_EXPAND_TIME_LABELS = [
+    "zeitauswahl erweitern",
+    "expand time selection",
+]
 _DISCARD_LABELS = ["verwerfen", "discard", "schließen", "close", "dismiss"]
 _DRAFT_WORDS = [
     "als entwurf speichern",
@@ -127,6 +135,12 @@ def check_schedule(mode: str, scheduled_at: str | None) -> dict[str, Any] | None
             "status": "invalid_input",
             "field": "scheduled_at",
             "message": "scheduled_at must read 'YYYY-MM-DD HH:MM' (local time).",
+        }
+    if when.minute % 15:
+        return {
+            "status": "schedule_off_grid",
+            "message": "LinkedIn offers quarter hours only; "
+            f"{scheduled_at} is not on the 15-minute grid.",
         }
     ahead = (when - datetime.now().astimezone()).total_seconds()
     if ahead < 300:
@@ -337,11 +351,34 @@ _SET_SCHEDULE_JS = r"""(arg) => {
     el.dispatchEvent(new Event('input', {bubbles: true}));
     el.dispatchEvent(new Event('change', {bubbles: true}));
   };
-  setter(dateInput, wantDate);
-  setter(timeInput, wantTime);
-  return {ok: dateInput.value === wantDate && timeInput.value === wantTime,
-          sample: sample, wrote_date: wantDate, wrote_time: wantTime,
+  if (dateInput.value !== wantDate) setter(dateInput, wantDate);
+  return {ok: dateInput.value === wantDate,
+          sample: sample, wrote_date: wantDate, want_time: wantTime,
           date: dateInput.value, time: timeInput.value};
+}"""
+
+# Mark the quarter-hour entry of the opened time list.
+_PICK_TIME_JS = r"""(arg) => {
+  document.querySelectorAll('[data-ext-time]').forEach(e => e.removeAttribute('data-ext-time'));
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const want = norm(arg.time);
+  const options = [...document.querySelectorAll('[role="option"]')].filter(visible);
+  const hits = options.filter(o => norm(o.innerText) === want);
+  if (hits.length !== 1) {
+    return {count: hits.length,
+            seen: options.slice(0, 12).map(o => norm(o.innerText))};
+  }
+  hits[0].setAttribute('data-ext-time', '1');
+  return {count: 1};
+}"""
+
+_TIME_VALUE_JS = r"""() => {
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const label = i => String(i.getAttribute('aria-label') || '').toLowerCase();
+  const input = [...document.querySelectorAll('input')].filter(visible)
+      .find(i => /zeit|uhrzeit|time/.test(label(i)));
+  return input ? input.value : '';
 }"""
 
 _DIALOG_TEXT_JS = r"""(arg) => {
@@ -500,19 +537,12 @@ class ExtCompanyPostComposer:
             await self._discard(result)
             return result
 
-        # 3. Text.
-        written = await self._page.evaluate(
-            _WRITE_JS, {"selector": _EDITOR_IN_DIALOG, "text": text}
-        )
-        if written != "written":
-            result["status"] = "text_not_written"
-            result["write"] = written
-            await self._discard(result)
-            return result
-
-        # 4. Schedule -- before the image on purpose: the image editor is
-        #    the one step that leaves a second dialog open, and every later
-        #    lookup would have to disambiguate it.
+        # 4. Schedule -- before the image and before the text. The image
+        #    editor leaves a second dialog open, and the schedule dialog
+        #    re-renders the composer, which drops text written through
+        #    execCommand: measured on 2026-10-09, the composer came back
+        #    showing its placeholder. So the text goes in last, right before
+        #    the commit, where nothing re-renders after it.
         if mode == "schedule":
             assert scheduled_at  # guaranteed by check_schedule
             day, clock = scheduled_at.split(" ")
@@ -548,6 +578,42 @@ class ExtCompanyPostComposer:
                     result["found"] = filled
                     await self._discard(result)
                     return result
+                result["schedule_date"] = filled.get("wrote_date")
+
+                # The time is chosen from the quarter-hour list. Typing into
+                # the combobox reads back correctly and is discarded on
+                # confirm -- that is how a 15:00 request became 14:45.
+                want_time = filled.get("want_time") or clock
+                expand = await self._mark(
+                    "time-expand", labels=_EXPAND_TIME_LABELS, anchor="input",
+                    anchor_words=_SCHEDULE_NEXT_WORDS,
+                )
+                if expand.get("count") != 1:
+                    result["status"] = "time_list_unavailable"
+                    result["found"] = expand
+                    await self._discard(result)
+                    return result
+                await self._page.click('[data-ext-company="time-expand"]')
+                await self._session.delay(1.5)
+                picked = await self._page.evaluate(_PICK_TIME_JS, {"time": want_time})
+                if picked.get("count") != 1:
+                    result["status"] = "time_not_offered"
+                    result["found"] = picked
+                    result["message"] = (
+                        f"{want_time} is not among the offered quarter hours; "
+                        "nothing was scheduled."
+                    )
+                    await self._discard(result)
+                    return result
+                await self._page.click("[data-ext-time]")
+                await self._session.delay(1.5)
+                now_time = await self._page.evaluate(_TIME_VALUE_JS)
+                if now_time != want_time:
+                    result["status"] = "time_not_taken"
+                    result["shown"] = now_time
+                    await self._discard(result)
+                    return result
+
                 done = await self._mark(
                     "schedule-done",
                     words=_SCHEDULE_NEXT_WORDS,
@@ -565,12 +631,11 @@ class ExtCompanyPostComposer:
                     _DIALOG_TEXT_JS, {"commit_words": COMPOSER_WORDS}
                 )
                 result["composer_summary"] = summary
-                shown = [clock, filled.get("wrote_time") or clock]
-                if not any(s in summary for s in shown if s):
+                if want_time not in summary:
                     result["status"] = "schedule_not_confirmed"
                     result["message"] = (
-                        f"The composer does not show {clock} after the schedule "
-                        "dialog; nothing was published."
+                        f"The composer does not show {want_time} after the "
+                        "schedule dialog; nothing was published."
                     )
                     await self._discard(result)
                     return result
@@ -608,6 +673,17 @@ class ExtCompanyPostComposer:
                 await self._session.delay(2.0)
                 result["image"] = image.name
                 result["image_step"] = "uploaded"
+
+        # 5b. Text last: every step above re-renders the composer, and a
+        #     re-render drops what execCommand wrote.
+        written = await self._page.evaluate(
+            _WRITE_JS, {"selector": _EDITOR_IN_DIALOG, "text": text}
+        )
+        if written != "written":
+            result["status"] = "text_not_written"
+            result["write"] = written
+            await self._discard(result)
+            return result
 
         # 6. Dry run ends here.
         if not confirm:

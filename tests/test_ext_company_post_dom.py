@@ -59,6 +59,12 @@ SCHEDULE = """
   <input type="text" aria-label="Date" value="DATEVALUE">
   <input type="text" role="combobox" aria-label="Time" value="TIMEVALUE">
   <button aria-label="Zeitauswahl erweitern"></button>
+  <ul>
+    <li role="option">14:45</li>
+    <li role="option">15:00</li>
+    <li role="option">15:15</li>
+    <li role="option">15:30</li>
+  </ul>
   <button>Alle geplanten Beiträge anzeigen</button>
   <button>Zurück</button>
   <button>Weiter</button>
@@ -203,14 +209,14 @@ async def test_german_sample_keeps_the_german_layout(page):
     got = await write_schedule(page, "9.10.2026", "14:00", TARGET_TODAY)
     assert got["ok"] is True
     assert got["wrote_date"] == "9.10.2026"
-    assert got["wrote_time"] == "14:30"
+    assert got["want_time"] == "14:30"
 
 
 async def test_german_sample_renders_another_day_the_same_way(page):
     got = await write_schedule(page, "9.10.2026", "14:00", TARGET_OTHER)
     assert got["ok"] is True
     assert got["wrote_date"] == "3.11.2026"
-    assert got["wrote_time"] == "09:05"
+    assert got["want_time"] == "09:05"
 
 
 async def test_a_padded_german_sample_stays_padded(page):
@@ -223,7 +229,7 @@ async def test_a_us_sample_gets_month_first(page):
     got = await write_schedule(page, "10/9/2026", "2:00 PM", TARGET_OTHER)
     assert got["ok"] is True
     assert got["wrote_date"] == "11/3/2026"
-    assert got["wrote_time"] == "9:05 AM"
+    assert got["want_time"] == "9:05 AM"
 
 
 async def test_an_iso_sample_stays_iso(page):
@@ -235,7 +241,7 @@ async def test_an_iso_sample_stays_iso(page):
 async def test_a_twelve_hour_sample_in_the_afternoon(page):
     got = await write_schedule(page, "9.10.2026", "2:00 PM", TARGET_TODAY)
     assert got["ok"] is True
-    assert got["wrote_time"] == "2:30 PM"
+    assert got["want_time"] == "2:30 PM"
 
 
 async def test_the_schedule_dialog_is_found_past_the_chat_overlay(page):
@@ -270,3 +276,34 @@ async def test_the_confirm_button_of_the_schedule_dialog_is_its_own(page):
     assert got["count"] == 1
     where = await dialog_of(page, "schedule-done")
     assert where == "schedule"
+
+
+# -- the time is picked from the list, never typed -----------------------------
+
+
+async def test_the_wanted_quarter_hour_is_marked(page):
+    await set_page(page, schedule=("9.10.2026", "14:45"))
+    got = await page.evaluate(cp._PICK_TIME_JS, {"time": "15:00"})
+    assert got["count"] == 1
+    text = await page.evaluate('() => document.querySelector("[data-ext-time]").innerText')
+    assert text.strip() == "15:00"
+
+
+async def test_a_time_outside_the_list_marks_nothing(page):
+    await set_page(page, schedule=("9.10.2026", "14:45"))
+    got = await page.evaluate(cp._PICK_TIME_JS, {"time": "15:07"})
+    assert got["count"] == 0
+    assert "14:45" in got["seen"]
+    marked = await page.evaluate('() => !!document.querySelector("[data-ext-time]")')
+    assert marked is False
+
+
+async def test_the_time_field_is_read_back_from_the_dialog(page):
+    await set_page(page, schedule=("9.10.2026", "14:45"))
+    assert await page.evaluate(cp._TIME_VALUE_JS) == "14:45"
+
+
+async def test_the_date_is_not_rewritten_when_it_already_matches(page):
+    got = await write_schedule(page, "9.10.2026", "14:45", TARGET_TODAY)
+    assert got["ok"] is True
+    assert got["wrote_date"] == "9.10.2026"
