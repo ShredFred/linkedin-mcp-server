@@ -746,9 +746,18 @@ def register_ext_stage2_tools(
         ctx: Context,
         confirm: bool = False,
         reply_to: str | None = None,
+        mentions: list[dict[str, str]] | None = None,
+        mention_check: str = "warn",
+        as_company: str | None = None,
     ) -> dict[str, Any]:
         """
-        Comment on a post. Dry run by default: the comment editor is filled,
+        Comment on a post. Mentions as in create_post (mentions list or
+        [[Name|slug]] markup; measured 2026-10-09: the comment box is the
+        same editor as the member composer, so a suggestion is picked by its
+        identifier and read back). Not for replies (mention_not_supported_here).
+        as_company: commenting as a page is not built -- answered with
+        comment_identity_switch_unmeasured (no "Kommentieren als" control was
+        found on the measured member post). Dry run by default: the comment editor is filled,
         compared with the text and cleared again; nothing is posted. With
         confirm=true one comment is posted and read back. Never use in a loop:
         each comment needs its own approval, and the same text is refused for a
@@ -785,6 +794,26 @@ def register_ext_stage2_tools(
         deadline before the submit click, text released) or unknown
         (retry_safe=false, may be live: check the post, never comment again).
         """
+        if as_company:
+            return {
+                "status": "comment_identity_switch_unmeasured",
+                "posted": False,
+                "message": "Commenting as a company page is not built yet: the "
+                "identity switch was not found on the measured post page.",
+            }
+        from linkedin_mcp_server.linkedin.ext_mentions import plain_text, prepare_text
+
+        segments, mention_info, bad = prepare_text(text, mentions, mention_check)
+        if bad:
+            return {"posted": False, **mention_info, **bad}
+        has_mentions = any(k == "mention" for k, _ in segments)
+        if has_mentions and reply_to is not None:
+            return {
+                "status": "mention_not_supported_here",
+                "posted": False,
+                "message": "Mentions are written in top-level comments only.",
+            }
+        text = plain_text(segments)
         # Same checks as a message: LinkedIn counts UTF-16 units (an emoji is
         # two), and an invisible control (zero-width, bidi override) makes the
         # read-back compare a text the reader never sees.
@@ -912,6 +941,8 @@ def register_ext_stage2_tools(
             async def write(actions: ExtActions, go: bool) -> dict[str, Any]:
                 if target:
                     return await actions.reply(activity_id, target, text, go)
+                if has_mentions:
+                    return await actions.comment(activity_id, text, go, segments=segments)
                 return await actions.comment(activity_id, text, go)
 
             if not confirm:

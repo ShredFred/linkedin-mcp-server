@@ -45,16 +45,16 @@ class FakePage:
     async def click(self, selector: str) -> None:
         self.clicked.append(selector)
 
-    async def evaluate(self, script: str, arg: Any = None) -> Any:
+    async def evaluate(self, script: str, arg: Any = None, **_: Any) -> Any:
         if script is ext_post._MEDIA_PRESENT_JS:
             return self.leftover
         if script is ext_post._ACTIVITY_URN_JS:
             if self.urn is None:
                 return None
             return {"urn": self.urn, "matched": True, "newest": self.newest}
-        if script is ext_post._WRITE_JS:
-            self.text = arg["text"]
-            return "written"
+        handled, value = mention_writer_script(self, script, arg)
+        if handled:
+            return value
         if script is ext_post._CLEAR_JS:
             self.text = ""
             return True
@@ -194,7 +194,7 @@ class ImagePage(FakePage):
 
         return _Ctx()
 
-    async def evaluate(self, script: str, arg: Any = None) -> Any:
+    async def evaluate(self, script: str, arg: Any = None, **_: Any) -> Any:
         if script is ext_post._DISCARD_JS:
             assert "posten" in arg["post"]
             if self.discard_raises:
@@ -260,3 +260,28 @@ async def test_composer_lost_after_image_discards_and_tolerates_cleanup_error(
     assert "dialog gone" in result["cleanup_error"]
     assert result["posted"] is False
     assert '[data-ext-target="post"]' not in page.clicked
+
+
+def mention_writer_script(page: Any, script: str, arg: Any) -> tuple[bool, Any]:
+    """Answer the shared writer's scripts on a fake page (plain text only)."""
+    from linkedin_mcp_server.linkedin import ext_mentions as em
+
+    if script is em._PREP_JS:
+        if arg.get("clear"):
+            page.text = ""
+        if arg.get("require_empty") and page.text:
+            return True, "occupied"
+        return True, "ok"
+    if script is em._ENGINE_JS:
+        return True, "tiptap"
+    if script is em._INSERT_JS:
+        outcome = getattr(page, "write", "written")
+        if outcome != "written":
+            return True, outcome
+        page.text += arg["text"]
+        return True, "ok"
+    if script is em._STATE_JS:
+        return True, {"text": page.text, "pending": False}
+    if script is em._ENTITIES_JS:
+        return True, []
+    return False, None

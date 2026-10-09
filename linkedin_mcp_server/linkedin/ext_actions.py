@@ -590,7 +590,11 @@ class ExtActions(ExtNetworkReader):
     # -- comments ------------------------------------------------------------
 
     async def comment(
-        self, activity_id: str, text: str, confirm: bool = False
+        self,
+        activity_id: str,
+        text: str,
+        confirm: bool = False,
+        segments: list[Any] | None = None,
     ) -> dict[str, Any]:
         await self._goto(
             f"https://www.linkedin.com/feed/update/urn:li:activity:{activity_id}/"
@@ -600,6 +604,8 @@ class ExtActions(ExtNetworkReader):
             return {"status": "no_editor", "posted": False}
         self.comment_submitted = False
         try:
+            if segments:
+                return await self._comment_typed(editor, text, confirm, segments)
             return await self._comment_typed(editor, text, confirm)
         except BaseException:
             # Typed text left in the editor would be prepended to the next
@@ -618,9 +624,26 @@ class ExtActions(ExtNetworkReader):
             logger.debug("Escape failed", exc_info=True)
 
     async def _comment_typed(
-        self, editor: Any, text: str, confirm: bool
+        self, editor: Any, text: str, confirm: bool, segments: list[Any] | None = None
     ) -> dict[str, Any]:
-        await self._insert_text(editor, text)
+        if segments:
+            # Mentions: the shared write routine (ext_mentions), the same one
+            # the post composers use; the comment box is the measured tiptap
+            # editor (2026-10-09).
+            from linkedin_mcp_server.linkedin.ext_mentions import MentionWriter
+
+            await editor.evaluate("el => el.setAttribute('data-ext-comment-editor', '1')")
+            wrote = await MentionWriter(
+                self._page, '[data-ext-comment-editor="1"]'
+            ).write(segments)
+            if wrote["status"] != "written":
+                await self._clear(editor)
+                return {
+                    **{k: v for k, v in wrote.items() if k != "mentions"},
+                    "posted": False,
+                }
+        else:
+            await self._insert_text(editor, text)
         typed = _canon(await editor.inner_text())
         submit = await editor.evaluate(_COMMENT_SUBMIT_JS)
         if typed != _canon(text) or submit is None or submit["disabled"]:

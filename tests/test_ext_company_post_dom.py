@@ -174,10 +174,12 @@ async def test_a_composer_whose_button_reads_planen_is_still_the_composer(page):
 
 async def test_text_is_written_into_the_composer_editor(page):
     await set_page(page)
-    out = await page.evaluate(
-        cp._WRITE_JS, {"selector": cp._EDITOR_IN_DIALOG, "text": "Erste Zeile\n\nzweite"}
+    from linkedin_mcp_server.linkedin.ext_mentions import MentionWriter
+
+    out = await MentionWriter(page, cp._EDITOR_IN_DIALOG).write(
+        [("text", "Erste Zeile\n\nzweite")]
     )
-    assert out == "written"
+    assert out["status"] == "written", out
     body = await page.evaluate(
         '() => document.querySelector("#composer [role=textbox]").innerText'
     )

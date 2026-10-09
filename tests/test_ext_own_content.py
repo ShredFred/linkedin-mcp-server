@@ -96,7 +96,23 @@ class _Page:
     def _next(seq):
         return seq.pop(0) if len(seq) > 1 else (seq[0] if seq else None)
 
-    async def evaluate(self, js, arg=None):
+    async def evaluate(self, js, arg=None, **_):
+        from linkedin_mcp_server.linkedin import ext_mentions as em
+
+        # The shared write routine (plain text): clear, insert, read back.
+        if js is em._PREP_JS:
+            if arg.get("clear"):
+                self.typed = ""
+            return "ok"
+        if js is em._ENGINE_JS:
+            return "tiptap"
+        if js is em._INSERT_JS:
+            self.typed += arg["text"] if self.type_ok else "verstümmelt"
+            return "ok"
+        if js is em._STATE_JS:
+            return {"text": self.typed, "pending": False}
+        if js is em._ENTITIES_JS:
+            return []
         if js is oc._POST_CARD_JS:
             return self._next(self.posts)
         if js is oc._COMMENT_CARD_JS:

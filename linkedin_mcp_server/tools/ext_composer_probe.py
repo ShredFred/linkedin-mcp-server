@@ -47,6 +47,7 @@ def register_ext_composer_probe_tools(
         click_labels: Annotated[list[str] | None, Field(max_length=4)] = None,
         limit: Annotated[int, Field(ge=1, le=200)] = 60,
         type_mention: str | None = None,
+        pick_option: Annotated[int | None, Field(ge=0, le=11)] = None,
     ) -> dict[str, Any]:
         """
         Report the visible interactive controls of a LinkedIn page: tag, role,
@@ -71,6 +72,9 @@ def register_ext_composer_probe_tools(
                 the typeahead list is reported in three snapshots (0.3/1.3/
                 3.8 s), then the editor is cleared and the composer
                 discarded. Nothing is ever published.
+            pick_option: With type_mention: click the suggestion at this
+                position (0-based) and report the editor's entity markup.
+                Measurement only; the composer is cleared and discarded.
 
         Statuses: probed, click_target_not_unique (nothing clicked; the report
         is still returned so the right wording can be read off it),
@@ -90,6 +94,7 @@ def register_ext_composer_probe_tools(
             ctx,
             "composer_probe",
             lambda ex: _probe(ex).probe(
-                url, click_labels=labels, limit=limit, type_mention=type_mention
+                url, click_labels=labels, limit=limit, type_mention=type_mention,
+                pick_option=pick_option,
             ),
         )

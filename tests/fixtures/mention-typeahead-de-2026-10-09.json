@@ -1,0 +1,94 @@
+{
+  "_about": "Measured 2026-10-09 with composer_probe(type_mention='@<first name>', pick_option=...) on the German interface, anonymised: names, headlines, ids and image URLs are invented placeholders; structure, attributes, roles, classes and wording are as measured. English interface: not measured (the account language was not switched).",
+  "member_composer": {
+    "entry": "/feed/?shareActive=true",
+    "engine": "tiptap (ProseMirror); editor div[contenteditable][role=textbox][componentkey=ShareBox_textEditor], class 'tiptap ProseMirror'; the DOM node carries the tiptap instance as .editor (main world only)",
+    "typed_decoration": "<span data-decoration-id=\"id_1\" class=\"suggestion\">@Max</span>",
+    "status": {
+      "role": "status",
+      "aria-live": "polite",
+      "aria-atomic": "true",
+      "text": "13 Vorschläge verfügbar, verwenden Sie zum Navigieren die Auf- und Ab-Pfeiltasten"
+    },
+    "listbox": {
+      "role": "listbox",
+      "data-testid": "typeahead-results-container",
+      "aria-label": "Vorschläge für Erwähnungen"
+    },
+    "results_wrapper": {
+      "componentkey": "MentionDefault_TypeaheadResults_<opaque>",
+      "id": "MentionDefault_TypeaheadResults_<opaque>"
+    },
+    "option": {
+      "role": "option",
+      "id": "_r_8h_",
+      "aria-selected": "false",
+      "inner": "div[role=button][tabindex=-1] > figure[aria-hidden] (svg#person-accent-4 | svg#company-accent-4, img) + p(title) + p(subtitle)"
+    },
+    "option_identity": "no DOM attribute; React prop id='mentionTypeahead_display_<entityID>' on the option subtree; entityID = profile id 'ACoAA...' for a person, numeric organisation id for a company",
+    "subtitle_person": "1. · <headline>  (degree '1.', '2.', '3.')",
+    "subtitle_company": "Firma · <industry>",
+    "loading": "the first snapshot (0.3 s) still listed results for a shorter prefix; the list settled by 1.0 s and was identical at 3.5 s",
+    "visible_options": 12,
+    "inserted_entity_html": "<span data-allow-partial-delete=\"true\" data-type=\"mention\" contenteditable=\"false\"><strong>Max Platzhalter</strong></span>",
+    "inserted_entity_doc": {
+      "type": "mention",
+      "attrs": {
+        "id": null,
+        "label": null,
+        "entityID": "ACoAAPLATZHALTER000000000000000000000001",
+        "allowPartialDelete": true
+      }
+    },
+    "inserted_company_doc": {
+      "type": "mention",
+      "attrs": {
+        "id": null,
+        "label": null,
+        "entityID": "1000001",
+        "allowPartialDelete": false
+      }
+    },
+    "trailing_space_after_entity": false
+  },
+  "page_composer": {
+    "entry": "/company/<page id>/admin/page-posts/published/ -> 'Beitrag beginnen'",
+    "engine": "Quill; editor div.ql-editor[contenteditable][aria-label='Texteditor zum Erstellen von Inhalten'] plus a hidden div.ql-clipboard[contenteditable] (0x1 px) in the same dialog",
+    "status": {
+      "class": "a11y-text",
+      "role": "status",
+      "aria-live": "polite",
+      "aria-label": "14 Vorschläge für „Max“ gefunden. Verwenden Sie zum Navigieren die Auf- und Ab-Tasten."
+    },
+    "status_timing": "absent at 0.3 s, present from 1.0 s; it names the query",
+    "fetch_wrapper": {
+      "class": "editor-typeahead-fetch"
+    },
+    "listbox": {
+      "class": "basic-typeahead__triggered-content editor-typeahead__typeahead-tray",
+      "role": "listbox",
+      "tabindex": "-1",
+      "id": "triggered-expanded-ember405"
+    },
+    "option": {
+      "role": "option",
+      "id": "basic-result-u9ny8s",
+      "class": "basic-typeahead__selectable editor-typeahead__typeahead-item",
+      "aria-selected": "false"
+    },
+    "option_inner": "div.search-typeahead-v2__hit > span.search-typeahead-v2__hit-info > span.search-typeahead-v2__hit-text (title) + span.search-typeahead-v2__hit-subtext (subtitle)",
+    "option_identity": "none before the click (Ember; no attribute, no framework props)",
+    "subtitle_person": "3.+ · <headline>",
+    "inserted_entity_html": "<a class=\"ql-mention\" href=\"#\" data-entity-urn=\"urn:li:fsd_profile:ACoAAPLATZHALTER000000000000000000000001\" data-guid=\"0\" data-object-urn=\"urn:li:member:100000001\" data-original-text=\"Max Platzhalter\" spellcheck=\"false\" data-test-ql-mention=\"true\">Max Platzhalter</a>",
+    "close_prompt_buttons": [
+      "Verwerfen",
+      "Als Entwurf speichern"
+    ]
+  },
+  "comment_editor": {
+    "entry": "/feed/update/urn:li:activity:<id>/",
+    "engine": "tiptap, same as member_composer; div[contenteditable][role=textbox][aria-label='Texteditor zum Erstellen von Kommentaren'], not inside a dialog",
+    "option_identity": "same React prop id='mentionTypeahead_display_<entityID>'",
+    "identity_switch": "no 'Kommentieren als' / 'Comment as' control on a member's post (measured on a colleague's post); a page's post not measured"
+  }
+}

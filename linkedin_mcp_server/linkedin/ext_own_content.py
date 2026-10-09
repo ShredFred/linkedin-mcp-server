@@ -39,6 +39,13 @@ from linkedin_mcp_server.linkedin.ext_engagement import (
     split_comment_lines,
 )
 from linkedin_mcp_server.linkedin.ext_inmail import canon, strip_edit_marker
+from linkedin_mcp_server.linkedin.ext_mentions import (
+    MentionWriter,
+    Segment,
+    mentions_of,
+    plain_text,
+    resolve_targets,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +113,20 @@ def same_member(href: str | None, own_slug: str | None) -> bool:
     """True only when the link points at exactly the signed-in member."""
     got = slug_of(href)
     return bool(got and own_slug and got == own_slug.strip().lower())
+
+
+def company_of(href: str | None) -> str | None:
+    """Lower-cased company slug or id of a company link; None otherwise."""
+    ref = parse_person_ref(href if isinstance(href, str) else "")
+    if ref.get("kind") != "company":
+        return None
+    return unquote(str(ref["id"])).strip().lower() or None
+
+
+def same_company(href: str | None, company: str | None) -> bool:
+    """True only when the link points at exactly the named company page."""
+    got = company_of(href)
+    return bool(got and company and got == company.strip().lower())
 
 
 def text_matches(read: str | None, expected: str) -> bool:
@@ -295,21 +316,6 @@ _EDITOR_PICK_JS = (
 }"""
 )
 
-_REPLACE_EDITOR_JS = r"""(el, text) => {
-  el.focus();
-  const sel = window.getSelection();
-  const range = document.createRange();
-  range.selectNodeContents(el);
-  sel.removeAllRanges(); sel.addRange(range);
-  document.execCommand('delete', false);
-  let ok = true;
-  text.split('\n').forEach((line, i) => {
-    if (i) ok = document.execCommand('insertParagraph', false) && ok;
-    if (line) ok = document.execCommand('insertText', false, line) && ok;
-  });
-  return ok;
-}"""
-
 # State of the page after navigating to a deleted post: its main text and how
 # many feed cards it still renders. The gone wording only counts on a page that
 # shows no card at all -- a feed or a sidebar quoting "nicht verfügbar" is not
@@ -402,9 +408,16 @@ class ExtOwnContent(ExtActions):
 
     # -- shared steps ------------------------------------------------------------
 
-    async def _locate(self, activity_id: str, comment_id: str | None) -> dict[str, Any]:
-        """Owner check and card read; ``{"status": "ok", ...}`` or a refusal."""
-        own = await self.own_slug()
+    async def _locate(
+        self, activity_id: str, comment_id: str | None, as_company: str | None = None
+    ) -> dict[str, Any]:
+        """Owner check and card read; ``{"status": "ok", ...}`` or a refusal.
+
+        ``as_company`` (slug or numeric id, as the post card links it): the
+        post must be authored by that page instead of the member. Whether the
+        member may edit it is LinkedIn's decision; the menu answers it.
+        """
+        own = as_company.strip().lower() if as_company else await self.own_slug()
         if not own:
             return {"status": "own_identity_unknown"}
         await self._post_page(activity_id)
@@ -417,10 +430,17 @@ class ExtOwnContent(ExtActions):
             authors = {slug_of(h) or h for h in (post.get("actor_hrefs") or []) if h}
             if len(authors) > 1:
                 return {"status": "author_ambiguous", "authors": sorted(authors)}
-            if not same_member(post["actor_href"], own):
+            mine = (
+                same_company(post["actor_href"], own)
+                if as_company
+                else same_member(post["actor_href"], own)
+            )
+            if not mine:
                 return {
                     "status": "not_own_post",
-                    "author": slug_of(post["actor_href"]) or post["actor_href"],
+                    "author": slug_of(post["actor_href"])
+                    or company_of(post["actor_href"])
+                    or post["actor_href"],
                 }
             if post.get("menu_count") != 1:
                 return {
@@ -605,21 +625,35 @@ class ExtOwnContent(ExtActions):
         new_text: str,
         *,
         confirm: bool,
+        segments: list[Segment] | None = None,
+        as_company: str | None = None,
     ) -> dict[str, Any]:
-        """Edit an own post (comment_id None) or an own comment."""
+        """Edit an own post (comment_id None) or an own comment.
+
+        ``segments`` carries mentions (ext_mentions): they are typed through
+        the typeahead like in create_post, never written as plain text.
+        """
         self.clicked = False
         what = "comment" if comment_id else "post"
+        segments = segments if segments is not None else [("text", new_text)]
+        new_text = plain_text(segments)
         base: dict[str, Any] = {"target": what, "done": False}
-        found = await self._locate(activity_id, comment_id)
+        wanted = mentions_of(segments)
+        if wanted:
+            unresolved = await resolve_targets(self._page, self._goto, wanted)
+            if unresolved:
+                return {**base, **unresolved}
+            base["mentions"] = [m.describe() for m in wanted]
+        found = await self._locate(activity_id, comment_id, as_company)
         if found["status"] != "ok":
             return {**base, **found}
         old = found.get("text")
         base["old_text"] = old
-        if old is not None and text_matches(old, new_text):
+        if old is not None and text_matches(old, new_text) and not wanted:
             return {**base, "status": "unchanged"}
         try:
             return await self._edit_clicks(
-                activity_id, comment_id, new_text, old, base, confirm
+                activity_id, comment_id, new_text, old, base, confirm, segments
             )
         except BaseException:
             # Never leave a menu or a half-typed editor behind on the shared
@@ -636,16 +670,23 @@ class ExtOwnContent(ExtActions):
         old: str | None,
         base: dict[str, Any],
         confirm: bool,
+        segments: list[Segment] | None = None,
     ) -> dict[str, Any]:
+        segments = segments if segments is not None else [("text", new_text)]
         words = EDIT_COMMENT_WORDS if comment_id else EDIT_POST_WORDS
         entry = await self._open_menu_entry(
             "comment-menu" if comment_id else "post-menu", words
         )
         if entry["status"] != "ok":
             return {**base, **entry}
-        if not confirm:
+        if not confirm and not mentions_of(segments):
             await self._escape()
-            return {**base, "status": "dry_run", "menu": entry["menu"]}
+            return {
+                **base,
+                "status": "dry_run",
+                "menu": entry["menu"],
+                "would_write": new_text,
+            }
         await self._tagged("entry").click()
         await self._wait(1.0, 2.0)
         picked = await self._pick(
@@ -663,12 +704,27 @@ class ExtOwnContent(ExtActions):
                 "prefilled": canon(picked.get("text") or "")[:200],
             }
         editor = self._tagged("editor")
-        inserted = await editor.evaluate(_REPLACE_EDITOR_JS, new_text)
+        # The shared write routine (also create_post / create_company_post):
+        # clear, then text by execCommand and mentions by typeahead.
+        wrote = await MentionWriter(self._page, f'[{_ATTR}="editor"]').write(
+            segments, clear=True
+        )
         await self._wait(0.8, 1.4)
         typed = await editor.inner_text()
-        if not inserted or canon(typed) != canon(new_text):
+        if wrote["status"].startswith("mention"):
+            await self._abort_edit(scope)
+            return {**base, **{k: v for k, v in wrote.items() if k != "mentions"}}
+        if wrote["status"] != "written" or canon(typed) != canon(new_text):
             await self._abort_edit(scope)
             return {**base, "status": "editor_mismatch", "typed": canon(typed)[:200]}
+        if wrote.get("mentions"):
+            base["mentions_written"] = wrote["mentions"]
+        if not confirm:
+            # A dry run with mentions opens the editor, because only the
+            # typeahead can tell whether a mention resolves; it leaves
+            # through cancel/discard and never reaches the save button.
+            await self._abort_edit(scope)
+            return {**base, "status": "dry_run", "would_write": new_text}
         save = await self._pick(
             _BUTTON_PICK_JS, {"scope": scope, "words": SAVE_WORDS, "tag": "save"}
         )

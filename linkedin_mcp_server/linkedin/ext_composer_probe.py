@@ -117,9 +117,26 @@ def check_type_mention(value: str | None) -> dict[str, Any] | None:
 _MARK_EDITOR_JS = r"""() => {
   document.querySelectorAll('[data-ext-probe-editor]').forEach(e => e.removeAttribute('data-ext-probe-editor'));
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  // The composer is the dialog with a commit button; the messaging overlay is
+  // a dialog with a textbox too (measured 2026-10-09 on the page admin view).
+  const commit = ['posten', 'post', 'planen', 'schedule'];
+  const composer = d => [...d.querySelectorAll('button')].filter(visible)
+      .some(b => commit.includes(norm(b.innerText)));
   const hits = [...document.querySelectorAll('[role="dialog"] [contenteditable="true"], dialog [contenteditable="true"]')]
-      .filter(visible).filter((e, _, all) => !all.some(o => o !== e && o.contains(e)));
-  if (hits.length !== 1) return {count: hits.length};
+      .filter(visible).filter(e => !e.classList.contains('ql-clipboard'))
+      .filter(e => composer(e.closest('[role="dialog"], dialog')))
+      .filter((e, _, all) => !all.some(o => o !== e && o.contains(e)));
+  if (!hits.length) {
+    // No composer dialog: the one visible comment editor of a post page.
+    const loose = [...document.querySelectorAll('[contenteditable="true"][role="textbox"]')]
+        .filter(visible).filter(e => !e.closest('[role="dialog"], dialog'));
+    if (loose.length === 1) hits.push(loose[0]);
+  }
+  if (hits.length !== 1) return {count: hits.length, seen: hits.map(e => ({
+      label: e.getAttribute('aria-label') || '', componentkey: e.getAttribute('componentkey') || '',
+      cls: String(e.className || '').slice(0, 60), w: e.offsetWidth, h: e.offsetHeight,
+      dialog: (e.closest('[role="dialog"], dialog').innerText || '').slice(0, 80)}))};
   hits[0].setAttribute('data-ext-probe-editor', '1');
   hits[0].focus();
   return {count: 1, componentkey: hits[0].getAttribute('componentkey') || '',
@@ -156,6 +173,79 @@ _TYPEAHEAD_REPORT_JS = r"""() => {
           editor_html: editor ? editor.innerHTML.slice(0, 1500) : null};
 }"""
 
+# Tag one suggestion by position, for the measurement of the entity it
+# inserts. The probe never decides anything with it.
+_TAG_OPTION_JS = r"""(index) => {
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const opts = [...document.querySelectorAll('[role="listbox"] [role="option"]')].filter(visible);
+  if (!opts[index]) return false;
+  opts[index].setAttribute('data-ext-probe-option', '1');
+  return true;
+}"""
+
+_IDS_JS = r"""
+  const mcpIds = (root) => {
+    const found = new Set();
+    const seen = new WeakSet();
+    const re = /urn:li:(?!digitalmediaAsset)[A-Za-z_]+:[A-Za-z0-9_-]+|\/(?:in|company)\/[A-Za-z0-9%_.-]+|ACoAA[A-Za-z0-9_-]{20,}/g;
+    const walk = (v, depth) => {
+      if (v == null || depth > 7 || found.size > 20) return;
+      if (typeof v === 'string') { (v.match(re) || []).forEach(m => found.add(m)); return; }
+      if (typeof v === 'number') return;
+      if (typeof v !== 'object' || seen.has(v)) return;
+      if (v instanceof Node || typeof v === 'function') return;
+      seen.add(v);
+      for (const k of Object.keys(v).slice(0, 60)) {
+        if (k === 'children' || k === '_owner' || k.startsWith('_')) continue;
+        try {
+          const x = v[k];
+          if (/entity|urn|^id$|companyid|organization/i.test(k) && (typeof x === 'string' || typeof x === 'number')) found.add(k + '=' + x);
+          walk(x, depth + 1);
+        } catch (e) {}
+      }
+    };
+    for (const el of [root, ...root.querySelectorAll('*')].slice(0, 40)) {
+      for (const k of Object.keys(el)) {
+        if (k.startsWith('__reactProps')) walk(el[k], 0);
+        if (k.startsWith('__reactFiber')) {
+          let f = el[k];
+          for (let i = 0; f && i < 25; i++, f = f.return) walk(f.memoizedProps, 0);
+        }
+      }
+    }
+    return [...found];
+  };
+"""
+
+_OPTION_IDS_JS = "() => {" + _IDS_JS + r"""
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  return [...document.querySelectorAll('[role="listbox"] [role="option"]')].filter(visible)
+      .slice(0, 12).map(o => ({title: (o.innerText || '').split('\n')[0], ids: mcpIds(o)}));
+}"""
+
+_EDITOR_STATE_JS = r"""() => {
+  const editor = document.querySelector('[data-ext-probe-editor]');
+  if (!editor) return null;
+  const attrs = el => Object.fromEntries([...el.attributes]
+      .map(a => [a.name, String(a.value).slice(0, 200)]));
+  let doc = null;
+  try { doc = editor.editor && editor.editor.getJSON ? JSON.stringify(editor.editor.getJSON()).slice(0, 3000) : null; } catch (e) { doc = 'error: ' + e; }
+  let pm = null;
+  try { pm = editor.pmViewDesc && editor.pmViewDesc.node ? JSON.stringify(editor.pmViewDesc.node.toJSON()).slice(0, 3000) : null; } catch (e) { pm = 'error: ' + e; }
+  return {html: editor.innerHTML.slice(0, 3000), text: editor.innerText, tiptap: doc, pm: pm,
+          editor_keys: Object.keys(editor).slice(0, 20),
+          nodes: [...editor.querySelectorAll('*')].filter(e => e.attributes.length)
+              .slice(0, 20).map(e => ({tag: e.tagName.toLowerCase(), attrs: attrs(e),
+                                       text: (e.innerText || '').slice(0, 80)}))};
+}"""
+
+_DIALOG_BUTTONS_JS = r"""() => {
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  return [...document.querySelectorAll('[role="dialog"], [role="alertdialog"], dialog')].filter(visible)
+      .map(d => [...d.querySelectorAll('button')].filter(visible)
+          .map(b => ((b.getAttribute('aria-label') || '') + ' | ' + (b.innerText || '').trim()).slice(0, 80)));
+}"""
+
 _PROBE_CLEAR_JS = r"""() => {
   const editor = document.querySelector('[data-ext-probe-editor]');
   if (!editor) return 'no_editor';
@@ -169,7 +259,7 @@ _PROBE_CLEAR_JS = r"""() => {
 _PROBE_DISCARD_JS = r"""(arg) => {
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
-  const buttons = [...document.querySelectorAll('[role="dialog"] button, dialog button')].filter(visible);
+  const buttons = [...document.querySelectorAll('[role="dialog"] button, [role="alertdialog"] button, dialog button')].filter(visible);
   const own = b => norm(b.getAttribute('aria-label')) + ' ' + norm(b.innerText);
   const safe = b => !arg.forbidden.some(w => own(b).split(/\s+/).includes(w));
   const hit = buttons.filter(b => safe(b) && (arg.close.includes(norm(b.getAttribute('aria-label')))
@@ -234,6 +324,7 @@ class ExtComposerProbe:
         click_labels: list[str],
         limit: int,
         type_mention: str | None = None,
+        pick_option: int | None = None,
     ) -> dict[str, Any]:
         result: dict[str, Any] = {"url": url, "clicked": []}
         await self._navigator._navigate_to_page(url)
@@ -265,14 +356,18 @@ class ExtComposerProbe:
             result["clicked"].append(label)
 
         if type_mention:
-            result["typeahead"] = await self._measure_typeahead(type_mention)
+            result["typeahead"] = await self._measure_typeahead(
+                type_mention, pick_option
+            )
 
         result["status"] = "probed"
         result["current_url"] = self._page.url
         result["elements"] = await self._page.evaluate(_REPORT_JS, limit)
         return result
 
-    async def _measure_typeahead(self, text: str) -> dict[str, Any]:
+    async def _measure_typeahead(
+        self, text: str, pick_option: int | None = None
+    ) -> dict[str, Any]:
         out: dict[str, Any] = {"typed": text}
         editor = await self._page.evaluate(_MARK_EDITOR_JS)
         out["editor"] = editor
@@ -291,10 +386,23 @@ class ExtComposerProbe:
                     {"after_s": wait, **await self._page.evaluate(_TYPEAHEAD_REPORT_JS)}
                 )
             out["snapshots"] = snaps
+            out["option_ids"] = await self._page.evaluate(
+                _OPTION_IDS_JS, isolated_context=False
+            )
+            if pick_option is not None:
+                if await self._page.evaluate(_TAG_OPTION_JS, pick_option):
+                    await self._page.click("[data-ext-probe-option]")
+                    await asyncio.sleep(1.0)
+                    out["after_pick"] = await self._page.evaluate(
+                        _EDITOR_STATE_JS, isolated_context=False
+                    )
+                else:
+                    out["after_pick"] = "option_missing"
             out["status"] = "measured"
         finally:
             try:
-                await self._page.keyboard.press("Escape")
+                # No Escape: measured 2026-10-09, it is not needed to leave
+                # the list and the clear below must still find the editor.
                 out["clear"] = await self._page.evaluate(_PROBE_CLEAR_JS)
                 arg = {
                     "close": ["schließen", "close", "dismiss", "verwerfen", "discard"],
@@ -304,8 +412,11 @@ class ExtComposerProbe:
                 }
                 first = await self._page.evaluate(_PROBE_DISCARD_JS, arg)
                 await asyncio.sleep(1.0)
+                out["dialogs_after_close"] = await self._page.evaluate(_DIALOG_BUTTONS_JS)
                 second = await self._page.evaluate(_PROBE_DISCARD_JS, arg)
                 out["cleanup"] = f"{first}+{second}"
+                await asyncio.sleep(1.0)
+                out["dialogs_at_end"] = await self._page.evaluate(_DIALOG_BUTTONS_JS)
             except Exception as exc:  # noqa: BLE001 - cleanup must not raise
                 out["cleanup_error"] = f"{type(exc).__name__}: {exc}"[:200]
         return out

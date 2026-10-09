@@ -35,11 +35,11 @@
 > - `composer_probe` — Report the visible interactive controls of a LinkedIn page: tag, role, aria-label, text, componentkey, disabled state and whether the element sits inside a dialog.
 > - `connect_with_person` — Without confirm_send=true this is a dry run only: nothing is sent.
 > - `create_company_post` — Compose a post authored by a company page the signed-in member administers.
-> - `create_post` — Compose a post on the signed-in member's personal profile.
+> - `create_post` — Compose a post on the signed-in member's personal profile (or, with as_company, on a company page the member administers).
 > - `delete_own_comment` — Delete one of your own comments under a post (comment_id: the numeric id from get_post_engagers, or urn:li:comment:(activity:A,C)).
 > - `delete_own_post` — Delete one of your own posts (post URL, activity URN or id; create_post returns activity_id).
 > - `edit_own_comment` — Replace the text of one of your own comments.
-> - `edit_own_post` — Replace the text of one of your own posts.
+> - `edit_own_post` — Replace the text of one of your own posts -- or, with as_company (the page slug or numeric id the post card links), of a post authored by a company page you administer.
 > - `edit_sent_message` — Edit one of your own sent messages in a thread (URL or thread id).
 > - `find_events` — Find LinkedIn events by keyword (event search, upcoming only) and by organiser page (company slug; its "Events" tab, upcoming and with include_past also past ones).
 > - `follow_up_list` — Who answered which ledger message, and who is due for a follow-up.

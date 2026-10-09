@@ -13,15 +13,18 @@ and the page is the louder of the two.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta
 from typing import Annotated, Any
+from urllib.parse import unquote
 
 from fastmcp import Context, FastMCP
 from pydantic import Field
 
 from linkedin_mcp_server import ext_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
+from linkedin_mcp_server.linkedin.ext_mentions import plain_text, prepare_text
 from linkedin_mcp_server.linkedin.ext_company_post import (
     ExtCompanyPostComposer,
     check_mode,
@@ -77,6 +80,8 @@ def register_ext_company_post_tools(
         confirm: bool = False,
         image_path: str | None = None,
         scheduled_at: str | None = None,
+        mentions: list[dict[str, str]] | None = None,
+        mention_check: str = "warn",
     ) -> dict[str, Any]:
         """
         Compose a post authored by a company page the signed-in member
@@ -102,6 +107,11 @@ def register_ext_company_post_tools(
             image_path: Optional local image file to attach.
             scheduled_at: "YYYY-MM-DD HH:MM" local time; only with
                 mode=schedule, at least 5 minutes ahead and at most 90 days.
+            mentions / mention_check: as in create_post. The page composer
+                (Quill) shows no identifier in its suggestions, so exactly
+                one namesake may be inserted and its target is read back
+                before anything is committed; two namesakes stop with
+                mention_ambiguous.
 
         Returns the composer result. Statuses that did something:
         draft_saved, scheduled (time confirmed in the composer),
@@ -119,125 +129,209 @@ def register_ext_company_post_tools(
         invalid_text, schedule_too_soon, schedule_too_far, duplicate_text,
         pace_budget_spent, pace_lock_busy.
         """
-        bad = (
-            check_page_id(page_id)
-            or check_mode(mode)
-            or check_schedule(mode, scheduled_at)
+        page_ref, bad = parse_company_ref(page_id)
+        if bad or not page_ref.isdigit():
+            bad = check_page_id(page_id)
+            if bad:
+                return {"posted": False, **bad}
+        return await run_company_post(
+            ctx,
+            page_ref,
+            page_name,
+            text,
+            image_path=image_path,
+            mode=mode,
+            scheduled_at=scheduled_at,
+            confirm=confirm,
+            mentions=mentions,
+            mention_check=mention_check,
         )
+
+
+def parse_company_ref(value: str) -> tuple[str, dict[str, Any] | None]:
+    """Numeric page id or company slug from an id, URL, URN or slug."""
+    raw = unquote(str(value or "").strip())
+    m = re.search(r"linkedin\.com/company/([^/?#]+)", raw, re.IGNORECASE)
+    if m:
+        raw = m.group(1)
+    m = re.fullmatch(r"urn:li:(?:fsd_company|organization|company):(\d+)", raw)
+    if m:
+        raw = m.group(1)
+    if raw.isdigit() or re.fullmatch(r"[A-Za-z0-9%._~-]{2,100}", raw):
+        return raw.lower(), None
+    return "", {
+        "status": "invalid_input",
+        "field": "as_company",
+        "message": "A company page id, URL, URN or slug.",
+    }
+
+
+def _warn(info: dict[str, Any]) -> dict[str, Any]:
+    return {"plaintext_names": info["plaintext_names"]} if info.get("plaintext_names") else {}
+
+
+async def run_company_post(
+    ctx: Context,
+    page_ref: str,
+    page_name: str,
+    text: str,
+    *,
+    image_path: str | None,
+    mode: str,
+    scheduled_at: str | None,
+    confirm: bool,
+    mentions: list[dict[str, str]] | None = None,
+    mention_check: str = "warn",
+    tool: str = "create_company_post",
+) -> dict[str, Any]:
+    """The company post flow, shared by create_company_post and
+    create_post(as_company=...): checks, ledger, pacer, composer."""
+    bad = (
+        check_mode(mode)
+        or check_schedule(mode, scheduled_at)
+    )
+    if bad:
+        return {"posted": False, **bad}
+    if not page_name.strip():
+        return {
+            "status": "invalid_input",
+            "field": "page_name",
+            "posted": False,
+        }
+    segments, mention_info, bad = prepare_text(text, mentions, mention_check)
+    if bad:
+        return {"posted": False, **mention_info, **bad}
+    text = plain_text(segments)
+    extra: dict[str, Any] = (
+        {"segments": segments} if any(k == "mention" for k, _ in segments) else {}
+    )
+    if not text.strip() or any(
+        (ord(c) < 32 and c != "\n") or _hidden_format_char(c) for c in text
+    ):
+        return {
+            "status": "invalid_text",
+            "posted": False,
+            "message": "Text must be non-empty and contain no control characters other than LF.",
+        }
+    if _utf16_len(text) > 3000:
+        return {
+            "status": "invalid_text",
+            "posted": False,
+            "message": "LinkedIn posts are limited to 3000 characters.",
+        }
+
+    ledger = outreach.Ledger.default()
+    sha = outreach.text_sha(text)
+
+    def repeat() -> dict[str, Any] | None:
+        since = datetime.now().astimezone() - timedelta(days=POST_REPEAT_DAYS)
+        return next(
+            (
+                r
+                for r in ledger.latest_by_attempt().values()
+                if r.get("kind") == "post"
+                and sha in outreach.row_text_shas(r)
+                and r.get("status") in _POST_REPEAT_BLOCKING
+                and outreach.counted_time(r) >= since
+            ),
+            None,
+        )
+
+    previous = repeat()
+    if previous:
+        return {"status": "duplicate_text", "posted": False, "previous": previous}
+
+    async def _page_id(composer: ExtCompanyPostComposer) -> tuple[str | None, dict[str, Any] | None]:
+        if page_ref.isdigit():
+            return page_ref, None
+        resolved = await composer.resolve_page_id(page_ref)
+        if resolved.get("status") != "ok":
+            return None, {"posted": False, **resolved}
+        return str(resolved["page_id"]), None
+
+    async def _dry(ex: Any) -> dict[str, Any]:
+        composer = _composer(ex)
+        pid, bad = await _page_id(composer)
         if bad:
-            return {"posted": False, **bad}
-        if not page_name.strip():
-            return {
-                "status": "invalid_input",
-                "field": "page_name",
-                "posted": False,
-            }
-        if not text.strip() or any(
-            (ord(c) < 32 and c != "\n") or _hidden_format_char(c) for c in text
-        ):
-            return {
-                "status": "invalid_text",
-                "posted": False,
-                "message": "Text must be non-empty and contain no control characters other than LF.",
-            }
-        if _utf16_len(text) > 3000:
-            return {
-                "status": "invalid_text",
-                "posted": False,
-                "message": "LinkedIn posts are limited to 3000 characters.",
-            }
+            return bad
+        out = await composer.create_company_post(
+            pid,
+            page_name,
+            text,
+            image_path=image_path,
+            mode=mode,
+            scheduled_at=scheduled_at,
+            confirm=False,
+            **extra,
+        )
+        return {**out, **_warn(mention_info)}
 
-        ledger = outreach.Ledger.default()
-        sha = outreach.text_sha(text)
+    if not confirm:
+        return await _run(
+            ctx,
+            tool,
+            lambda ex: _dry(ex),
+        )
 
-        def repeat() -> dict[str, Any] | None:
-            since = datetime.now().astimezone() - timedelta(days=POST_REPEAT_DAYS)
-            return next(
-                (
-                    r
-                    for r in ledger.latest_by_attempt().values()
-                    if r.get("kind") == "post"
-                    and sha in outreach.row_text_shas(r)
-                    and r.get("status") in _POST_REPEAT_BLOCKING
-                    and outreach.counted_time(r) >= since
-                ),
-                None,
+    refusal = _peek("post")
+    if refusal:
+        return {"posted": False, **refusal}
+
+    async def body(ex: Any) -> dict[str, Any]:
+        composer = _composer(ex)
+        page_id, bad = await _page_id(composer)
+        if bad:
+            return bad
+        attempt = uuid.uuid4().hex
+        refused = _book_attempt(
+            ledger,
+            "post",
+            {
+                "attempt": attempt,
+                "kind": "post",
+                "text_sha": sha,
+                "text_head": outreach.text_head(text),
+                "status": "attempted",
+                "page": page_name,
+                "page_id": page_id,
+                "mode": mode,
+                "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            },
+            tool=tool,
+            duplicate=repeat,
+        )
+        if refused:
+            return {"posted": False, **refused}
+
+        try:
+            result = await composer.create_company_post(
+                page_id,
+                page_name,
+                text,
+                image_path=image_path,
+                mode=mode,
+                scheduled_at=scheduled_at,
+                confirm=True,
+                **extra,
             )
-
-        previous = repeat()
-        if previous:
-            return {"status": "duplicate_text", "posted": False, "previous": previous}
-
-        if not confirm:
-            return await _run(
-                ctx,
-                "create_company_post",
-                lambda ex: _composer(ex).create_company_post(
-                    page_id,
-                    page_name,
-                    text,
-                    image_path=image_path,
-                    mode=mode,
-                    scheduled_at=scheduled_at,
-                    confirm=False,
-                ),
-            )
-
-        refusal = _peek("post")
-        if refusal:
-            return {"posted": False, **refusal}
-
-        async def body(ex: Any) -> dict[str, Any]:
-            attempt = uuid.uuid4().hex
-            refused = _book_attempt(
-                ledger,
-                "post",
-                {
-                    "attempt": attempt,
-                    "kind": "post",
-                    "text_sha": sha,
-                    "text_head": outreach.text_head(text),
-                    "status": "attempted",
-                    "page": page_name,
-                    "page_id": page_id,
-                    "mode": mode,
-                    "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-                },
-                tool="create_company_post",
-                duplicate=repeat,
-            )
-            if refused:
-                return {"posted": False, **refused}
-
-            composer = _composer(ex)
-            try:
-                result = await composer.create_company_post(
-                    page_id,
-                    page_name,
-                    text,
-                    image_path=image_path,
-                    mode=mode,
-                    scheduled_at=scheduled_at,
-                    confirm=True,
-                )
-            except Exception:
-                # The click marker is the only honest witness: set means the
-                # commit may have happened, so the row must block the text.
-                ledger.append(
-                    {
-                        "attempt": attempt,
-                        "status": "unknown" if composer.clicked else "not_posted",
-                    }
-                )
-                raise
-
+        except Exception:
+            # The click marker is the only honest witness: set means the
+            # commit may have happened, so the row must block the text.
             ledger.append(
                 {
                     "attempt": attempt,
-                    "status": _LEDGER_STATUS.get(result.get("status", ""), "not_posted"),
-                    "detail": result.get("status"),
+                    "status": "unknown" if composer.clicked else "not_posted",
                 }
             )
-            return {**result, "attempt": attempt}
+            raise
 
-        return await _run(ctx, "create_company_post", body)
+        ledger.append(
+            {
+                "attempt": attempt,
+                "status": _LEDGER_STATUS.get(result.get("status", ""), "not_posted"),
+                "detail": result.get("status"),
+            }
+        )
+        return {**result, "attempt": attempt, **_warn(mention_info)}
+
+    return await _run(ctx, tool, body)

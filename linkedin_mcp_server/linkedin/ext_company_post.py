@@ -36,6 +36,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from linkedin_mcp_server.linkedin.ext_mentions import (
+    MentionWriter,
+    Segment,
+    mentions_of,
+    plain_text,
+    resolve_targets,
+)
 from linkedin_mcp_server.linkedin.ext_post import _IMAGE_SUFFIXES
 from linkedin_mcp_server.linkedin.navigation import PageNavigator
 from linkedin_mcp_server.linkedin.session import PageSession
@@ -223,22 +230,6 @@ _AUTHOR_JS = r"""(arg) => {
   const texts = buttons.map(b => norm(b.innerText)).filter(Boolean);
   const want = String(arg.name || '').toLowerCase();
   return {ok: texts.some(t => t.toLowerCase().includes(want)), texts: texts.slice(0, 8)};
-}"""
-
-_WRITE_JS = r"""(arg) => {
-  const canon = v => String(v || '').replace(/[ \t ]*\n[\s ]*/g, '\n').trim();
-  const editor = document.querySelector(arg.selector);
-  if (!editor) return 'missing';
-  if (canon(editor.innerText)) return 'occupied';
-  editor.focus();
-  if (document.activeElement !== editor) return 'unfocused';
-  let ok = true;
-  arg.text.split('\n').forEach((line, index) => {
-    if (index > 0) ok = document.execCommand('insertParagraph', false) === true && ok;
-    if (line) ok = document.execCommand('insertText', false, line) === true && ok;
-  });
-  if (!ok) return 'unsupported';
-  return canon(editor.innerText) === canon(arg.text) ? 'written' : 'mismatch';
 }"""
 
 _CLEAR_JS = r"""(selector) => {
@@ -467,6 +458,28 @@ class ExtCompanyPostComposer:
         except Exception as exc:  # noqa: BLE001 - cleanup must not raise
             result["cleanup_error"] = f"{type(exc).__name__}: {exc}"[:200]
 
+    async def resolve_page_id(self, slug: str) -> dict[str, Any]:
+        """Numeric page id of a company slug, read on the company page.
+
+        Not measured live (2026-10-09). Exactly one id bound to the slug's
+        universalName, or ``company_page_unresolved``; pass the numeric id to
+        skip this lookup.
+        """
+        from linkedin_mcp_server.linkedin.ext_mentions import _COMPANY_ID_JS
+
+        await self._navigator._navigate_to_page(
+            f"https://www.linkedin.com/company/{slug}/"
+        )
+        ids = await self._page.evaluate(_COMPANY_ID_JS, slug)
+        if not isinstance(ids, list) or len(ids) != 1:
+            return {
+                "status": "company_page_unresolved",
+                "slug": slug,
+                "found": len(ids) if isinstance(ids, list) else None,
+                "message": "Pass the numeric page id instead.",
+            }
+        return {"status": "ok", "page_id": str(ids[0])}
+
     async def _author_ok(self, page_name: str) -> dict[str, Any]:
         return await self._page.evaluate(
             _AUTHOR_JS, {"name": page_name, "commit_words": COMPOSER_WORDS}
@@ -482,7 +495,10 @@ class ExtCompanyPostComposer:
         mode: str,
         scheduled_at: str | None,
         confirm: bool,
+        segments: list[Segment] | None = None,
     ) -> dict[str, Any]:
+        segments = segments if segments is not None else [("text", text)]
+        text = plain_text(segments)
         url = ADMIN_POSTS_URL.format(page_id=page_id)
         result: dict[str, Any] = {
             "url": url,
@@ -501,6 +517,16 @@ class ExtCompanyPostComposer:
                     "status": "invalid_image",
                     "message": f"not an image file: {image}",
                 }
+
+        wanted = mentions_of(segments)
+        if wanted:
+            # Before the composer: resolving a slug navigates.
+            unresolved = await resolve_targets(
+                self._page, self._navigator._navigate_to_page, wanted
+            )
+            if unresolved:
+                return {**result, **unresolved}
+            result["mentions"] = [m.describe() for m in wanted]
 
         await self._navigator._navigate_to_page(url)
         await self._session.check_rate_limit()
@@ -691,14 +717,21 @@ class ExtCompanyPostComposer:
 
         # 5b. Text last: every step above re-renders the composer, and a
         #     re-render drops what execCommand wrote.
-        written = await self._page.evaluate(
-            _WRITE_JS, {"selector": _EDITOR_IN_DIALOG, "text": text}
-        )
-        if written != "written":
-            result["status"] = "text_not_written"
-            result["write"] = written
+        #     The page composer is Quill (measured 2026-10-09): its
+        #     suggestions carry no identifier, so a mention is verified on the
+        #     inserted a.ql-mention instead -- inside the shared writer.
+        wrote = await MentionWriter(self._page, _EDITOR_IN_DIALOG).write(segments)
+        if wrote["status"] != "written":
+            mention = wrote["status"].startswith("mention")
+            result["status"] = wrote["status"] if mention else "text_not_written"
+            result["write"] = wrote["status"]
+            for key in ("mention", "linked_to", "count", "seen", "shown"):
+                if key in wrote:
+                    result[key] = wrote[key]
             await self._discard(result)
             return result
+        if wrote.get("mentions"):
+            result["mentions_written"] = wrote["mentions"]
 
         # 6. Dry run ends here.
         if not confirm:
@@ -706,7 +739,7 @@ class ExtCompanyPostComposer:
             if not cleared:
                 logger.warning("create_company_post dry run: editor not cleared")
             await self._discard(result)
-            return {**result, "status": "dry_run"}
+            return {**result, "status": "dry_run", "would_post": text}
 
         # 7. Last look at the author: everything above could have re-rendered
         #    the dialog, and this is the last harmless moment.

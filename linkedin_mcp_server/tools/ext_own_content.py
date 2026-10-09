@@ -24,6 +24,7 @@ from linkedin_mcp_server import ext_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.ext_message_checks import hidden_format_char
 from linkedin_mcp_server.linkedin.ext_engagement import parse_activity_id
+from linkedin_mcp_server.linkedin.ext_mentions import plain_text, prepare_text
 from linkedin_mcp_server.linkedin.ext_own_content import (
     ExtOwnContent,
     parse_comment_ref,
@@ -122,6 +123,8 @@ async def _operate(
     comment: str | None,
     new_text: str | None,
     dry_run: bool,
+    segments: list[Any] | None = None,
+    as_company: str | None = None,
 ) -> dict[str, Any]:
     from linkedin_mcp_server.tools.ext import (
         _before_deadline,
@@ -168,7 +171,12 @@ async def _operate(
         async def act(confirm: bool) -> dict[str, Any]:
             if new_text is None:
                 return await reader.delete(activity, comment, confirm=confirm)
-            return await reader.edit(activity, comment, new_text, confirm=confirm)
+            extra: dict[str, Any] = {}
+            if segments and any(k == "mention" for k, _ in segments):
+                extra["segments"] = segments
+            if as_company:
+                extra["as_company"] = as_company
+            return await reader.edit(activity, comment, new_text, confirm=confirm, **extra)
 
         if dry_run:
             return {**target, "dry_run": True, **(await act(False))}
@@ -308,10 +316,26 @@ def register_ext_own_content_tools(
         tags={TAG, "post", "actions"},
     )
     async def edit_own_post(
-        post_url: str, new_text: str, ctx: Context, dry_run: bool = True
+        post_url: str,
+        new_text: str,
+        ctx: Context,
+        dry_run: bool = True,
+        mentions: list[dict[str, str]] | None = None,
+        mention_check: str = "warn",
+        as_company: str | None = None,
+        alt_texts: list[str] | None = None,
+        tag_people: list[str] | None = None,
     ) -> dict[str, Any]:
         """
-        Replace the text of one of your own posts. Dry run unless
+        Replace the text of one of your own posts -- or, with as_company (the
+        page slug or numeric id the post card links), of a post authored by
+        a company page you administer. Mentions work as in create_post
+        (mentions list or [[Name|slug]] markup): typed through the typeahead,
+        picked by identifier, read back; a dry run with mentions opens the
+        editor, writes and verifies, then cancels without saving.
+        alt_texts / tag_people: not built -- answered with
+        media_edit_not_supported (LinkedIn's edit dialog was not measured to
+        offer alt text or person tags after publishing). Dry run unless
         dry_run=false: author check, post menu, "Bearbeiten" located, menu
         closed. Live: the editor's prefill must equal the shown text, the new
         text is inserted and compared, saved, and the post is reloaded --
@@ -332,13 +356,23 @@ def register_ext_own_content_tools(
         changed) or unknown (retry_safe=false: re-read the post, never
         repeat).
         """
+        if alt_texts or tag_people:
+            return {
+                "status": "media_edit_not_supported",
+                "message": "Alt text and person tags of a published post are not "
+                "editable through this tool; delete and repost to change them.",
+            }
+        segments, info, bad = prepare_text(new_text, mentions, mention_check)
+        if bad:
+            return {**info, **bad}
+        new_text = plain_text(segments)
         bad = check_text(new_text, POST_MAX)
         if bad:
             return bad
         activity, _, bad = resolve_target(post_url, None)
         if bad:
             return bad
-        return await _operate(
+        result = await _operate(
             ctx,
             kind="post_edit",
             tool="edit_own_post",
@@ -346,7 +380,12 @@ def register_ext_own_content_tools(
             comment=None,
             new_text=new_text,
             dry_run=dry_run,
+            segments=segments,
+            as_company=as_company.strip().lower() if as_company else None,
         )
+        if info.get("plaintext_names"):
+            result = {**result, "plaintext_names": info["plaintext_names"]}
+        return result
 
     @mcp.tool(
         timeout=timeout,

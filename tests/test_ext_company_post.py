@@ -72,7 +72,7 @@ class FakePage:
     async def click(self, selector: str) -> None:
         self.clicked.append(selector)
 
-    async def evaluate(self, script: str, arg: Any = None) -> Any:
+    async def evaluate(self, script: str, arg: Any = None, **_: Any) -> Any:
         if script is mod._MEDIA_PRESENT_JS:
             return self.leftover
         if script is mod._AUTHOR_JS:
@@ -105,10 +105,9 @@ class FakePage:
             return self.want_time if self.time_taken else "14:45"
         if script is mod._DIALOG_TEXT_JS:
             return self.summary
-        if script is mod._WRITE_JS:
-            if self.write == "written":
-                self.text = arg["text"]
-            return self.write
+        handled, value = mention_writer_script(self, script, arg)
+        if handled:
+            return value
         if script is mod._CLEAR_JS:
             self.text = ""
             return True
@@ -382,7 +381,7 @@ async def test_a_saved_draft_is_not_reported_as_posted() -> None:
 async def test_a_disabled_publish_button_is_not_clicked() -> None:
     page = FakePage()
 
-    async def evaluate(script: str, arg: Any = None) -> Any:
+    async def evaluate(script: str, arg: Any = None, **_: Any) -> Any:
         if script is mod._MARK_JS and arg["tag"] == "post":
             return {"count": 1, "disabled": True}
         return await FakePage.evaluate(page, script, arg)
@@ -407,3 +406,28 @@ async def test_a_composer_still_open_after_the_click_is_unconfirmed() -> None:
     result = await run(page)
     assert result["status"] == "post_unconfirmed"
     assert result["posted"] is False
+
+
+def mention_writer_script(page: Any, script: str, arg: Any) -> tuple[bool, Any]:
+    """Answer the shared writer's scripts on a fake page (plain text only)."""
+    from linkedin_mcp_server.linkedin import ext_mentions as em
+
+    if script is em._PREP_JS:
+        if arg.get("clear"):
+            page.text = ""
+        if arg.get("require_empty") and page.text:
+            return True, "occupied"
+        return True, "ok"
+    if script is em._ENGINE_JS:
+        return True, "tiptap"
+    if script is em._INSERT_JS:
+        outcome = getattr(page, "write", "written")
+        if outcome != "written":
+            return True, outcome
+        page.text += arg["text"]
+        return True, "ok"
+    if script is em._STATE_JS:
+        return True, {"text": page.text, "pending": False}
+    if script is em._ENTITIES_JS:
+        return True, []
+    return False, None

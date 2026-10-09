@@ -17,6 +17,14 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from linkedin_mcp_server.linkedin.ext_composer_labels import words
+from linkedin_mcp_server.linkedin.ext_mentions import (
+    MentionWriter,
+    Segment,
+    mentions_of,
+    plain_text,
+    resolve_targets,
+)
 from linkedin_mcp_server.linkedin.navigation import PageNavigator
 from linkedin_mcp_server.linkedin.session import PageSession
 
@@ -28,12 +36,13 @@ SHARE_URL = "https://www.linkedin.com/feed/?shareActive=true"
 FEED_URL = "https://www.linkedin.com/feed/"
 RECENT_ACTIVITY_URL = "https://www.linkedin.com/in/me/recent-activity/all/"
 _EDITOR = '[componentkey="ShareBox_textEditor"][contenteditable="true"]'
-_POST_WORDS = ["posten", "post", "veröffentlichen", "publish"]
-_MEDIA_LABELS = ["medieninhalte", "medien", "add media", "media", "foto", "photo"]
-_NEXT_WORDS = ["weiter", "next", "fertig", "done"]
+# Labels come from the one bilingual table (ext_composer_labels).
+_POST_WORDS = words("post")
+_MEDIA_LABELS = words("media")
+_NEXT_WORDS = words("next")
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-_CLOSE_LABELS = ["schließen", "dismiss", "close", "verwerfen", "discard"]
-_DISCARD_WORDS = ["verwerfen", "discard"]
+_CLOSE_LABELS = words("close")
+_DISCARD_WORDS = words("discard")
 
 # Abandon the composer after an image step failed: close the visible dialog,
 # then confirm the discard prompt if LinkedIn shows one. Only buttons whose
@@ -54,30 +63,6 @@ _DISCARD_JS = r"""(arg) => {
   if (discard.length === 1) { discard[0].click(); steps.push('discarded'); }
   return steps.join('+') || 'nothing_to_close';
 }"""
-
-_CANON_JS = r"""
-  const mcpCanon = value => String(value || '')
-      .replace(/[ \t ]*\n[\s ]*/g, '\n').trim();
-"""
-
-_WRITE_JS = (
-    "(arg) => {"
-    + _CANON_JS
-    + r"""
-  const editor = document.querySelector(arg.selector);
-  if (!editor) return 'missing';
-  if (mcpCanon(editor.innerText)) return 'occupied';
-  editor.focus();
-  if (document.activeElement !== editor) return 'unfocused';
-  let ok = true;
-  arg.text.split('\n').forEach((line, index) => {
-    if (index > 0) ok = document.execCommand('insertParagraph', false) === true && ok;
-    if (line) ok = document.execCommand('insertText', false, line) === true && ok;
-  });
-  if (!ok) return 'unsupported';
-  return mcpCanon(editor.innerText) === mcpCanon(arg.text) ? 'written' : 'mismatch';
-}"""
-)
 
 _CLEAR_JS = r"""(selector) => {
   const editor = document.querySelector(selector);
@@ -179,8 +164,15 @@ class ExtPostComposer:
             result["cleanup_error"] = f"{type(exc).__name__}: {exc}"[:200]
 
     async def create_post(
-        self, text: str, *, image_path: str | None, confirm_post: bool
+        self,
+        text: str,
+        *,
+        image_path: str | None,
+        confirm_post: bool,
+        segments: list[Segment] | None = None,
     ) -> dict[str, Any]:
+        segments = segments if segments is not None else [("text", text)]
+        text = plain_text(segments)
         result: dict[str, Any] = {
             "url": SHARE_URL,
             "posted": False,
@@ -195,6 +187,17 @@ class ExtPostComposer:
                     "status": "invalid_image",
                     "message": f"not an image file: {image}",
                 }
+
+        # Mention targets are resolved before the composer opens: resolving a
+        # slug navigates, and a navigation would close the composer.
+        wanted = mentions_of(segments)
+        if wanted:
+            unresolved = await resolve_targets(
+                self._page, self._navigator._navigate_to_page, wanted
+            )
+            if unresolved:
+                return {**result, **unresolved}
+            result["mentions"] = [m.describe() for m in wanted]
 
         await self._navigator._navigate_to_page(SHARE_URL)
         await self._session.check_rate_limit()
@@ -255,12 +258,14 @@ class ExtPostComposer:
                 return result
             result["image"] = image.name
 
-        written = await self._page.evaluate(
-            _WRITE_JS, {"selector": _EDITOR, "text": text}
-        )
-        if written != "written":
+        # The one write routine for every composer: text by execCommand,
+        # mentions by typeahead with an identifier check (ext_mentions).
+        wrote = await MentionWriter(self._page, _EDITOR).write(segments)
+        if wrote["status"] != "written":
             await self._leave()
-            return {**result, "status": f"text_{written}"}
+            return {**result, **wrote}
+        if wrote.get("mentions"):
+            result["mentions_written"] = wrote["mentions"]
 
         post = await self._button("post", _POST_WORDS, [])
         if not post or post.get("count") != 1:
@@ -271,6 +276,7 @@ class ExtPostComposer:
             return {
                 **result,
                 "status": "dry_run",
+                "would_post": text,
                 "message": "Editor filled and verified, post button found"
                 + (" (disabled)" if post.get("disabled") else "")
                 + "; text cleared again, nothing published. Set confirm_post=true to publish.",

@@ -51,6 +51,7 @@ from linkedin_mcp_server.linkedin.ext_network import (
     ExtNetworkReader,
     project_attendees,
 )
+from linkedin_mcp_server.linkedin.ext_mentions import has_markup, plain_text, prepare_text
 from linkedin_mcp_server.linkedin.ext_post import ExtPostComposer
 from linkedin_mcp_server.linkedin.message_sender import (
     _send_budget_deadline as _reply_budget_deadline,
@@ -903,9 +904,13 @@ def register_ext_tools(
         confirm_post: bool = False,
         image_path: str | None = None,
         as_company: str | None = None,
+        company_name: str | None = None,
+        mentions: list[dict[str, str]] | None = None,
+        mention_check: str = "warn",
     ) -> dict[str, Any]:
         """
-        Compose a post on the signed-in member's personal profile. Multi-line
+        Compose a post on the signed-in member's personal profile (or, with
+        as_company, on a company page the member administers). Multi-line
         text (LF) is supported. Without confirm_post=true this is a dry run: the
         editor is filled and verified, then cleared again; nothing is published.
         With confirm_post=true the post is published (public, irreversible
@@ -918,8 +923,31 @@ def register_ext_tools(
                 are refused.
             confirm_post: Must be true to publish.
             image_path: Optional local image file to attach.
-            as_company: Not handled here. Use create_company_post, which
-                switches the composer author to the page and verifies it.
+            as_company: Post as this company page instead: numeric page id,
+                company URL or slug (a slug is resolved on the page; it must
+                yield exactly one id). Runs the create_company_post flow in
+                mode=publish; company_name is then required, because the
+                composer's author is verified against it.
+            company_name: The page name as the composer shows it.
+            mentions: Optional list of {"name", "target"}; the first plain
+                occurrence of each name becomes a real @-mention. target is a
+                profile slug/URL/URN or company:<slug|id>. Inline markup works
+                too: [[Name|slug]], [[Name|company:slug]].
+            mention_check: off | warn (default: plaintext_names in the result)
+                | strict (mention_plaintext_name stops when a name to be
+                mentioned also stands as plain text).
+
+        Mentions are typed key by key into the typeahead and picked only when
+        the suggestion's identifier equals the target -- never by name or
+        position alone; the inserted entity is read back. Stops (nothing
+        posted, also in a dry run): mention_ambiguous, mention_not_resolved,
+        mention_list_not_loaded, mention_target_unresolved,
+        mention_wrong_entity, mention_not_linked, mention_missing,
+        mention_name_mismatch, mention_unverifiable; refusals before the
+        browser: mention_syntax_invalid, mention_markup_required (a bare
+        @word), mention_name_not_in_text, mention_plaintext_name;
+        invalid_input (mention_check not off/warn/strict, or as_company
+        without company_name / not a page reference).
 
         Returns the composer result; its status is posted_verified (live and
         read back), posted_unverified (published, read-back missed it: check
@@ -938,12 +966,44 @@ def register_ext_tools(
         publish click) or unknown (retry_safe=false, may be live: check
         recent activity, do not repost).
         """
+        segments, mention_info, bad = prepare_text(text, mentions, mention_check)
+        if bad:
+            return {"posted": False, **mention_info, **bad}
         if as_company:
-            return {
-                "status": "not_supported",
-                "posted": False,
-                "message": "Use create_company_post for a page; it switches and verifies the composer author.",
-            }
+            from linkedin_mcp_server.tools.ext_company_post import (
+                parse_company_ref,
+                run_company_post,
+            )
+
+            page_ref, bad = parse_company_ref(as_company)
+            if bad:
+                return {"posted": False, **bad}
+            if not (company_name or "").strip():
+                return {
+                    "status": "invalid_input",
+                    "field": "company_name",
+                    "posted": False,
+                    "message": "as_company needs company_name: the composer's author is verified against it.",
+                }
+            return await run_company_post(
+                ctx,
+                page_ref,
+                str(company_name),
+                text,
+                image_path=image_path,
+                mode="publish",
+                scheduled_at=None,
+                confirm=confirm_post,
+                mentions=mentions,
+                mention_check=mention_check,
+                tool="create_post",
+            )
+        text = plain_text(segments)
+        # Only a text with mentions needs the segments; plain text keeps the
+        # composer call it always had.
+        extra: dict[str, Any] = (
+            {"segments": segments} if any(k == "mention" for k, _ in segments) else {}
+        )
         if not text.strip() or any(
             (ord(c) < 32 and c != "\n") or _hidden_format_char(c) for c in text
         ):
@@ -981,13 +1041,21 @@ def register_ext_tools(
         previous = repeat()
         if previous:
             return {"status": "duplicate_text", "posted": False, "previous": previous}
+        warn = (
+            {"plaintext_names": mention_info["plaintext_names"]}
+            if mention_info.get("plaintext_names")
+            else {}
+        )
         if not confirm_post:
             # Dry run: nothing is published, nothing is booked.
-            return await _run(
+            return warn | await _run(
                 ctx,
                 "create_post",
                 lambda ex: _composer(ex).create_post(
-                    text, image_path=image_path, confirm_post=False
+                    text,
+                    image_path=image_path,
+                    confirm_post=False,
+                    **extra,
                 ),
             )
         # Peek only: the attempt row below is the booking, written under the
@@ -1022,7 +1090,10 @@ def register_ext_tools(
             try:
                 result = await _before_deadline(
                     lambda: composer.create_post(
-                        text, image_path=image_path, confirm_post=True
+                        text,
+                        image_path=image_path,
+                        confirm_post=True,
+                        **extra,
                     ),
                     lambda: getattr(composer, "clicked", True),
                 )
@@ -1052,7 +1123,7 @@ def register_ext_tools(
             if result.get("activity_id"):
                 outcome["activity"] = result["activity_id"]
             ledger.append(outcome)
-            return result
+            return {**result, **warn}
 
         return await _run(ctx, "create_post", body)
 
@@ -1089,6 +1160,8 @@ def register_ext_tools(
         control or invisible characters), content_check_failed
         (findings list the rule), message_too_long (over the length cap),
         pace_lock_busy (nothing booked, retry shortly).
+        mention_not_supported_in_messages: the text carries [[Name|slug]]
+        markup; a LinkedIn message has no @-mention entity (documented limit).
 
         Tool deadline: the tool answers before it instead of failing.
         deadline_reached=true with not_sent (retry_safe=true: the deadline
@@ -1098,6 +1171,14 @@ def register_ext_tools(
         username, bad = _recipient(linkedin_username)
         if bad:
             return bad
+        if has_markup(message):
+            # Documented limit (2026-10-09): a 1:1 message has no @-mention
+            # entity; the markup would arrive as literal brackets.
+            return {
+                "recipient": username,
+                "status": "mention_not_supported_in_messages",
+                "message": "LinkedIn messages carry no @-mentions; write the name as plain text.",
+            }
         refusal = refuse_an_invalid_message(username, message)
         if refusal is not None:
             return refusal
