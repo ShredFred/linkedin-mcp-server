@@ -358,6 +358,21 @@ _SET_SCHEDULE_JS = r"""(arg) => {
 }"""
 
 # Mark the quarter-hour entry of the opened time list.
+# Is the post composer gone? Same notion of "composer" as everywhere else:
+# an editor *and* a commit button. Asking only for a textbox answers a
+# question about the chat window.
+_COMPOSER_GONE_JS = r"""(arg) => {
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(visible);
+  const composer = dialogs.find(d => {
+    if (!d.querySelector('[role="textbox"]')) return false;
+    return [...d.querySelectorAll('button, [role="button"]')].filter(visible)
+        .some(b => arg.commit_words.includes(norm(b.innerText)));
+  });
+  return !composer;
+}"""
+
 _PICK_TIME_JS = r"""(arg) => {
   document.querySelectorAll('[data-ext-time]').forEach(e => e.removeAttribute('data-ext-time'));
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
@@ -745,7 +760,7 @@ class ExtCompanyPostComposer:
         await self._session.delay(5.0)
 
         gone = await self._page.evaluate(
-            "(s) => !document.querySelector(s)", _EDITOR_IN_DIALOG
+            _COMPOSER_GONE_JS, {"commit_words": COMPOSER_WORDS}
         )
         if mode == "schedule":
             status = "scheduled" if gone else "schedule_unconfirmed"

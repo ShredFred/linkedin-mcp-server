@@ -307,3 +307,33 @@ async def test_the_date_is_not_rewritten_when_it_already_matches(page):
     got = await write_schedule(page, "9.10.2026", "14:45", TARGET_TODAY)
     assert got["ok"] is True
     assert got["wrote_date"] == "9.10.2026"
+
+
+# -- "is the composer gone?" must not answer about the chat window ------------
+
+
+async def test_a_closed_composer_counts_as_gone_even_with_the_chat_open(page):
+    # Exactly the false alarm of 2026-10-09: the post was scheduled, the
+    # composer had closed, and the chat window's textbox kept the old check
+    # from seeing it.
+    await page.set_content(f"<main>{CHAT}</main>")
+    gone = await page.evaluate(
+        cp._COMPOSER_GONE_JS, {"commit_words": cp.COMPOSER_WORDS}
+    )
+    assert gone is True
+
+
+async def test_an_open_composer_is_not_gone(page):
+    await set_page(page)
+    gone = await page.evaluate(
+        cp._COMPOSER_GONE_JS, {"commit_words": cp.COMPOSER_WORDS}
+    )
+    assert gone is False
+
+
+async def test_a_composer_showing_planen_is_not_gone_either(page):
+    await set_page(page, commit="Planen")
+    gone = await page.evaluate(
+        cp._COMPOSER_GONE_JS, {"commit_words": cp.COMPOSER_WORDS}
+    )
+    assert gone is False

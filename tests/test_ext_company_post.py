@@ -112,7 +112,9 @@ class FakePage:
         if script is mod._CLEAR_JS:
             self.text = ""
             return True
-        if script.startswith("(s) => !document.querySelector"):
+        if script is mod._COMPOSER_GONE_JS:
+            # Asks for an editor *and* a commit button, so an open chat window
+            # does not answer it -- that was the false alarm of 2026-10-09.
             return self.editor_gone
         return ""
 
