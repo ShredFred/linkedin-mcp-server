@@ -166,6 +166,25 @@ async def _operate(
         spent = _pace("page_read", 2, tool=tool)
         if spent:
             return {**target, **spent}
+        if as_company:
+            # The page role is checked against the numeric id; a slug is
+            # resolved on the company page first.
+            from linkedin_mcp_server.linkedin.ext_company_post import (
+                ExtCompanyPostComposer,
+            )
+            from linkedin_mcp_server.tools.ext_company_actions import require_company_role
+
+            pid = as_company
+            if not pid.isdigit():
+                got = await ExtCompanyPostComposer(
+                    ex.ext_session, ex.ext_navigator
+                ).resolve_page_id(pid)
+                if got.get("status") != "ok":
+                    return {**target, **got}
+                pid = str(got["page_id"])
+            denied = await require_company_role(ex, pid)
+            if denied:
+                return {**target, **denied}
         reader = _reader(ex)
 
         async def act(confirm: bool) -> dict[str, Any]:

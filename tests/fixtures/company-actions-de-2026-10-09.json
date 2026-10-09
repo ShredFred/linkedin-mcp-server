@@ -1,0 +1,43 @@
+{
+  "_about": "Measured 2026-10-09 (round 3) with composer_probe(steps=...) on the German interface; only opened and read, nothing sent, no reaction set, drafts discarded. Anonymised: names, ids and URLs are placeholders.",
+  "role": {
+    "url": "/company/<page id>/admin/settings/manage-admins/",
+    "measured_session_role": "Super-Admin (the measuring session's own row carries the marker 'Sie')",
+    "tabs": ["Seitenadmins (3)", "Paid-Media-Admins (0)", "Integrationen (0)"],
+    "row_buttons": ["Rolle als Seitenadmin von <name> bearbeiten", "<name> als Seitenadmin entfernen", "Ihren Namen als Seitenadmin entfernen"],
+    "admin_table_text": "Admins verwalten\nSeitenadmins (3)\nProfil\t\nFunktionen\nAktionen\n\nMax Platzhalter \nSie\n· Sie\nHeadline A\n\t\n\nSuper-Admin\n\n\nErika Muster \nDirekter Kontakt\n· 1.\nHeadline B\n\t\n\nSuper-Admin\n\n\nJohn Beispiel \nDirekter Kontakt\n· 1.\nHeadline C\n\t\n\nContent-Admin\n"
+  },
+  "admin_post_list": {
+    "url": "/company/<page id>/admin/page-posts/published/",
+    "card": "div[role=article][data-urn='urn:li:activity:<id>']",
+    "identity_button": "Bei Reaktionen auf diesen Beitrag Menü für den Identitätswechsel öffnen",
+    "identity_modal": {"heading": "Kommentieren, reagieren und teilen Sie im Namen von", "radios": "input[name=actorSelector]: #select-self and #select-<page slug>, aria-checked marks the active one (page active by default)", "save": "Auswahl speichern | Speichern (disabled until changed)", "close": "Verwerfen"},
+    "comment_box": "div.ql-editor[contenteditable][role=textbox][aria-placeholder='Kommentieren als <page> …'] inside form.comments-comment-box__form",
+    "submit": "button 'Kommentieren' (class comments-comment-box__submit-button--cr), present only once text is typed",
+    "like": "button aria-label 'Mit „Gefällt mir“ reagieren'",
+    "other_controls": ["Menü mit Reaktionen öffnen", "Kommentieren", "Reposten", "Emoji-Tastatur öffnen", "Foto hinzufügen"]
+  },
+  "member_post_view": {
+    "comment_box": "div[role=textbox][aria-label='Texteditor zum Erstellen von Kommentaren'] with Emoji, GIF, 'Foto teilen'; focused: still no identity control (measured as Super-Admin on an own member post and on a page post)",
+    "reaction_button": "aria-label 'Status des Reaktionsbuttons: Keine Reaktion'",
+    "reaction_palette_on_hover": ["Gefällt mir", "Applaus", "Unterstütze ich", "Wunderbar", "Inspirierend", "Lustig"],
+    "post_menu": ["Oben auf dem Profil präsentieren", "Speichern", "Link zum Artikel kopieren", "Diesen Beitrag einfügen", "Beitrag bearbeiten", "Beitrag löschen", "Wer darf diesen Beitrag kommentieren?"],
+    "edit_dialog": "author button '<page>', 'Mit allen teilen', 'Kommentare: Alle', text editor, 'Speichern' -- no media, alt-text or tag control"
+  },
+  "limits": {
+    "english_interface": "Setting the lang cookie to v=2&lang=en-us plus Accept-Language: LinkedIn rewrote the cookie to v=2&lang=de-de on the next load and served html lang=de; also with ?locale=en_US. Only the account setting switches the interface.",
+    "page_composer_tags": "Tag suggestions and the chosen pill carry no identifier (pill: 'button aria-label=<name> verwerfen', text only; no data attribute, no link).",
+    "page_composer_video": "A 4 s 640x360 H.264 test video: 'Weiter' stayed disabled for 20 s, no preview.",
+    "member_composer_document": "Content types offer only 'Event' and 'Stellenanzeige'.",
+    "messaging_mentions": "'@' plus a name start in a 1:1 thread and in a group thread: an empty listbox, no options; the text stays plain."
+  },
+  "page_composer_document": {
+    "entry": "'Mehr' -> 'Dokument hinzufügen' (beside 'Event erstellen', 'Ereignis feiern', 'Stellenanzeige teilen', 'Umfrage erstellen')",
+    "dialog": "'Dokumente teilen' with input[type=file]; after upload a title field (placeholder 'Fügen Sie einen aussagekräftigen Titel hinzu.'), 'Hochgeladenes Dokument entfernen', 'Fertig'",
+    "preview": "iframe[title='Dokument-Wiedergabe: <title>'], alert 'Ihr Dokument wurde geladen.'"
+  },
+  "member_composer_video": {
+    "editor": "'Editor' dialog with 'Video ansehen', 'Untertitel', 'Miniaturbild', 'Löschen', 'Hinzufügen' (disabled), 'Weiter'; two <video> blob previews",
+    "composer": "one <video> preview, 'Video abspielen', 'Edit', 'Close', 'Posten' enabled"
+  }
+}

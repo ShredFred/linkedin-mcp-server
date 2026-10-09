@@ -940,8 +940,10 @@ def register_ext_tools(
                 picked only by the suggestion's identifier, and the tag count
                 LinkedIn shows is read back. A dry run uploads, checks
                 everything, and discards (measured: no draft is left).
-                Stops: media_invalid_path, media_kind_unmeasured (video,
-                documents), media_too_many, alt_text_invalid,
+                A single mp4/mov video works too (alone, no alt text or
+                tags; measured 2026-10-09); documents only through the page
+                composer. Stops: media_invalid_path, media_kind_unmeasured,
+                media_mix_unsupported, media_option_unsupported, media_too_many, alt_text_invalid,
                 media_tag_invalid, media_button_unavailable,
                 media_upload_incomplete, media_count_mismatch,
                 media_order_mismatch, media_thumbnail_unavailable,

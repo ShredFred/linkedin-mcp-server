@@ -679,6 +679,7 @@ class ExtCompanyPostComposer:
                 editor_selector=_EDITOR_IN_DIALOG,
                 media_words=_MEDIA_LABELS,
                 allow_tags=False,
+                kinds=("image", "document"),
             ).attach(media, navigate=self._navigator._navigate_to_page)
             if attached["status"] != "attached":
                 result.update(attached)

@@ -37,6 +37,7 @@ LABELS: dict[str, dict[str, list[str]]] = {
         "en": ["add media", "media", "photo", "add a photo"],
     },
     "video": {"de": ["video hinzufügen", "video"], "en": ["add a video", "video"]},
+    # measured 2026-10-09 (de, page composer under "Mehr")
     "document": {
         "de": ["dokument hinzufügen", "dokument"],
         "en": ["add a document", "document"],
@@ -93,6 +94,8 @@ LABELS: dict[str, dict[str, list[str]]] = {
         "de": ["löschen", "beitrag löschen", "kommentar löschen"],
         "en": ["delete", "delete post", "delete comment"],
     },
+    # Submit of a comment box (measured de: "Kommentieren", admin view).
+    "comment_submit": {"de": ["kommentieren"], "en": ["comment"]},
     # Typeahead option hints: a company option carries one of these words.
     "company_hint": {
         "de": ["unternehmen", "firma", "follower"],

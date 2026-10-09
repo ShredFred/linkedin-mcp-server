@@ -233,6 +233,7 @@ class ExtPostComposer:
                 editor_selector=_EDITOR,
                 media_words=_MEDIA_LABELS,
                 allow_tags=True,
+                kinds=("image", "video"),
             ).attach(media, navigate=self._navigator._navigate_to_page)
             if attached["status"] != "attached":
                 result.update(attached)

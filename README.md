@@ -32,6 +32,7 @@
 > **Added tools**
 >
 > - `comment_on_post` — Comment on a post.
+> - `company_access` — Read the signed-in session's role on a company page (numeric page id): super_admin, content_admin, analyst, curator, admin_unreadable (the admin list is not readable but the admin view offers posting), or none.
 > - `composer_probe` — Report the visible interactive controls of a LinkedIn page: tag, role, aria-label, text, componentkey, disabled state and whether the element sits inside a dialog.
 > - `connect_with_person` — Without confirm_send=true this is a dry run only: nothing is sent.
 > - `create_company_post` — Compose a post authored by a company page the signed-in member administers.
@@ -61,6 +62,7 @@
 > - `outreach_quota` — Today's and this week's sends and invites from the local outreach ledger.
 > - `outreach_selftest` — Read-only check that the Message and Connect actions still resolve, run before a batch so a LinkedIn UI change is caught before the first send.
 > - `pace_status` — The pacer (Taktgeber): per action kind today's and the last seven days' use against its budget, and the daily total of visible actions.
+> - `react_to_post` — React to a post as the signed-in member, or as a company page (as_company = numeric page id, company_name required; only posts on the page's own admin list, only "like" -- the only reaction measured there).
 > - `repost_post` — Repost a post instantly to the signed-in member's own feed (never as a company page), or take that repost back with undo=true.
 > - `search_events` — One LinkedIn event search (/search/results/events/?keywords=...).
 > - `send_campaign_batch` — Send the same text to many recipients safely, one small batch per call.

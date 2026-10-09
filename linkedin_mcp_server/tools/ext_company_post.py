@@ -109,7 +109,15 @@ def register_ext_company_post_tools(
             scheduled_at: "YYYY-MM-DD HH:MM" local time; only with
                 mode=schedule, at least 5 minutes ahead and at most 90 days.
             media: as in create_post, without tags (media_tag_unverifiable:
-                the page composer's tag suggestions carry no identifier).
+                the page composer's tag suggestions and the chosen pill carry
+                no identifier, measured as Super-Admin), without video (the
+                page composer kept 'Weiter' disabled), plus one document:
+                [{"path": "<pdf/ppt/doc>", "title": "..."}] -- title typed and
+                read back from the preview (document_title_required,
+                document_control_unavailable, document_title_not_taken,
+                document_confirm_unavailable, document_not_attached).
+                The session's role on the page is read first:
+                company_role_insufficient names it.
             mentions / mention_check: as in create_post. The page composer
                 (Quill) shows no identifier in its suggestions, so exactly
                 one namesake may be inserted and its target is read back
@@ -273,6 +281,11 @@ async def run_company_post(
         pid, bad = await _page_id(composer)
         if bad:
             return bad
+        from linkedin_mcp_server.tools.ext_company_actions import require_company_role
+
+        denied = await require_company_role(ex, str(pid))
+        if denied:
+            return {"posted": False, **denied}
         out = await composer.create_company_post(
             pid,
             page_name,
@@ -301,6 +314,11 @@ async def run_company_post(
         page_id, bad = await _page_id(composer)
         if bad:
             return bad
+        from linkedin_mcp_server.tools.ext_company_actions import require_company_role
+
+        denied = await require_company_role(ex, str(page_id))
+        if denied:
+            return {"posted": False, **denied}
         attempt = uuid.uuid4().hex
         refused = _book_attempt(
             ledger,

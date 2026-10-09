@@ -749,17 +749,23 @@ def register_ext_stage2_tools(
         mentions: list[dict[str, str]] | None = None,
         mention_check: str = "warn",
         as_company: str | None = None,
+        company_name: str | None = None,
     ) -> dict[str, Any]:
         """
         Comment on a post. Mentions as in create_post (mentions list or
         [[Name|slug]] markup; measured 2026-10-09: the comment box is the
         same editor as the member composer, so a suggestion is picked by its
         identifier and read back). Not for replies (mention_not_supported_here).
-        as_company: commenting (or reacting) as a page is a documented limit,
-        answered with comment_identity_switch_absent: measured 2026-10-09 on
-        a post of the administered page and on a member's post, the comment
-        box and the reaction button carry no "Kommentieren als" / "Comment
-        as" control. Dry run by default: the comment editor is filled,
+        as_company (numeric page id) + company_name: comment as the page.
+        Measured 2026-10-09: only the page's admin post list offers it (comment
+        box "Kommentieren als <page>", identity switch per post); the member
+        view has no switch. So this works for posts on the page's own admin
+        list (else post_not_in_admin_view). The member's page role is read
+        first (company_role_insufficient names it); the identity switch is
+        read, never changed (identity_not_page, identity_unreadable,
+        identity_not_confirmed, admin_card_controls_unavailable, no_submit).
+        invalid_input: as_company not numeric or company_name missing;
+        not_supported: a reply as the page. Dry run by default: the comment editor is filled,
         compared with the text and cleared again; nothing is posted. With
         confirm=true one comment is posted and read back. Never use in a loop:
         each comment needs its own approval, and the same text is refused for a
@@ -796,14 +802,17 @@ def register_ext_stage2_tools(
         deadline before the submit click, text released) or unknown
         (retry_safe=false, may be live: check the post, never comment again).
         """
-        if as_company:
-            return {
-                "status": "comment_identity_switch_absent",
-                "posted": False,
-                "message": "LinkedIn shows no 'Kommentieren als' control on the "
-                "post (measured 2026-10-09 on a post of the administered page); "
-                "nothing was written.",
-            }
+        if as_company is not None:
+            if not str(as_company).strip().isdigit() or not (company_name or "").strip():
+                return {
+                    "status": "invalid_input",
+                    "field": "as_company",
+                    "posted": False,
+                    "message": "as_company is the numeric page id; company_name is required.",
+                }
+            if reply_to is not None:
+                return {"status": "not_supported", "posted": False,
+                        "message": "Replies as a page are not built."}
         from linkedin_mcp_server.linkedin.ext_mentions import plain_text, prepare_text
 
         segments, mention_info, bad = prepare_text(text, mentions, mention_check)
@@ -941,15 +950,34 @@ def register_ext_stage2_tools(
                 return refusal
 
         async def body(ex: Any) -> dict[str, Any]:
-            async def write(actions: ExtActions, go: bool) -> dict[str, Any]:
+            async def write(actions: Any, go: bool) -> dict[str, Any]:
+                if as_company is not None:
+                    access = await actions.read_access(str(as_company).strip())
+                    if not access.get("can_act_as_page"):
+                        return {"status": "company_role_insufficient", "posted": False,
+                                "role": access.get("role"),
+                                "role_source": access.get("role_source")}
+                    return await actions.comment_as_page(
+                        str(as_company).strip(), str(company_name), activity_id,
+                        segments, confirm=go,
+                    )
                 if target:
                     return await actions.reply(activity_id, target, text, go)
                 if has_mentions:
                     return await actions.comment(activity_id, text, go, segments=segments)
                 return await actions.comment(activity_id, text, go)
 
+            def make(ex: Any) -> Any:
+                if as_company is not None:
+                    from linkedin_mcp_server.linkedin.ext_company_actions import (
+                        ExtCompanyActions,
+                    )
+
+                    return ExtCompanyActions(ex.ext_session, ex.ext_navigator)
+                return _actions(ex)
+
             if not confirm:
-                result = await write(_actions(ex), False)
+                result = await write(make(ex), False)
                 return {"activity_id": activity_id, **result}
             attempt = uuid.uuid4().hex
             refused = _book_attempt(
@@ -979,7 +1007,7 @@ def register_ext_stage2_tools(
                         else "duplicate_text",
                     }
                 return {"posted": False, **refused}
-            actions = _actions(ex)
+            actions = make(ex)
             # R7: comment() resets comment_submitted once the editor is found
             # and sets it directly before the submit click. Not reset here: an
             # exception before comment() set the marker at all (page load), or

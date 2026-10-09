@@ -430,7 +430,7 @@ class ExtComposerProbe:
 
 # -- step mode (2026-10-09): media, alt text, tags, identity switch -----------
 
-STEP_ACTIONS = ("click", "upload", "type", "wait", "report", "page")
+STEP_ACTIONS = ("click", "upload", "type", "wait", "report", "page", "text", "html", "focushtml", "clear")
 _MAX_STEPS = 12
 
 
@@ -470,9 +470,12 @@ _MARK_NTH_JS = r"""(arg) => {
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
   const want = norm(arg.label);
-  const sel = 'button, [role="button"], [role="menuitem"], [role="combobox"], [role="option"], [role="radio"], [role="menuitemradio"], a, img, li';
+  const sel = 'button, [role="button"], [role="menuitem"], [role="combobox"], [role="option"], [role="radio"], [role="menuitemradio"], [role="textbox"], a, img, li';
   const same = v => arg.prefix ? norm(v).startsWith(want) : norm(v) === want;
-  const hits = [...document.querySelectorAll(sel)].filter(visible).filter(el =>
+  const dlg = arg.in_dialog ? [...document.querySelectorAll('[role="dialog"], dialog')].filter(visible)
+      .filter(d => d.querySelector('[contenteditable="true"]')).shift() : null;
+  const scope = arg.in_dialog ? (dlg || document.createElement('div')) : document;
+  const hits = [...scope.querySelectorAll(sel)].filter(visible).filter(el =>
     same(el.getAttribute('aria-label')) || same(el.innerText) || same(el.getAttribute('alt')))
     .filter((e, _, all) => !all.some(o => o !== e && e.contains(o)));
   const el = hits[arg.nth || 0];
@@ -526,6 +529,24 @@ _FOCUS_INPUT_JS = r"""(want) => {
 }"""
 
 
+_DIALOG_HTML_JS = r"""() => {
+  const v = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const d = [...document.querySelectorAll('[role="dialog"], dialog')].filter(v).pop();
+  return d ? d.outerHTML.replace(/<svg[\s\S]*?<\/svg>/g, '<svg/>').slice(0, 30000) : '';
+}"""
+
+
+_FOCUS_CARD_HTML_JS = r"""() => {
+  let el = document.activeElement;
+  for (let i = 0; el && i < 30; i++, el = el.parentElement) {
+    if (el.getAttribute && (el.getAttribute('data-urn') || el.getAttribute('data-id'))) break;
+  }
+  const card = el || document.activeElement;
+  return card ? card.outerHTML.replace(/<svg[\s\S]*?<\/svg>/g, '<svg/>')
+      .replace(/src="data:[^"]*"/g, 'src="data:"').slice(-30000) : '';
+}"""
+
+
 async def _report(page: Any) -> Any:
     roots = await page.evaluate(_DIALOG_REPORT_JS)
     try:
@@ -550,11 +571,26 @@ async def run_probe_steps(probe: "ExtComposerProbe", url: str, steps: list[dict[
         for step in steps:
             action = step["action"]
             rec: dict[str, Any] = {"action": action, "label": step.get("label")}
+            if action == "upload" and step.get("input"):
+                # A dialog that shows its file input instead of a button.
+                inputs = page.locator('[role="dialog"] input[type="file"], dialog input[type="file"]')
+                rec["matches"] = await inputs.count()
+                if rec["matches"] != 1:
+                    rec["stopped"] = "file_input_not_unique"
+                    out["steps"].append(rec)
+                    out["status"] = "stopped"
+                    return out
+                await inputs.first.set_input_files([str(f) for f in step["files"]])
+                await asyncio.sleep(float(step.get("settle") or 2.0))
+                rec["report"] = await _report(page)
+                out["steps"].append(rec)
+                continue
             if action in ("click", "upload"):
                 marked = await page.evaluate(
                     _MARK_NTH_JS,
                     {"label": step["label"], "nth": int(step.get("nth") or 0),
                      "prefix": bool(step.get("prefix")),
+                     "in_dialog": bool(step.get("in_dialog")),
                      "forbidden": list(FORBIDDEN_CLICK)},
                 )
                 rec["matches"] = marked.get("count")
@@ -570,8 +606,26 @@ async def run_probe_steps(probe: "ExtComposerProbe", url: str, steps: list[dict[
                     chooser = await info.value
                     await chooser.set_files([str(f) for f in step["files"]])
                     rec["files"] = len(step["files"])
+                elif step.get("hover") or step.get("force"):
+                    # Controls revealed on hover (reaction palette): hover
+                    # only, never a click on the reaction button itself.
+                    try:
+                        await page.locator("[data-ext-probe]").first.scroll_into_view_if_needed()
+                    except Exception:  # noqa: BLE001 - measurement aid
+                        pass
+                    if step.get("force"):
+                        await page.click("[data-ext-probe]", force=True)
+                    else:
+                        await page.hover("[data-ext-probe]", force=True)
                 else:
-                    await page.click("[data-ext-probe]")
+                    try:
+                        await page.click("[data-ext-probe]")
+                    except Exception as exc:  # noqa: BLE001 - a measurement records it
+                        rec["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+                        rec["report"] = await _report(page)
+                        out["steps"].append(rec)
+                        out["status"] = "stopped"
+                        return out
                 await asyncio.sleep(float(step.get("settle") or 1.5))
             elif action == "type":
                 if step.get("into"):
@@ -582,6 +636,27 @@ async def run_probe_steps(probe: "ExtComposerProbe", url: str, steps: list[dict[
                 await asyncio.sleep(float(step["seconds"]))
             elif action == "page":
                 rec["elements"] = await page.evaluate(_REPORT_JS, 200)
+            elif action == "html":
+                # The last visible dialog's markup, attributes included: the
+                # one place an identifier can hide that the reports skip.
+                rec["html"] = await page.evaluate(_DIALOG_HTML_JS)
+            elif action == "focushtml":
+                # Markup of the card around the focused element (attributes
+                # only matter: urn, actor, submit control).
+                rec["html"] = await page.evaluate(_FOCUS_CARD_HTML_JS)
+            elif action == "clear":
+                # Empty the focused editor again (select all + delete): a typed
+                # measurement must not stay behind as a saved draft.
+                await page.keyboard.press("Control+A")
+                await page.keyboard.press("Delete")
+                await asyncio.sleep(1.0)
+                rec["left"] = await page.evaluate(
+                    "() => { const a = document.activeElement; return a ? (a.innerText || a.value || '').trim() : null; }"
+                )
+            elif action == "text":
+                rec["text"] = await page.evaluate(
+                    "() => ((document.querySelector('main') || document.body).innerText || '').slice(0, 4000)"
+                )
             rec["report"] = await _report(page)
             out["steps"].append(rec)
         out["status"] = "probed"

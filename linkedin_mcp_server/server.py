@@ -59,6 +59,9 @@ from linkedin_mcp_server.tools.ext_composer_probe import (  # fork extension
 from linkedin_mcp_server.tools.ext_company_post import (  # fork extension
     register_ext_company_post_tools,
 )
+from linkedin_mcp_server.tools.ext_company_actions import (  # fork extension
+    register_ext_company_actions_tools,
+)
 
 if TYPE_CHECKING:
     from linkedin_mcp_server.daemon_proxy import DaemonProxyBackend
@@ -322,6 +325,7 @@ def create_mcp_server(
         register_ext_tools(mcp, tool_timeout=tool_timeout)  # fork extension
         register_ext_company_post_tools(mcp, tool_timeout=tool_timeout)  # fork extension
         register_ext_composer_probe_tools(mcp, tool_timeout=tool_timeout)  # fork extension
+        register_ext_company_actions_tools(mcp, tool_timeout=tool_timeout)  # fork extension
 
         # Inside the gate with the rest, and easy to miss because it is the one
         # tool defined here rather than in a `register_*` call. Left out of the

@@ -46,7 +46,14 @@ from linkedin_mcp_server.linkedin.ext_mentions import (
 )
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-UNMEASURED_SUFFIXES = {".mp4", ".mov", ".avi", ".webm", ".pdf", ".ppt", ".pptx", ".doc", ".docx"}
+# Measured 2026-10-09 (round 3): a single video through the member composer's
+# media control (editor with "Untertitel"/"Miniaturbild", then a <video>
+# preview); a document through the page composer's "Mehr" -> "Dokument
+# hinzufügen" (title field, "Fertig", preview iframe titled
+# "Dokument-Wiedergabe: <title>").
+VIDEO_SUFFIXES = {".mp4", ".mov"}
+DOCUMENT_SUFFIXES = {".pdf", ".ppt", ".pptx", ".doc", ".docx"}
+UNMEASURED_SUFFIXES = {".avi", ".webm"}
 MAX_IMAGES = 20
 ALT_MAX = 1000
 
@@ -67,8 +74,23 @@ def check_media(items: list[dict[str, Any]] | None) -> tuple[list[dict[str, Any]
             return [], {
                 "status": "media_kind_unmeasured",
                 "index": i,
-                "message": "Only images are built; video and documents were not measured.",
+                "message": "Only images, mp4/mov video and pdf/office documents are built.",
             }
+        if suffix in VIDEO_SUFFIXES | DOCUMENT_SUFFIXES:
+            kind = "video" if suffix in VIDEO_SUFFIXES else "document"
+            if len(items) != 1:
+                return [], {"status": "media_mix_unsupported", "index": i,
+                            "message": f"A {kind} is posted alone."}
+            if not path.is_file():
+                return [], {"status": "media_invalid_path", "index": i, "path": str(path)}
+            if raw.get("alt_text") or raw.get("tags"):
+                return [], {"status": "media_option_unsupported", "index": i,
+                            "message": f"A {kind} takes no alt text or tags."}
+            title = str(raw.get("title") or "").strip()
+            if kind == "document" and not (1 <= len(title) <= 100):
+                return [], {"status": "document_title_required", "index": i}
+            return [{"path": path, "alt_text": None, "tags": [], "kind": kind,
+                     "title": title or None}], None
         if suffix not in IMAGE_SUFFIXES or not path.is_file():
             return [], {"status": "media_invalid_path", "index": i, "path": str(path)}
         alt = raw.get("alt_text")
@@ -90,7 +112,7 @@ def check_media(items: list[dict[str, Any]] | None) -> tuple[list[dict[str, Any]
                 tags.append(parse_target(name, target))
             except ValueError as exc:
                 return [], {"status": "media_tag_invalid", "index": i, "detail": str(exc)}
-        out.append({"path": path, "alt_text": alt or None, "tags": tags})
+        out.append({"path": path, "alt_text": alt or None, "tags": tags, "kind": "image"})
     if len({str(m["path"]) for m in out}) != len(out):
         return [], {"status": "media_invalid", "message": "the same file twice"}
     return out, None
@@ -219,9 +241,11 @@ class MediaAttacher:
         editor_selector: str,
         media_words: list[str],
         allow_tags: bool,
+        kinds: tuple[str, ...] = ("image",),
         poll: float = 0.5,
         timeout: float = 20.0,
     ) -> None:
+        self._kinds = kinds
         self._page = page
         self._editor = editor_selector
         self._media_words = media_words
@@ -263,6 +287,19 @@ class MediaAttacher:
 
     async def attach(self, items: list[dict[str, Any]], *, navigate: Any) -> dict[str, Any]:
         """Run the whole media step; ``{"status": "attached", ...}`` or a stop."""
+        kind = items[0].get("kind", "image") if items else "image"
+        if kind not in self._kinds:
+            return {
+                "status": "media_kind_unmeasured",
+                "kind": kind,
+                "message": "Measured 2026-10-09: video only through the member "
+                "composer (the page composer kept 'Weiter' disabled), documents "
+                "only through the page composer (the member composer offers none).",
+            }
+        if kind == "video":
+            return await self._video(items[0])
+        if kind == "document":
+            return await self._document(items[0])
         if any(m["tags"] for m in items) and not self._allow_tags:
             return {
                 "status": "media_tag_unverifiable",
@@ -447,3 +484,133 @@ def _count(label: str) -> int:
 
 
 __all__ = ["MediaAttacher", "check_media", "describe", "fold"]
+
+
+_VIDEO_EDITOR_JS = r"""(arg) => {
+  const vis = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(vis);
+  const ed = dialogs.filter(d => !d.querySelector(arg.editor)).pop();
+  const comp = dialogs.find(d => d.querySelector(arg.editor));
+  return {editor_videos: ed ? [...ed.querySelectorAll('video')].filter(vis).length : 0,
+          composer_videos: comp ? [...comp.querySelectorAll('video')].filter(vis).length : 0};
+}"""
+
+# The document dialog ("Dokumente teilen"): its file input, its title field.
+_DOC_DIALOG_JS = r"""(arg) => {
+  const vis = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(vis);
+  // The document dialog, not the composer (which keeps its own file input).
+  const d = dialogs.filter(x => !(arg.editor && x.querySelector(arg.editor)))
+      .filter(x => x.querySelector('input[type="file"]') || x.querySelector('input[type="text"]')).pop();
+  if (!d) return {dialog: false};
+  d.querySelectorAll('input[type="file"]').forEach(i => i.setAttribute('data-ext-media', 'doc-file'));
+  const titles = [...d.querySelectorAll('input[type="text"]')].filter(vis);
+  if (titles.length === 1) titles[0].setAttribute('data-ext-media', 'doc-title');
+  return {dialog: true, files: d.querySelectorAll('input[type="file"]').length,
+          titles: titles.length, title: titles.length === 1 ? titles[0].value : null};
+}"""
+
+# Read-back: the composer's document preview names the title (measured:
+# iframe title "Dokument-Wiedergabe: <title>").
+_DOC_PREVIEW_JS = r"""(arg) => {
+  const vis = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const comp = [...document.querySelectorAll('[role="dialog"], dialog')].filter(vis)
+      .find(d => d.querySelector(arg.editor));
+  if (!comp) return null;
+  return [...comp.querySelectorAll('iframe[title]')].map(f => f.getAttribute('title'));
+}"""
+
+
+async def _video(self: "MediaAttacher", item: dict[str, Any]) -> dict[str, Any]:
+    opener = await self._page.evaluate(
+        _MARK_JS,
+        self._arg(words=self._media_words, tag="media-open", scope="composer",
+                  composer=self._editor),
+    ) or {}
+    if opener.get("count") != 1:
+        return {"status": "media_button_unavailable", "found": opener.get("count")}
+    async with self._page.expect_file_chooser(timeout=15_000) as info:
+        await self._page.click('[data-ext-media="media-open"]')
+    chooser = await info.value
+    await chooser.set_files([str(item["path"])])
+
+    async def in_editor() -> bool:
+        got = await self._page.evaluate(_VIDEO_EDITOR_JS, {"editor": self._editor}) or {}
+        return bool(got.get("editor_videos"))
+
+    if not await self._wait(in_editor):
+        return {"status": "media_upload_incomplete", "kind": "video"}
+    nxt = await self._click("media-next", words_=words("next"))
+    if nxt.get("count") != 1 or nxt.get("disabled"):
+        return {"status": "image_editor_stuck", "kind": "video"}
+
+    async def in_composer() -> bool:
+        got = await self._page.evaluate(_VIDEO_EDITOR_JS, {"editor": self._editor}) or {}
+        return got.get("composer_videos") == 1
+
+    if not await self._wait(in_composer):
+        return {"status": "media_upload_incomplete", "kind": "video"}
+    return {"status": "attached", "media": [{"file": item["path"].name, "kind": "video"}]}
+
+
+async def _document(self: "MediaAttacher", item: dict[str, Any]) -> dict[str, Any]:
+    more = await self._page.evaluate(
+        _MARK_JS,
+        self._arg(words=words("more_options"), tag="doc-more", scope="composer",
+                  composer=self._editor),
+    ) or {}
+    if more.get("count") == 1:
+        await self._page.click('[data-ext-media="doc-more"]')
+        await asyncio.sleep(self._poll * 2)
+    opener = await self._page.evaluate(
+        _MARK_JS,
+        self._arg(words=words("document"), tag="doc-open", scope="composer",
+                  composer=self._editor),
+    ) or {}
+    if opener.get("count") != 1:
+        return {"status": "document_control_unavailable", "found": opener.get("count")}
+    await self._page.click('[data-ext-media="doc-open"]')
+    await asyncio.sleep(self._poll * 2)
+    dlg = await self._page.evaluate(_DOC_DIALOG_JS, {"editor": self._editor}) or {}
+    if not dlg.get("dialog") or dlg.get("files") < 1:
+        return {"status": "document_control_unavailable"}
+    await self._page.set_input_files('[data-ext-media="doc-file"]', str(item["path"]))
+
+    async def titled() -> dict[str, Any] | None:
+        got = await self._page.evaluate(_DOC_DIALOG_JS, {"editor": self._editor}) or {}
+        return got if got.get("titles") == 1 else None
+
+    if not await self._wait(titled):
+        return {"status": "media_upload_incomplete", "kind": "document"}
+    await self._page.fill('[data-ext-media="doc-title"]', item["title"])
+    got = await self._page.evaluate(_DOC_DIALOG_JS, {"editor": self._editor}) or {}
+    if got.get("title") != item["title"]:
+        return {"status": "document_title_not_taken", "shown": got.get("title")}
+    # "Fertig" stays disabled while the upload is processed (it was enabled
+    # after 6 s in the measurement): wait for it, never click it disabled.
+    async def ready() -> dict[str, Any] | None:
+        got = await self._page.evaluate(
+            _MARK_JS, self._arg(words=words("next"), tag="doc-done", scope="document")
+        ) or {}
+        return got if got.get("count") == 1 and not got.get("disabled") else None
+
+    done = await self._wait(ready) or {}
+    if done.get("count") == 1:
+        await self._page.click('[data-ext-media="doc-done"]')
+        await asyncio.sleep(self._poll * 2)
+    else:
+        return {"status": "document_confirm_unavailable"}
+
+    async def previewed() -> bool:
+        titles = await self._page.evaluate(_DOC_PREVIEW_JS, {"editor": self._editor}) or []
+        return any(str(t).endswith(": " + item["title"]) for t in titles)
+
+    if not await self._wait(previewed):
+        return {"status": "document_not_attached", "kind": "document"}
+    return {"status": "attached",
+            "media": [{"file": item["path"].name, "kind": "document", "title": "verified"}]}
+
+
+MediaAttacher._video = _video  # type: ignore[attr-defined]
+MediaAttacher._document = _document  # type: ignore[attr-defined]
