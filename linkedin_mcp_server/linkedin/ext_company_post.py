@@ -56,7 +56,10 @@ _SCHEDULE_LABELS = [
     "beitrag planen",
 ]
 _POST_WORDS = ["posten", "post", "veröffentlichen", "publish"]
-_SCHEDULE_CONFIRM_WORDS = ["weiter", "next", "fertig", "done", "planen", "schedule"]
+# Confirms the schedule dialog and returns to the composer.
+_SCHEDULE_NEXT_WORDS = ["weiter", "next", "fertig", "done"]
+# The composer's commit button once a time is set -- measured: "Planen".
+_SCHEDULE_COMMIT_WORDS = ["planen", "schedule"]
 _DISCARD_LABELS = ["verwerfen", "discard", "schließen", "close", "dismiss"]
 _DRAFT_WORDS = [
     "als entwurf speichern",
@@ -208,18 +211,22 @@ _MEDIA_PRESENT_JS = r"""(selector) => {
       .filter(el => visible(el) && (el.width > 80 || el.videoWidth > 80)).length;
 }"""
 
+# The schedule dialog, measured 2026-10-09 (de locale): the date is an
+# ``input type="text"`` pre-filled with today as ``9.10.2026`` -- not an ISO
+# value and not ``type="date"`` -- and the time an ``input role="combobox"``
+# reading ``14:00``. Writing an ISO date there fails the read-back and stops
+# the run, which is safe but useless.
+#
+# So the format is not hard-coded, it is *learned*: the dialog pre-fills today,
+# the caller passes today's numbers, and the layout follows from comparing the
+# two. A locale that writes ``10/9/2026`` or ``2026-10-09`` is rendered the same
+# way without another release.
 _SET_SCHEDULE_JS = r"""(arg) => {
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(visible);
   const root = dialogs[dialogs.length - 1];
   if (!root) return {ok: false, why: 'no_dialog'};
   const inputs = [...root.querySelectorAll('input')].filter(visible);
-  const setter = (el, v) => {
-    const d = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
-    if (d && d.set) d.set.call(el, v); else el.value = v;
-    el.dispatchEvent(new Event('input', {bubbles: true}));
-    el.dispatchEvent(new Event('change', {bubbles: true}));
-  };
   const label = i => String(i.getAttribute('aria-label') || '').toLowerCase();
   const dateInput = inputs.find(i => (i.type || '').toLowerCase() === 'date')
                  || inputs.find(i => /datum|date/.test(label(i)));
@@ -231,9 +238,72 @@ _SET_SCHEDULE_JS = r"""(arg) => {
                                                  label: label(i).slice(0, 50),
                                                  value: i.value}))};
   }
-  setter(dateInput, arg.date);
-  setter(timeInput, arg.time);
-  return {ok: dateInput.value === arg.date && timeInput.value === arg.time,
+
+  // -- learn the date layout from the pre-filled sample -----------------------
+  const sample = String(dateInput.value || '');
+  const renderDate = () => {
+    if ((dateInput.type || '').toLowerCase() === 'date') return arg.iso;
+    const sep = (sample.match(/[^0-9]/) || [])[0];
+    if (!sep) return null;
+    const parts = sample.split(sep);
+    if (parts.length !== 3) return null;
+    const nums = parts.map(x => parseInt(x, 10));
+    const yearAt = parts.findIndex(x => x.length === 4) >= 0
+      ? parts.findIndex(x => x.length === 4)
+      : nums.indexOf(arg.today.y);
+    if (yearAt < 0) return null;
+    const rest = [0, 1, 2].filter(i => i !== yearAt);
+    let dayAt, monthAt;
+    if (arg.today.d !== arg.today.m) {
+      dayAt = rest.find(i => nums[i] === arg.today.d);
+      monthAt = rest.find(i => nums[i] === arg.today.m);
+      if (dayAt === undefined || monthAt === undefined || dayAt === monthAt) return null;
+    } else {
+      // Ambiguous sample (same day and month). Fall back to the convention
+      // that goes with the separator rather than guessing silently.
+      [dayAt, monthAt] = sep === '/' ? [rest[1], rest[0]] : [rest[0], rest[1]];
+      if (yearAt === 0) { dayAt = rest[1]; monthAt = rest[0]; }
+    }
+    const padded = i => parts[i].length === 2 && nums[i] < 10;
+    const out = [];
+    out[yearAt] = String(arg.target.y);
+    out[dayAt] = padded(dayAt) || parts[dayAt].length === 2
+      ? String(arg.target.d).padStart(2, '0') : String(arg.target.d);
+    out[monthAt] = padded(monthAt) || parts[monthAt].length === 2
+      ? String(arg.target.m).padStart(2, '0') : String(arg.target.m);
+    return out.join(sep);
+  };
+
+  const renderTime = () => {
+    const t = String(timeInput.value || '');
+    const ampm = t.match(/\s*([ap]\.?m\.?)/i);
+    let h = arg.target.hh;
+    if (ampm) {
+      const suffix = arg.target.hh >= 12 ? ampm[1].replace(/a/i, c => c === 'a' ? 'p' : 'P')
+                                         : ampm[1].replace(/p/i, c => c === 'p' ? 'a' : 'A');
+      h = arg.target.hh % 12 === 0 ? 12 : arg.target.hh % 12;
+      const gap = /\s/.test(t) ? ' ' : '';
+      return String(h) + ':' + String(arg.target.mm).padStart(2, '0') + gap + suffix;
+    }
+    return String(h).padStart(2, '0') + ':' + String(arg.target.mm).padStart(2, '0');
+  };
+
+  const wantDate = renderDate();
+  const wantTime = renderTime();
+  if (!wantDate) {
+    return {ok: false, why: 'date_format_unreadable', sample: sample};
+  }
+
+  const setter = (el, v) => {
+    const d = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+    if (d && d.set) d.set.call(el, v); else el.value = v;
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    el.dispatchEvent(new Event('change', {bubbles: true}));
+  };
+  setter(dateInput, wantDate);
+  setter(timeInput, wantTime);
+  return {ok: dateInput.value === wantDate && timeInput.value === wantTime,
+          sample: sample, wrote_date: wantDate, wrote_time: wantTime,
           date: dateInput.value, time: timeInput.value};
 }"""
 
@@ -420,8 +490,21 @@ class ExtCompanyPostComposer:
             else:
                 await self._page.click('[data-ext-company="schedule"]')
                 await self._session.delay(2.0)
+                when = datetime.strptime(scheduled_at, "%Y-%m-%d %H:%M")
+                today = datetime.now()
                 filled = await self._page.evaluate(
-                    _SET_SCHEDULE_JS, {"date": day, "time": clock}
+                    _SET_SCHEDULE_JS,
+                    {
+                        "iso": day,
+                        "today": {"y": today.year, "m": today.month, "d": today.day},
+                        "target": {
+                            "y": when.year,
+                            "m": when.month,
+                            "d": when.day,
+                            "hh": when.hour,
+                            "mm": when.minute,
+                        },
+                    },
                 )
                 if not filled.get("ok"):
                     result["status"] = "schedule_not_filled"
@@ -429,7 +512,7 @@ class ExtCompanyPostComposer:
                     await self._discard(result)
                     return result
                 done = await self._mark(
-                    "schedule-done", words=_SCHEDULE_CONFIRM_WORDS, scope="document"
+                    "schedule-done", words=_SCHEDULE_NEXT_WORDS, scope="document"
                 )
                 if done.get("count") != 1:
                     result["status"] = "schedule_confirm_unavailable"
@@ -440,7 +523,8 @@ class ExtCompanyPostComposer:
                 await self._session.delay(2.0)
                 summary = await self._page.evaluate(_DIALOG_TEXT_JS)
                 result["composer_summary"] = summary
-                if clock not in summary:
+                shown = [clock, filled.get("wrote_time") or clock]
+                if not any(s in summary for s in shown if s):
                     result["status"] = "schedule_not_confirmed"
                     result["message"] = (
                         f"The composer does not show {clock} after the schedule "
@@ -493,7 +577,7 @@ class ExtCompanyPostComposer:
             await self._session.delay(2.0)
             return {**result, "status": "draft_saved", "posted": False}
 
-        words = _SCHEDULE_CONFIRM_WORDS if mode == "schedule" else _POST_WORDS
+        words = _SCHEDULE_COMMIT_WORDS if mode == "schedule" else _POST_WORDS
         button = await self._mark("post", words=words)
         if button.get("count") != 1:
             result["status"] = "post_button_unavailable"

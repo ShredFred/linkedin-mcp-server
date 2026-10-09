@@ -81,7 +81,18 @@ class FakePage:
             tag = arg["tag"]
             return {"count": self.mark_counts.get(tag, 1), "disabled": False, "seen": []}
         if script is mod._SET_SCHEDULE_JS:
-            return {"ok": self.schedule_ok, "date": arg["date"], "time": arg["time"]}
+            # The dialog learns its format from the pre-filled sample, so the
+            # call carries today's and the target's numbers, not strings.
+            t = arg["target"]
+            wrote_time = f"{t['hh']:02d}:{t['mm']:02d}"
+            return {
+                "ok": self.schedule_ok,
+                "sample": "9.10.2026",
+                "wrote_date": f"{t['d']}.{t['m']}.{t['y']}",
+                "wrote_time": wrote_time,
+                "date": f"{t['d']}.{t['m']}.{t['y']}",
+                "time": wrote_time,
+            }
         if script is mod._DIALOG_TEXT_JS:
             return self.summary
         if script is mod._WRITE_JS:
