@@ -60,6 +60,10 @@ _POST_WORDS = ["posten", "post", "veröffentlichen", "publish"]
 _SCHEDULE_NEXT_WORDS = ["weiter", "next", "fertig", "done"]
 # The composer's commit button once a time is set -- measured: "Planen".
 _SCHEDULE_COMMIT_WORDS = ["planen", "schedule"]
+# What makes a dialog the post composer rather than a chat window: it has a
+# commit button. Both wordings count, because the button renames itself to
+# "Planen" once a time is set.
+COMPOSER_WORDS = ["posten", "post", "veröffentlichen", "publish", "planen", "schedule"]
 _DISCARD_LABELS = ["verwerfen", "discard", "schließen", "close", "dismiss"]
 _DRAFT_WORDS = [
     "als entwurf speichern",
@@ -142,12 +146,24 @@ def check_schedule(mode: str, scheduled_at: str | None) -> dict[str, Any] | None
 # Mark exactly one visible control, inside the dialog or on the page.
 # Returns what it saw when the match is not unique, so a failure measures.
 _MARK_JS = r"""(arg) => {
+  const mcpVisible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const mcpNorm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const mcpDialogs = () => [...document.querySelectorAll('[role="dialog"], dialog')]
+      .filter(mcpVisible);
+  // `anchor` must be present, and if `anchor_words` is given the dialog must
+  // also carry a visible button with one of those words. Document order only
+  // breaks ties between dialogs that both qualify.
+  const mcpDialogFor = (anchor, words) => mcpDialogs().find(d => {
+    if (anchor && !d.querySelector(anchor)) return false;
+    if (!words || !words.length) return true;
+    return [...d.querySelectorAll('button, [role="button"]')].filter(mcpVisible)
+        .some(b => words.includes(mcpNorm(b.innerText)));
+  });
+
   document.querySelectorAll('[data-ext-company]').forEach(e => e.removeAttribute('data-ext-company'));
-  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-  const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
-  const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(visible);
-  const holding = sel => dialogs.find(d => d.querySelector(sel));
-  const dialog = holding(arg.anchor || '[role="textbox"]');
+  const visible = mcpVisible;
+  const norm = mcpNorm;
+  const dialog = mcpDialogFor(arg.anchor, arg.anchor_words);
   const root = arg.scope === 'dialog' ? dialog : document;
   if (!root) return {count: 0, no_dialog: true};
   const sel = 'button, [role="button"], [role="menuitem"]';
@@ -170,13 +186,24 @@ _MARK_JS = r"""(arg) => {
 # Read, never clicked: opening the composer from the page's admin view already
 # makes the page the author.
 _AUTHOR_JS = r"""(arg) => {
-  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-  const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(visible);
-  // The composer is the dialog holding the editor -- not the first, not the
-  // last: a messaging overlay is a dialog as well.
-  const dialog = dialogs.find(d => d.querySelector('[role="textbox"]'));
+  const mcpVisible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const mcpNorm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const mcpDialogs = () => [...document.querySelectorAll('[role="dialog"], dialog')]
+      .filter(mcpVisible);
+  // `anchor` must be present, and if `anchor_words` is given the dialog must
+  // also carry a visible button with one of those words. Document order only
+  // breaks ties between dialogs that both qualify.
+  const mcpDialogFor = (anchor, words) => mcpDialogs().find(d => {
+    if (anchor && !d.querySelector(anchor)) return false;
+    if (!words || !words.length) return true;
+    return [...d.querySelectorAll('button, [role="button"]')].filter(mcpVisible)
+        .some(b => words.includes(mcpNorm(b.innerText)));
+  });
+
+  const visible = mcpVisible;
+  const dialog = mcpDialogFor('[role="textbox"]', arg.commit_words);
   if (!dialog) return {ok: false, why: 'no_composer_dialog',
-                       dialogs: dialogs.length};
+                       dialogs: mcpDialogs().length};
   const norm = v => String(v || '').replace(/\s+/g, ' ').trim();
   const buttons = [...dialog.querySelectorAll('button, [role="button"]')].filter(visible);
   const texts = buttons.map(b => norm(b.innerText)).filter(Boolean);
@@ -233,6 +260,8 @@ _SET_SCHEDULE_JS = r"""(arg) => {
   const label = i => String(i.getAttribute('aria-label') || '').toLowerCase();
   const hasFields = d => [...d.querySelectorAll('input')].filter(visible)
       .some(i => (i.type || '').toLowerCase() === 'date' || /datum|date/.test(label(i)));
+  // The dialog that holds the date field, whatever its position. A messaging
+  // overlay has inputs too; it has no date field.
   const root = dialogs.find(hasFields);
   if (!root) return {ok: false, why: 'no_schedule_dialog', dialogs: dialogs.length};
   const inputs = [...root.querySelectorAll('input')].filter(visible);
@@ -315,10 +344,22 @@ _SET_SCHEDULE_JS = r"""(arg) => {
           date: dateInput.value, time: timeInput.value};
 }"""
 
-_DIALOG_TEXT_JS = r"""() => {
-  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-  const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(visible);
-  const root = dialogs.find(d => d.querySelector('[role="textbox"]'));
+_DIALOG_TEXT_JS = r"""(arg) => {
+  const mcpVisible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const mcpNorm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const mcpDialogs = () => [...document.querySelectorAll('[role="dialog"], dialog')]
+      .filter(mcpVisible);
+  // `anchor` must be present, and if `anchor_words` is given the dialog must
+  // also carry a visible button with one of those words. Document order only
+  // breaks ties between dialogs that both qualify.
+  const mcpDialogFor = (anchor, words) => mcpDialogs().find(d => {
+    if (anchor && !d.querySelector(anchor)) return false;
+    if (!words || !words.length) return true;
+    return [...d.querySelectorAll('button, [role="button"]')].filter(mcpVisible)
+        .some(b => words.includes(mcpNorm(b.innerText)));
+  });
+
+  const root = mcpDialogFor('[role="textbox"]', arg.commit_words);
   return root ? (root.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 500) : '';
 }"""
 
@@ -343,6 +384,7 @@ class ExtCompanyPostComposer:
         labels: list[str] | None = None,
         scope: str = "dialog",
         anchor: str = '[role="textbox"]',
+        anchor_words: list[str] | None = None,
     ) -> dict[str, Any]:
         return await self._page.evaluate(
             _MARK_JS,
@@ -352,6 +394,7 @@ class ExtCompanyPostComposer:
                 "tag": tag,
                 "scope": scope,
                 "anchor": anchor,
+                "anchor_words": COMPOSER_WORDS if anchor_words is None else anchor_words,
             },
         )
 
@@ -373,7 +416,9 @@ class ExtCompanyPostComposer:
             result["cleanup_error"] = f"{type(exc).__name__}: {exc}"[:200]
 
     async def _author_ok(self, page_name: str) -> dict[str, Any]:
-        return await self._page.evaluate(_AUTHOR_JS, {"name": page_name})
+        return await self._page.evaluate(
+            _AUTHOR_JS, {"name": page_name, "commit_words": COMPOSER_WORDS}
+        )
 
     async def create_company_post(
         self,
@@ -507,6 +552,7 @@ class ExtCompanyPostComposer:
                     "schedule-done",
                     words=_SCHEDULE_NEXT_WORDS,
                     anchor="input",
+                    anchor_words=_SCHEDULE_NEXT_WORDS,
                 )
                 if done.get("count") != 1:
                     result["status"] = "schedule_confirm_unavailable"
@@ -515,7 +561,9 @@ class ExtCompanyPostComposer:
                     return result
                 await self._page.click('[data-ext-company="schedule-done"]')
                 await self._session.delay(2.0)
-                summary = await self._page.evaluate(_DIALOG_TEXT_JS)
+                summary = await self._page.evaluate(
+                    _DIALOG_TEXT_JS, {"commit_words": COMPOSER_WORDS}
+                )
                 result["composer_summary"] = summary
                 shown = [clock, filled.get("wrote_time") or clock]
                 if not any(s in summary for s in shown if s):
