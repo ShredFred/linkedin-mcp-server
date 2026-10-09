@@ -145,7 +145,8 @@ _MARK_JS = r"""(arg) => {
   document.querySelectorAll('[data-ext-company]').forEach(e => e.removeAttribute('data-ext-company'));
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
-  const dialog = document.querySelector('[role="dialog"], dialog');
+  const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(visible);
+  const dialog = dialogs[dialogs.length - 1];
   const root = arg.scope === 'dialog' ? dialog : document;
   if (!root) return {count: 0, no_dialog: true};
   const sel = 'button, [role="button"], [role="menuitem"]';
@@ -168,9 +169,10 @@ _MARK_JS = r"""(arg) => {
 # Read, never clicked: opening the composer from the page's admin view already
 # makes the page the author.
 _AUTHOR_JS = r"""(arg) => {
-  const dialog = document.querySelector('[role="dialog"], dialog');
-  if (!dialog) return {ok: false, why: 'no_dialog'};
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(visible);
+  const dialog = dialogs[dialogs.length - 1];
+  if (!dialog) return {ok: false, why: 'no_dialog'};
   const norm = v => String(v || '').replace(/\s+/g, ' ').trim();
   const buttons = [...dialog.querySelectorAll('button, [role="button"]')].filter(visible);
   const texts = buttons.map(b => norm(b.innerText)).filter(Boolean);
@@ -450,32 +452,9 @@ class ExtCompanyPostComposer:
             await self._discard(result)
             return result
 
-        # 4. Image. A dry run never uploads: an attached image cannot be taken
-        #    out again and LinkedIn restores it as a draft.
-        if image is not None:
-            media = await self._mark("media", labels=_MEDIA_LABELS)
-            if media.get("count") != 1:
-                result["status"] = "media_button_unavailable"
-                result["found"] = media
-                await self._discard(result)
-                return result
-            if not confirm:
-                result["image"] = image.name
-                result["image_step"] = "not_uploaded_dry_run"
-            else:
-                async with self._page.expect_file_chooser(timeout=15_000) as info:
-                    await self._page.click('[data-ext-company="media"]')
-                chooser = await info.value
-                await chooser.set_files(str(image))
-                await self._session.delay(6.0)
-                nxt = await self._mark("media-next", words=_NEXT_WORDS, scope="document")
-                if nxt.get("count") == 1:
-                    await self._page.click('[data-ext-company="media-next"]')
-                    await self._session.delay(2.0)
-                result["image"] = image.name
-                result["image_step"] = "uploaded"
-
-        # 5. Schedule.
+        # 4. Schedule -- before the image on purpose: the image editor is
+        #    the one step that leaves a second dialog open, and every later
+        #    lookup would have to disambiguate it.
         if mode == "schedule":
             assert scheduled_at  # guaranteed by check_schedule
             day, clock = scheduled_at.split(" ")
@@ -533,6 +512,39 @@ class ExtCompanyPostComposer:
                     await self._discard(result)
                     return result
                 result["scheduled_at"] = scheduled_at
+
+        # 5. Image. A dry run never uploads: an attached image cannot be taken
+        #    out again and LinkedIn restores it as a draft.
+        if image is not None:
+            media = await self._mark("media", labels=_MEDIA_LABELS)
+            if media.get("count") != 1:
+                result["status"] = "media_button_unavailable"
+                result["found"] = media
+                await self._discard(result)
+                return result
+            if not confirm:
+                result["image"] = image.name
+                result["image_step"] = "not_uploaded_dry_run"
+            else:
+                async with self._page.expect_file_chooser(timeout=15_000) as info:
+                    await self._page.click('[data-ext-company="media"]')
+                chooser = await info.value
+                await chooser.set_files(str(image))
+                await self._session.delay(6.0)
+                nxt = await self._mark("media-next", words=_NEXT_WORDS, scope="document")
+                if nxt.get("count") != 1:
+                    result["status"] = "image_editor_stuck"
+                    result["found"] = nxt
+                    result["message"] = (
+                        "The image editor offered no single continue button; it "
+                        "would stay open over every later step. Nothing published."
+                    )
+                    await self._discard(result)
+                    return result
+                await self._page.click('[data-ext-company="media-next"]')
+                await self._session.delay(2.0)
+                result["image"] = image.name
+                result["image_step"] = "uploaded"
 
         # 6. Dry run ends here.
         if not confirm:
