@@ -395,26 +395,42 @@ _INSERT_JS = r"""(arg) => {
 _OPTIONS_JS = r"""(arg) => {
   const vis = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const norm = v => String(v || '').replace(/\s+/g, ' ').trim();
+  // Measured 2026-10-09: the id sits in React props somewhere between the
+  // option's nodes and the list -- not at a fixed key. Every string matching
+  // the pattern is collected from the props of the option's own nodes and of
+  // their fibers up to (not beyond) the option; exactly one distinct id or
+  // none. An ancestor shared by all options would hold every id, so the walk
+  // stops at the first host node outside the option.
   const idOf = root => {
     const want = /^mentionTypeahead_display_(.+)$/;
+    const found = new Set();
+    const seen = new WeakSet();
+    const scan = (v, depth) => {
+      if (v == null || depth > 7 || found.size > 3) return;
+      if (typeof v === 'string') { const m = v.match(want); if (m) found.add(m[1]); return; }
+      if (typeof v !== 'object' || seen.has(v) || v instanceof Node) return;
+      seen.add(v);
+      for (const k of Object.keys(v).slice(0, 40)) {
+        if (k === '_owner' || k === 'children' || k.startsWith('__')) continue;
+        try { scan(v[k], depth + 1); } catch (e) {}
+      }
+    };
     for (const el of [root, ...root.querySelectorAll('*')].slice(0, 60)) {
       const urn = el.getAttribute && el.getAttribute('data-entity-urn');
-      if (urn) { const m = urn.match(/:(ACoA[A-Za-z0-9_-]+|\d+)$/); if (m) return m[1]; }
+      if (urn) { const m = urn.match(/:(ACoA[A-Za-z0-9_-]+|\d+)$/); if (m) found.add(m[1]); }
       for (const k of Object.keys(el)) {
-        if (k.startsWith('__reactProps')) {
-          const id = el[k] && el[k].id;
-          if (typeof id === 'string' && want.test(id)) return id.match(want)[1];
-        }
+        if (k.startsWith('__reactProps')) scan(el[k], 0);
         if (k.startsWith('__reactFiber')) {
           let f = el[k];
           for (let i = 0; f && i < 25; i++, f = f.return) {
-            const id = f.memoizedProps && f.memoizedProps.id;
-            if (typeof id === 'string' && want.test(id)) return id.match(want)[1];
+            const node = f.stateNode;
+            if (node instanceof Node && node !== root && !root.contains(node)) break;
+            scan(f.memoizedProps, 0);
           }
         }
       }
     }
-    return null;
+    return found.size === 1 ? [...found][0] : null;
   };
   const status = [...document.querySelectorAll('[role="status"]')]
       .map(s => norm(s.getAttribute('aria-label') || s.innerText)).filter(Boolean);

@@ -87,7 +87,14 @@ RUNTIME = r"""
         o.innerHTML = '<div role="button" tabindex="-1"><figure aria-hidden="true"><svg id="' + kind
           + '"></svg></figure><div><p>' + c.name + '</p><p>' + sub + '</p></div></div>';
         if (cfg.expose_ids !== false) {
-          o.firstChild['__reactProps$fake'] = {id: 'mentionTypeahead_display_' + c.id};
+          // As measured: the id is nested in the props of a component fiber
+          // between the option and the list, not a top-level prop. The list's
+          // own fiber holds every id -- a walk that does not stop at the
+          // option would see all of them.
+          o['__reactFiber$fake'] = {stateNode: o, memoizedProps: {className: 'x'},
+            return: {stateNode: null,
+                     memoizedProps: {item: {data: {hit: {meta: {id: 'mentionTypeahead_display_' + c.id}}}}},
+                     return: {stateNode: box, memoizedProps: {all: list.map(x => 'mentionTypeahead_display_' + x.id)}}}};
         }
       }
       o.addEventListener('mousedown', e => e.preventDefault());
