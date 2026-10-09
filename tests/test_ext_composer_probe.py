@@ -66,7 +66,7 @@ def probe(page: FakePage) -> ExtComposerProbe:
 
 
 def test_only_linkedin_is_probed() -> None:
-    assert check_url("https://www.linkedin.com/company/mivia/") is None
+    assert check_url("https://www.linkedin.com/company/acme-labs/") is None
     assert check_url("https://evil.example/linkedin.com")["field"] == "url"
     assert check_url("https://notlinkedin.com/x")["field"] == "url"
 
@@ -89,7 +89,7 @@ def test_a_harmless_label_passes() -> None:
 async def test_an_element_whose_own_wording_could_publish_is_not_clicked() -> None:
     page = FakePage(mark={"count": 1, "refused": "posten"})
     result = await probe(page).probe(
-        "https://www.linkedin.com/company/mivia/", click_labels=["Beitrag erstellen"], limit=10
+        "https://www.linkedin.com/company/acme-labs/", click_labels=["Beitrag erstellen"], limit=10
     )
     assert result["status"] == "refused_click"
     assert not page.clicked
@@ -101,7 +101,7 @@ async def test_an_element_whose_own_wording_could_publish_is_not_clicked() -> No
 async def test_an_ambiguous_click_target_is_not_guessed_but_still_reported() -> None:
     page = FakePage(mark={"count": 3})
     result = await probe(page).probe(
-        "https://www.linkedin.com/company/mivia/", click_labels=["Beitrag erstellen"], limit=10
+        "https://www.linkedin.com/company/acme-labs/", click_labels=["Beitrag erstellen"], limit=10
     )
     assert result["status"] == "click_target_not_unique"
     assert result["matches"] == 3
@@ -113,18 +113,34 @@ async def test_an_ambiguous_click_target_is_not_guessed_but_still_reported() -> 
 async def test_a_plain_probe_navigates_reports_and_clicks_nothing() -> None:
     page = FakePage()
     result = await probe(page).probe(
-        "https://www.linkedin.com/company/mivia/", click_labels=[], limit=10
+        "https://www.linkedin.com/company/acme-labs/", click_labels=[], limit=10
     )
     assert result["status"] == "probed"
     assert result["clicked"] == []
     assert not page.clicked
-    assert page.goto_urls == ["https://www.linkedin.com/company/mivia/"]
+    assert page.goto_urls == ["https://www.linkedin.com/company/acme-labs/"]
 
 
 @pytest.mark.asyncio
 async def test_one_click_at_most_and_only_the_marked_element() -> None:
     page = FakePage()
     await probe(page).probe(
-        "https://www.linkedin.com/company/mivia/", click_labels=["Beitrag erstellen"], limit=10
+        "https://www.linkedin.com/company/acme-labs/", click_labels=["Beitrag erstellen"], limit=10
     )
     assert page.clicked == ["[data-ext-probe]"]
+
+
+@pytest.mark.parametrize("value", ["@Max", "@Erika Mus", "@Acme-Labs"])
+def test_type_mention_accepts_an_at_and_a_name(value) -> None:
+    from linkedin_mcp_server.linkedin.ext_composer_probe import check_type_mention
+
+    assert check_type_mention(value) is None
+
+
+@pytest.mark.parametrize(
+    "value", ["Max", "@", "@1abc", "@Max\nPosten", "@" + "a" * 31, "@Max; drop"]
+)
+def test_type_mention_refuses_anything_but_a_short_name(value) -> None:
+    from linkedin_mcp_server.linkedin.ext_composer_probe import check_type_mention
+
+    assert check_type_mention(value)["field"] == "type_mention"

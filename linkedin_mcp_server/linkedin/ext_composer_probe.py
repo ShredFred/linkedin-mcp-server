@@ -16,9 +16,14 @@ It never publishes:
   look like a publish, send, schedule-confirm or delete control -- the refusal
   list is checked against the caller's label *and* against the element's own
   text, so a renamed button cannot slip through;
-* clicks happen only in the order the caller names, at most four per call,
-  and nothing is typed anywhere. A sequence is needed because a dialog can
-  only be reached through the control that opens it.
+* clicks happen only in the order the caller names, at most four per call.
+  A sequence is needed because a dialog can only be reached through the
+  control that opens it.
+* typing is limited to one mention probe (``type_mention``, 2026-10-09): an
+  ``@`` plus at most 30 name characters, typed key by key into the one
+  visible composer editor, so the typeahead list can be measured. The editor
+  is cleared and the composer discarded afterwards; no publish control is
+  ever clicked (the discard only clicks close/discard wording).
 
 The report is deliberately verbose: tag, role, aria-label, text, enabled state
 and whether the element sits inside a dialog. That is what distinguishes "the
@@ -28,6 +33,8 @@ control is missing" from "the control is there under a name we did not try".
 from __future__ import annotations
 
 import logging
+import asyncio
+import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -91,6 +98,87 @@ def check_click_label(label: str | None) -> dict[str, Any] | None:
     return None
 
 
+_MENTION_PROBE_RE = re.compile(r"^@[^\W\d_][\w .'-]{0,29}$")
+
+
+def check_type_mention(value: str | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not _MENTION_PROBE_RE.match(value):
+        return {
+            "status": "invalid_input",
+            "field": "type_mention",
+            "message": "type_mention must be '@' plus 1-30 name characters.",
+        }
+    return None
+
+
+# The one visible composer editor (inside a dialog).
+_MARK_EDITOR_JS = r"""() => {
+  document.querySelectorAll('[data-ext-probe-editor]').forEach(e => e.removeAttribute('data-ext-probe-editor'));
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const hits = [...document.querySelectorAll('[role="dialog"] [contenteditable="true"], dialog [contenteditable="true"]')]
+      .filter(visible).filter((e, _, all) => !all.some(o => o !== e && o.contains(e)));
+  if (hits.length !== 1) return {count: hits.length};
+  hits[0].setAttribute('data-ext-probe-editor', '1');
+  hits[0].focus();
+  return {count: 1, componentkey: hits[0].getAttribute('componentkey') || '',
+          label: hits[0].getAttribute('aria-label') || ''};
+}"""
+
+# Everything that could be the suggestion list: ARIA listboxes, options,
+# anything whose class/id/componentkey says typeahead or mention, plus loading
+# indicators. Attributes are reported in full (bounded), because the anchor
+# we need -- profile URL, URN, entity type -- may sit on any of them.
+_TYPEAHEAD_REPORT_JS = r"""() => {
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const attrs = el => Object.fromEntries([...el.attributes]
+      .filter(a => a.name !== 'style' && a.name !== 'd')
+      .map(a => [a.name, String(a.value).slice(0, 160)]));
+  const deep = el => [el, ...el.querySelectorAll('*')]
+      .filter(e => [...e.attributes].some(a => /href|urn|entity|data-|aria-label|componentkey|src/.test(a.name)))
+      .slice(0, 25).map(e => ({tag: e.tagName.toLowerCase(), attrs: attrs(e)}));
+  const pick = '[role="listbox"], [role="option"], [class*="typeahead" i], [id*="typeahead" i],'
+             + ' [class*="mention" i], [componentkey*="typeahead" i], [componentkey*="mention" i],'
+             + ' [aria-busy="true"], [role="progressbar"], [aria-live]';
+  const containers = [...document.querySelectorAll(pick)].filter(visible).slice(0, 40).map(el => ({
+    tag: el.tagName.toLowerCase(), attrs: attrs(el),
+    lines: (el.innerText || '').split('\n').map(s => s.trim()).filter(Boolean).slice(0, 12),
+    in_dialog: !!el.closest('[role="dialog"], dialog'),
+  }));
+  const options = [...document.querySelectorAll('[role="option"]')].filter(visible).slice(0, 12)
+      .map(o => ({lines: (o.innerText || '').split('\n').map(s => s.trim()).filter(Boolean),
+                  attrs: attrs(o), parts: deep(o),
+                  html: o.outerHTML.slice(0, 2500)}));
+  const editor = document.querySelector('[data-ext-probe-editor]');
+  return {containers, options,
+          active: document.activeElement ? attrs(document.activeElement) : null,
+          editor_html: editor ? editor.innerHTML.slice(0, 1500) : null};
+}"""
+
+_PROBE_CLEAR_JS = r"""() => {
+  const editor = document.querySelector('[data-ext-probe-editor]');
+  if (!editor) return 'no_editor';
+  editor.focus();
+  document.execCommand('selectAll', false);
+  document.execCommand('delete', false);
+  return (editor.innerText || '').trim() ? 'not_cleared' : 'cleared';
+}"""
+
+# Close the composer: only close/discard wording, never anything else.
+_PROBE_DISCARD_JS = r"""(arg) => {
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const buttons = [...document.querySelectorAll('[role="dialog"] button, dialog button')].filter(visible);
+  const own = b => norm(b.getAttribute('aria-label')) + ' ' + norm(b.innerText);
+  const safe = b => !arg.forbidden.some(w => own(b).split(/\s+/).includes(w));
+  const hit = buttons.filter(b => safe(b) && (arg.close.includes(norm(b.getAttribute('aria-label')))
+      || arg.discard.includes(norm(b.innerText))));
+  if (!hit.length) return 'nothing';
+  hit[hit.length - 1].click();
+  return 'clicked';
+}"""
+
 # Report every visible interactive element. ``dialog`` tells a composer dialog
 # apart from the page behind it, which is where the earlier guess went wrong.
 _REPORT_JS = r"""(limit) => {
@@ -145,6 +233,7 @@ class ExtComposerProbe:
         *,
         click_labels: list[str],
         limit: int,
+        type_mention: str | None = None,
     ) -> dict[str, Any]:
         result: dict[str, Any] = {"url": url, "clicked": []}
         await self._navigator._navigate_to_page(url)
@@ -175,7 +264,48 @@ class ExtComposerProbe:
             await self._session.delay(3.0)
             result["clicked"].append(label)
 
+        if type_mention:
+            result["typeahead"] = await self._measure_typeahead(type_mention)
+
         result["status"] = "probed"
         result["current_url"] = self._page.url
         result["elements"] = await self._page.evaluate(_REPORT_JS, limit)
         return result
+
+    async def _measure_typeahead(self, text: str) -> dict[str, Any]:
+        out: dict[str, Any] = {"typed": text}
+        editor = await self._page.evaluate(_MARK_EDITOR_JS)
+        out["editor"] = editor
+        if editor.get("count") != 1:
+            out["status"] = "editor_not_unique"
+            return out
+        try:
+            await self._page.keyboard.type(text, delay=120)
+            # Snapshots over time: the list loads asynchronously, and a
+            # snapshot taken too early is exactly the "not fully loaded"
+            # state the mention writer has to recognise.
+            snaps = []
+            for wait in (0.3, 1.0, 2.5):
+                await asyncio.sleep(wait)
+                snaps.append(
+                    {"after_s": wait, **await self._page.evaluate(_TYPEAHEAD_REPORT_JS)}
+                )
+            out["snapshots"] = snaps
+            out["status"] = "measured"
+        finally:
+            try:
+                await self._page.keyboard.press("Escape")
+                out["clear"] = await self._page.evaluate(_PROBE_CLEAR_JS)
+                arg = {
+                    "close": ["schließen", "close", "dismiss", "verwerfen", "discard"],
+                    "discard": ["verwerfen", "discard"],
+                    "forbidden": ["posten", "post", "senden", "send", "publish",
+                                  "veröffentlichen", "planen", "schedule"],
+                }
+                first = await self._page.evaluate(_PROBE_DISCARD_JS, arg)
+                await asyncio.sleep(1.0)
+                second = await self._page.evaluate(_PROBE_DISCARD_JS, arg)
+                out["cleanup"] = f"{first}+{second}"
+            except Exception as exc:  # noqa: BLE001 - cleanup must not raise
+                out["cleanup_error"] = f"{type(exc).__name__}: {exc}"[:200]
+        return out

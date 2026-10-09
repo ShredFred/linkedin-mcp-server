@@ -11,7 +11,7 @@ that broke the code: after the composer. A test that leaves it out would pass
 on the bug.
 
 The markup mirrors what composer_probe measured on the page admin view, down
-to the author button reading "MiViA Auf Alle posten" and the date field being
+to the author button reading "Acme Labs Auf Alle posten" and the date field being
 an ``input type="text"`` pre-filled ``9.10.2026`` -- not an ISO value, which is
 the other thing that went wrong.
 """
@@ -32,7 +32,7 @@ pytestmark = [
 # It is a dialog, it has a textbox, and it sits after the composer.
 CHAT = """
 <div role="dialog" id="chat">
-  <button aria-label="Ihre Unterhaltung mit Frederik Stadler und Alexander Gerstendörfer schließen"></button>
+  <button aria-label="Ihre Unterhaltung mit Max Platzhalter und Erika Muster schließen"></button>
   <button aria-label="Mit „😃“ antworten 😃">Mit „😃“ antworten 😃</button>
   <div role="textbox" aria-label="Nachrichtenfeld erweitern"></div>
   <input type="text" aria-label="Suche in Nachrichten">
@@ -43,7 +43,7 @@ CHAT = """
 COMPOSER = """
 <div role="dialog" id="composer">
   <button aria-label="Verwerfen"></button>
-  <button type="button">MiViA Auf Alle posten</button>
+  <button type="button">Acme Labs Auf Alle posten</button>
   <div role="textbox" aria-label="Texteditor zum Erstellen von Inhalten"
        contenteditable="true"></div>
   <button aria-label="Emoji-Tastatur öffnen">Emoji-Tastatur öffnen</button>
@@ -126,10 +126,10 @@ async def dialog_of(page, tag):
 async def test_the_author_is_read_from_the_composer_not_from_the_chat(page):
     await set_page(page)
     got = await page.evaluate(
-        cp._AUTHOR_JS, {"name": "MiViA", "commit_words": cp.COMPOSER_WORDS}
+        cp._AUTHOR_JS, {"name": "Acme Labs", "commit_words": cp.COMPOSER_WORDS}
     )
     assert got["ok"] is True
-    assert any("MiViA" in t for t in got["texts"])
+    assert any("Acme Labs" in t for t in got["texts"])
     # The exact failure of 2026-10-09: chat buttons showing up as the author.
     assert not any("antworten" in t.lower() for t in got["texts"])
 
@@ -162,7 +162,7 @@ async def test_a_composer_whose_button_reads_planen_is_still_the_composer(page):
     # After a time is set the commit button renames itself.
     await set_page(page, commit="Planen")
     got = await page.evaluate(
-        cp._AUTHOR_JS, {"name": "MiViA", "commit_words": cp.COMPOSER_WORDS}
+        cp._AUTHOR_JS, {"name": "Acme Labs", "commit_words": cp.COMPOSER_WORDS}
     )
     assert got["ok"] is True
     marked = await mark(page, "post", words=cp._SCHEDULE_COMMIT_WORDS)

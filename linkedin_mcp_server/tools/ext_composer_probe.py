@@ -18,6 +18,7 @@ from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.linkedin.ext_composer_probe import (
     ExtComposerProbe,
     check_click_label,
+    check_type_mention,
     check_url,
 )
 from linkedin_mcp_server.tools.ext import TAG, _pace, _run
@@ -45,11 +46,12 @@ def register_ext_composer_probe_tools(
         ctx: Context,
         click_labels: Annotated[list[str] | None, Field(max_length=4)] = None,
         limit: Annotated[int, Field(ge=1, le=200)] = 60,
+        type_mention: str | None = None,
     ) -> dict[str, Any]:
         """
         Report the visible interactive controls of a LinkedIn page: tag, role,
         aria-label, text, componentkey, disabled state and whether the element
-        sits inside a dialog. Read-only; nothing is typed anywhere.
+        sits inside a dialog. Read-only except for one optional mention probe.
 
         Optionally opens things first: each entry of click_labels is matched
         as the exact aria-label or exact text of one visible control and
@@ -64,6 +66,11 @@ def register_ext_composer_probe_tools(
             url: A linkedin.com URL. Anything else is refused.
             click_labels: Exact aria-labels or texts to click, in order.
             limit: Maximum elements reported (default 60).
+            type_mention: Optional '@' plus 1-30 name characters, typed key
+                by key into the one visible composer editor after the clicks;
+                the typeahead list is reported in three snapshots (0.3/1.3/
+                3.8 s), then the editor is cleared and the composer
+                discarded. Nothing is ever published.
 
         Statuses: probed, click_target_not_unique (nothing clicked; the report
         is still returned so the right wording can be read off it),
@@ -73,6 +80,7 @@ def register_ext_composer_probe_tools(
         bad = check_url(url)
         for label in labels:
             bad = bad or check_click_label(label)
+        bad = bad or check_type_mention(type_mention)
         if bad:
             return bad
         refusal = _pace("page_read", tool="composer_probe")
@@ -81,5 +89,7 @@ def register_ext_composer_probe_tools(
         return await _run(
             ctx,
             "composer_probe",
-            lambda ex: _probe(ex).probe(url, click_labels=labels, limit=limit),
+            lambda ex: _probe(ex).probe(
+                url, click_labels=labels, limit=limit, type_mention=type_mention
+            ),
         )

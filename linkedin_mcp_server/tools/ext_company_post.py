@@ -92,9 +92,9 @@ def register_ext_company_post_tools(
         by itself, with no further click**. ``publish`` posts immediately.
 
         Args:
-            page_id: Numeric page id, e.g. 81728804 for MiViA. It addresses
+            page_id: Numeric page id, e.g. 12345678. It addresses
                 the admin view the composer is opened from.
-            page_name: The page name as the composer writes it, e.g. "MiViA".
+            page_name: The page name as the composer writes it, e.g. "Acme Labs".
                 Verified as a case-insensitive substring of the author button.
             text: Post text; LF separates paragraphs.
             mode: draft (default), schedule or publish.

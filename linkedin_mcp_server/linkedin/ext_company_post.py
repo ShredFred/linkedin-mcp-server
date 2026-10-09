@@ -1,6 +1,6 @@
 """Fork extension: compose a post **as a company page** -- draft, scheduled or live.
 
-Built 2026-10-09, after the MiViA page (81728804) granted the signed-in member
+Built 2026-10-09, after a company page granted the signed-in member
 a Content-Admin role. ``create_post`` deliberately refuses ``as_company``; this
 module is the implementation it pointed at.
 
@@ -15,7 +15,7 @@ one, which is a much smaller thing to get wrong.
 
 Measured controls inside that dialog (de locale, 2026-10-09):
 
-* author and audience: a button reading ``MiViA Auf Alle posten``
+* author and audience: a button reading ``Acme Labs Auf Alle posten``
 * editor: ``[role="textbox"]`` inside the dialog -- note that this is *not*
   ``componentkey="ShareBox_textEditor"``, which belongs to the member composer
 * media: ``aria-label="Mediendatei hinzufügen"``
@@ -102,7 +102,7 @@ def check_page_id(page_id: str) -> dict[str, Any] | None:
         return {
             "status": "invalid_input",
             "field": "page_id",
-            "message": "page_id is the numeric page id, e.g. 81728804.",
+            "message": "page_id is the numeric page id, e.g. 12345678.",
         }
     return None
 
@@ -196,7 +196,7 @@ _MARK_JS = r"""(arg) => {
           disabled: hits[0].disabled === true || hits[0].getAttribute('aria-disabled') === 'true'};
 }"""
 
-# The author/audience button of the page composer, e.g. "MiViA Auf Alle posten".
+# The author/audience button of the page composer, e.g. "Acme Labs Auf Alle posten".
 # Read, never clicked: opening the composer from the page's admin view already
 # makes the page the author.
 _AUTHOR_JS = r"""(arg) => {

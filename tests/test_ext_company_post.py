@@ -31,8 +31,8 @@ from linkedin_mcp_server.linkedin.ext_company_post import (
     check_schedule,
 )
 
-PAGE_ID = "81728804"
-PAGE = "MiViA"
+PAGE_ID = "12345678"
+PAGE = "Acme Labs"
 
 
 class FakePage:
@@ -45,7 +45,7 @@ class FakePage:
         schedule_ok: bool = True,
         time_offered: int = 1,
         time_taken: bool = True,
-        summary: str = "MiViA Veröffentlichung: Fr, 9. Okt. um 14:30 Bearbeiten Planen",
+        summary: str = "Acme Labs Veröffentlichung: Fr, 9. Okt. um 14:30 Bearbeiten Planen",
         leftover: int = 0,
         editor_gone: bool = True,
         write: str = "written",
@@ -176,8 +176,8 @@ def test_mode_must_be_one_of_the_three() -> None:
 
 
 def test_page_id_must_be_the_numeric_id() -> None:
-    assert check_page_id("81728804") is None
-    assert check_page_id("mivia")["field"] == "page_id"
+    assert check_page_id("12345678") is None
+    assert check_page_id("acme-labs")["field"] == "page_id"
 
 
 def test_a_schedule_in_the_past_is_refused_rather_than_sent_as_now() -> None:
@@ -258,7 +258,7 @@ async def test_without_the_opener_nothing_is_written_or_clicked() -> None:
 
 @pytest.mark.asyncio
 async def test_a_dialog_that_does_not_name_the_page_stops_before_the_text() -> None:
-    page = FakePage(author_texts=["Frederik Stadler Auf Alle posten"])
+    page = FakePage(author_texts=["Max Platzhalter Auf Alle posten"])
     result = await run(page)
     assert result["status"] == "author_not_confirmed"
     assert result["posted"] is False
@@ -270,7 +270,7 @@ async def test_a_dialog_that_does_not_name_the_page_stops_before_the_text() -> N
 async def test_an_author_lost_after_the_text_stops_before_the_commit() -> None:
     page = FakePage(
         author_texts=[f"{PAGE} Auf Alle posten"],
-        author_after_write=["Frederik Stadler"],
+        author_after_write=["Max Platzhalter"],
     )
     result = await run(page)
     assert result["status"] in {"author_not_confirmed", "author_lost"}
@@ -322,7 +322,7 @@ async def test_text_that_does_not_verify_stops_the_run() -> None:
 
 @pytest.mark.asyncio
 async def test_a_schedule_the_composer_does_not_show_is_not_committed() -> None:
-    page = FakePage(summary="MiViA Auf Alle posten")
+    page = FakePage(summary="Acme Labs Auf Alle posten")
     result = await run(page, mode="schedule", scheduled_at="2026-10-09 14:30")
     assert result["status"] == "schedule_not_confirmed"
     assert result["posted"] is False
@@ -331,7 +331,7 @@ async def test_a_schedule_the_composer_does_not_show_is_not_committed() -> None:
 
 @pytest.mark.asyncio
 async def test_a_confirmed_schedule_reports_scheduled_and_not_posted() -> None:
-    page = FakePage(summary="MiViA Veröffentlichung: Fr, 9. Okt. um 14:30 Planen")
+    page = FakePage(summary="Acme Labs Veröffentlichung: Fr, 9. Okt. um 14:30 Planen")
     result = await run(page, mode="schedule", scheduled_at="2026-10-09 14:30")
     assert result["status"] == "scheduled"
     # posted stays False: nothing is live yet, LinkedIn publishes later.
