@@ -907,6 +907,7 @@ def register_ext_tools(
         company_name: str | None = None,
         mentions: list[dict[str, str]] | None = None,
         mention_check: str = "warn",
+        media: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """
         Compose a post on the signed-in member's personal profile (or, with
@@ -933,6 +934,23 @@ def register_ext_tools(
                 occurrence of each name becomes a real @-mention. target is a
                 profile slug/URL/URN or company:<slug|id>. Inline markup works
                 too: [[Name|slug]], [[Name|company:slug]].
+            media: Images, in order: [{"path", "alt_text", "tags": [{"name",
+                "target"}]}] (max 20; png/jpg/gif/webp). Alt text is typed
+                into LinkedIn's dialog and read back by reopening it; a tag is
+                picked only by the suggestion's identifier, and the tag count
+                LinkedIn shows is read back. A dry run uploads, checks
+                everything, and discards (measured: no draft is left).
+                Stops: media_invalid_path, media_kind_unmeasured (video,
+                documents), media_too_many, alt_text_invalid,
+                media_tag_invalid, media_button_unavailable,
+                media_upload_incomplete, media_count_mismatch,
+                media_order_mismatch, media_thumbnail_unavailable,
+                alt_text_control_unavailable, alt_text_not_taken,
+                alt_text_confirm_unavailable, alt_text_not_saved,
+                media_tag_control_unavailable, media_tag_confirm_unavailable,
+                media_tags_not_saved, media_tag_unverifiable (page composer:
+                its tag suggestions carry no identifier), image_editor_stuck.
+                Not together with image_path.
             mention_check: off | warn (default: plaintext_names in the result)
                 | strict (mention_plaintext_name stops when a name to be
                 mentioned also stands as plain text).
@@ -969,6 +987,18 @@ def register_ext_tools(
         segments, mention_info, bad = prepare_text(text, mentions, mention_check)
         if bad:
             return {"posted": False, **mention_info, **bad}
+        from linkedin_mcp_server.linkedin.ext_media import check_media
+
+        media_items, bad = check_media(media)
+        if bad:
+            return {"posted": False, **bad}
+        if media_items and image_path:
+            return {
+                "status": "invalid_input",
+                "field": "media",
+                "posted": False,
+                "message": "Use media or image_path, not both.",
+            }
         if as_company:
             from linkedin_mcp_server.tools.ext_company_post import (
                 parse_company_ref,
@@ -996,6 +1026,7 @@ def register_ext_tools(
                 confirm=confirm_post,
                 mentions=mentions,
                 mention_check=mention_check,
+                media=media,
                 tool="create_post",
             )
         text = plain_text(segments)
@@ -1004,6 +1035,8 @@ def register_ext_tools(
         extra: dict[str, Any] = (
             {"segments": segments} if any(k == "mention" for k, _ in segments) else {}
         )
+        if media_items:
+            extra["media"] = media_items
         if not text.strip() or any(
             (ord(c) < 32 and c != "\n") or _hidden_format_char(c) for c in text
         ):

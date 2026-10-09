@@ -1,0 +1,41 @@
+{
+  "_about": "Measured 2026-10-09 with composer_probe(steps=...) on the German interface: self-made single-colour PNGs uploaded, editors opened and read, composer discarded, nothing published. Anonymised: names, ids and URLs are placeholders. English interface not measured.",
+  "member_composer": {
+    "entry": "/feed/?shareActive=true",
+    "media_control": {"aria-label": "Medieninhalte"},
+    "content_types": "'Inhaltsarten einblenden' offers only 'Event' and 'Stellenanzeige' -- no document",
+    "author_button": "a button reading the member's name (not measured further)",
+    "after_next": "composer shows one blob: preview per image (374x281) plus buttons 'Edit' and 'Close' (English wording on a German interface); 'Posten' enabled; no progress indicator"
+  },
+  "member_editor": {
+    "dialog_heading": "Editor",
+    "buttons": ["Verwerfen", "Bearbeiten", "Tag", "Alternativer Text", "<thumbnail button>", "Bild nach links verschieben", "Bild nach rechts verschieben", "Duplizieren", "Löschen", "Hinzufügen", "Zurück", "Weiter"],
+    "toggle_state": "aria-pressed='false' on Bearbeiten/Tag/Alternativer Text, also after an alt text was saved",
+    "thumbnail_alt": "image <n>",
+    "thumbnail_src": "blob:https://www.linkedin.com/<uuid>",
+    "preview_alt": "Bildvorschau",
+    "selection": "the selected thumbnail is the one whose 'nach links'/'nach rechts' button is disabled at the edge",
+    "alt_dialog": {"textarea_placeholder": "Wie würden Sie dieses Bild beschreiben?", "counter": "0/1.000 0 von 1.000 Zeichen", "confirm": "Hinzufügen (disabled while empty); 'Aktualisieren' when reopened", "back": "Zurück", "reopen_shows_value": true},
+    "tag_dialog": {"input": {"type": "text", "aria-label": "Namen eingeben", "placeholder": "Namen eingeben"}, "options": "role=option, not inside a listbox; title + '1. · <headline>' or '<company> Firma· <industry>'", "option_identity": "React prop id='mentionTypeahead_display_<entityID>' (as in the mention typeahead)", "after_pick": "chip button with the name + checkbox; 'Hinzufügen' enabled", "after_confirm": "tag button reads 'Tag, 1 Person getaggt'", "reopen": "chip shown, confirm reads 'Speichern'"}
+  },
+  "page_composer": {
+    "entry": "/company/<page id>/admin/page-posts/published/ -> 'Beitrag beginnen'",
+    "media_control": {"aria-label": "Mediendatei hinzufügen"},
+    "after_next": "composer shows 'Bildvorschau' data: previews, 'Medienvorschau bearbeiten', 'Medieninhalt entfernen', 'Posten' enabled"
+  },
+  "page_editor": {
+    "dialog_heading": "Bearbeiten",
+    "buttons": ["Verwerfen", "Bearbeiten", "Tag", "Alternativer Text", "Auswählen <file>", "<file> von Dateiposition 1 nach Dateiposition 2 verschieben", "Duplizieren", "Löschen", "Hinzufügen", "Zurück", "Weiter"],
+    "thumbnail_alt": "<file name>",
+    "thumbnail_src": "data:image/png;base64,...",
+    "preview_alt": "Vorschau von <file name>",
+    "alt_dialog": {"textarea_placeholder": "Wie würden Sie dieses Bild beschreiben?", "maxlength": "1000", "counter": "0/1.000", "confirm": "Hinzufügen"},
+    "tag_dialog": {"input": {"role": "combobox", "placeholder": "Namen eingeben"}, "options": "role=option inside role=listbox; '<name> 1. · <headline>' or '<company> Unternehmen · <industry>'; the signed-in member first ('Sie')"},
+    "tag_identity": "no identifier on the options (no attribute, no framework props)"
+  },
+  "identity_switch": {
+    "measured_on": "a post of the administered page, opened from /company/<page id>/posts/ (an upsell modal had to be dismissed first)",
+    "comment_box": "div[role=textbox][aria-label='Texteditor zum Erstellen von Kommentaren'] with Emoji, GIF and 'Foto teilen' -- no 'Kommentieren als' / actor control",
+    "reaction": "'Status des Reaktionsbuttons: Keine Reaktion' and 'Menü mit Reaktionen öffnen' -- no 'reagieren als' control"
+  }
+}

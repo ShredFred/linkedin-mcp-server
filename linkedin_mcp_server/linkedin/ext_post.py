@@ -25,6 +25,7 @@ from linkedin_mcp_server.linkedin.ext_mentions import (
     plain_text,
     resolve_targets,
 )
+from linkedin_mcp_server.linkedin.ext_media import MediaAttacher
 from linkedin_mcp_server.linkedin.navigation import PageNavigator
 from linkedin_mcp_server.linkedin.session import PageSession
 
@@ -170,6 +171,7 @@ class ExtPostComposer:
         image_path: str | None,
         confirm_post: bool,
         segments: list[Segment] | None = None,
+        media: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         segments = segments if segments is not None else [("text", text)]
         text = plain_text(segments)
@@ -190,14 +192,14 @@ class ExtPostComposer:
 
         # Mention targets are resolved before the composer opens: resolving a
         # slug navigates, and a navigation would close the composer.
-        wanted = mentions_of(segments)
+        wanted = mentions_of(segments) + [t for m in media or [] for t in m["tags"]]
         if wanted:
             unresolved = await resolve_targets(
                 self._page, self._navigator._navigate_to_page, wanted
             )
             if unresolved:
                 return {**result, **unresolved}
-            result["mentions"] = [m.describe() for m in wanted]
+            result["mentions"] = [m.describe() for m in mentions_of(segments)]
 
         await self._navigator._navigate_to_page(SHARE_URL)
         await self._session.check_rate_limit()
@@ -222,9 +224,31 @@ class ExtPostComposer:
                 "nothing was written.",
             }
 
+        if media:
+            # Images with alt text and tags (ext_media). A dry run attaches
+            # too: discarding the composer was measured to leave no draft,
+            # and only the real dialog can confirm alt text and tags.
+            attached = await MediaAttacher(
+                self._page,
+                editor_selector=_EDITOR,
+                media_words=_MEDIA_LABELS,
+                allow_tags=True,
+            ).attach(media, navigate=self._navigator._navigate_to_page)
+            if attached["status"] != "attached":
+                result.update(attached)
+                await self._discard(result)
+                return result
+            result["media"] = attached["media"]
+            try:
+                await self._page.wait_for_selector(_EDITOR, timeout=15_000)
+            except Exception:
+                result["status"] = "composer_lost_after_image"
+                await self._discard(result)
+                return result
+
         if image is not None:
-            media = await self._button("media", [], _MEDIA_LABELS)
-            if not media or media.get("count") != 1:
+            media_button = await self._button("media", [], _MEDIA_LABELS)
+            if not media_button or media_button.get("count") != 1:
                 result["status"] = "media_button_unavailable"
                 await self._discard(result)
                 return result
@@ -272,6 +296,16 @@ class ExtPostComposer:
             await self._leave()
             return {**result, "status": "post_button_unavailable", "detail": post}
         if not confirm_post:
+            if media:
+                await self._page.evaluate(_CLEAR_JS, _EDITOR)
+                await self._discard(result)
+                return {
+                    **result,
+                    "status": "dry_run",
+                    "would_post": text,
+                    "message": "Composer filled with text and images, alt text and "
+                    "tags read back; discarded, nothing published.",
+                }
             await self._leave()
             return {
                 **result,

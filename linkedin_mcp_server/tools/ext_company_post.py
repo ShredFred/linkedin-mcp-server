@@ -82,6 +82,7 @@ def register_ext_company_post_tools(
         scheduled_at: str | None = None,
         mentions: list[dict[str, str]] | None = None,
         mention_check: str = "warn",
+        media: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """
         Compose a post authored by a company page the signed-in member
@@ -107,6 +108,8 @@ def register_ext_company_post_tools(
             image_path: Optional local image file to attach.
             scheduled_at: "YYYY-MM-DD HH:MM" local time; only with
                 mode=schedule, at least 5 minutes ahead and at most 90 days.
+            media: as in create_post, without tags (media_tag_unverifiable:
+                the page composer's tag suggestions carry no identifier).
             mentions / mention_check: as in create_post. The page composer
                 (Quill) shows no identifier in its suggestions, so exactly
                 one namesake may be inserted and its target is read back
@@ -145,6 +148,7 @@ def register_ext_company_post_tools(
             confirm=confirm,
             mentions=mentions,
             mention_check=mention_check,
+            media=media,
         )
 
 
@@ -182,6 +186,7 @@ async def run_company_post(
     confirm: bool,
     mentions: list[dict[str, str]] | None = None,
     mention_check: str = "warn",
+    media: list[dict[str, Any]] | None = None,
     tool: str = "create_company_post",
 ) -> dict[str, Any]:
     """The company post flow, shared by create_company_post and
@@ -205,6 +210,20 @@ async def run_company_post(
     extra: dict[str, Any] = (
         {"segments": segments} if any(k == "mention" for k, _ in segments) else {}
     )
+    from linkedin_mcp_server.linkedin.ext_media import check_media
+
+    media_items, bad = check_media(media)
+    if bad:
+        return {"posted": False, **bad}
+    if media_items and image_path:
+        return {
+            "status": "invalid_input",
+            "field": "media",
+            "posted": False,
+            "message": "Use media or image_path, not both.",
+        }
+    if media_items:
+        extra["media"] = media_items
     if not text.strip() or any(
         (ord(c) < 32 and c != "\n") or _hidden_format_char(c) for c in text
     ):

@@ -18,7 +18,9 @@ from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.linkedin.ext_composer_probe import (
     ExtComposerProbe,
     check_click_label,
+    check_steps,
     check_type_mention,
+    run_probe_steps,
     check_url,
 )
 from linkedin_mcp_server.tools.ext import TAG, _pace, _run
@@ -48,6 +50,7 @@ def register_ext_composer_probe_tools(
         limit: Annotated[int, Field(ge=1, le=200)] = 60,
         type_mention: str | None = None,
         pick_option: Annotated[int | None, Field(ge=0, le=11)] = None,
+        steps: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """
         Report the visible interactive controls of a LinkedIn page: tag, role,
@@ -72,6 +75,17 @@ def register_ext_composer_probe_tools(
                 the typeahead list is reported in three snapshots (0.3/1.3/
                 3.8 s), then the editor is cleared and the composer
                 discarded. Nothing is ever published.
+            steps: Measurement script instead of click_labels (max 12):
+                {"action": "click", "label", "nth"} clicks the nth visible
+                control with that exact label/text (forbidden wording still
+                refused); {"action": "upload", "label", "files"} clicks a
+                media control and hands the file chooser 1-5 local files;
+                {"action": "type", "text"} types <= 60 characters, no Enter;
+                {"action": "wait", "seconds"}; {"action": "report"}. Every
+                step returns the visible dialogs and menus (buttons, inputs,
+                images, progress, live regions). At the end every dialog is
+                closed and a draft prompt answered with discard. Nothing is
+                published.
             pick_option: With type_mention: click the suggestion at this
                 position (0-based) and report the editor's entity markup.
                 Measurement only; the composer is cleared and discarded.
@@ -84,12 +98,18 @@ def register_ext_composer_probe_tools(
         bad = check_url(url)
         for label in labels:
             bad = bad or check_click_label(label)
-        bad = bad or check_type_mention(type_mention)
+        bad = bad or check_type_mention(type_mention) or check_steps(steps)
         if bad:
             return bad
         refusal = _pace("page_read", tool="composer_probe")
         if refusal:
             return refusal
+        if steps:
+            return await _run(
+                ctx,
+                "composer_probe",
+                lambda ex: run_probe_steps(_probe(ex), url, steps),
+            )
         return await _run(
             ctx,
             "composer_probe",

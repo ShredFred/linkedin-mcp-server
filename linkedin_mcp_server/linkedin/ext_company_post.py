@@ -43,6 +43,8 @@ from linkedin_mcp_server.linkedin.ext_mentions import (
     plain_text,
     resolve_targets,
 )
+from linkedin_mcp_server.linkedin.ext_composer_labels import words
+from linkedin_mcp_server.linkedin.ext_media import MediaAttacher
 from linkedin_mcp_server.linkedin.ext_post import _IMAGE_SUFFIXES
 from linkedin_mcp_server.linkedin.navigation import PageNavigator
 from linkedin_mcp_server.linkedin.session import PageSession
@@ -54,40 +56,26 @@ MODES = ("draft", "schedule", "publish")
 ADMIN_POSTS_URL = "https://www.linkedin.com/company/{page_id}/admin/page-posts/published/"
 
 # Opens the page composer from the admin view. Text, not aria-label.
-_START_WORDS = ["beitrag beginnen", "start a post", "beitrag erstellen", "create a post"]
-_MEDIA_LABELS = ["mediendatei hinzufügen", "add media", "medieninhalte", "foto hinzufügen"]
-_SCHEDULE_LABELS = [
-    "termin für beitrag festlegen",
-    "termin fuer beitrag festlegen",
-    "schedule post",
-    "beitrag planen",
-]
-_POST_WORDS = ["posten", "post", "veröffentlichen", "publish"]
+_START_WORDS = words("start_post")
+_MEDIA_LABELS = words("start_post_media")
+_SCHEDULE_LABELS = words("schedule")
+_POST_WORDS = words("post")
 # Confirms the schedule dialog and returns to the composer.
-_SCHEDULE_NEXT_WORDS = ["weiter", "next", "fertig", "done"]
+_SCHEDULE_NEXT_WORDS = words("next")
 # The composer's commit button once a time is set -- measured: "Planen".
-_SCHEDULE_COMMIT_WORDS = ["planen", "schedule"]
+_SCHEDULE_COMMIT_WORDS = words("schedule_commit")
 # What makes a dialog the post composer rather than a chat window: it has a
 # commit button. Both wordings count, because the button renames itself to
 # "Planen" once a time is set.
-COMPOSER_WORDS = ["posten", "post", "veröffentlichen", "publish", "planen", "schedule"]
+COMPOSER_WORDS = words("post", "schedule_commit")
 # The time is a combobox over a quarter-hour list. Writing into it looks
 # like it works -- the field reads the new value -- and the component
 # throws it away on confirm, which is how a 15:00 request became 14:45.
 # So the time is picked from the list instead of typed.
-_EXPAND_TIME_LABELS = [
-    "zeitauswahl erweitern",
-    "expand time selection",
-]
-_DISCARD_LABELS = ["verwerfen", "discard", "schließen", "close", "dismiss"]
-_DRAFT_WORDS = [
-    "als entwurf speichern",
-    "save as draft",
-    "entwurf speichern",
-    "save draft",
-    "speichern",
-]
-_NEXT_WORDS = ["weiter", "next", "fertig", "done"]
+_EXPAND_TIME_LABELS = words("expand_time")
+_DISCARD_LABELS = words("close")
+_DRAFT_WORDS = words("draft")
+_NEXT_WORDS = words("next")
 
 # The editor of the page composer. Dialog-scoped and locale-independent: the
 # aria-label is German here and would not survive a locale switch.
@@ -496,6 +484,7 @@ class ExtCompanyPostComposer:
         scheduled_at: str | None,
         confirm: bool,
         segments: list[Segment] | None = None,
+        media: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         segments = segments if segments is not None else [("text", text)]
         text = plain_text(segments)
@@ -681,6 +670,21 @@ class ExtCompanyPostComposer:
                     await self._discard(result)
                     return result
                 result["scheduled_at"] = scheduled_at
+
+        # 5a. Images with alt text (ext_media). Tags are refused here: the
+        #     page composer's tag suggestions carry no identifier (measured).
+        if media:
+            attached = await MediaAttacher(
+                self._page,
+                editor_selector=_EDITOR_IN_DIALOG,
+                media_words=_MEDIA_LABELS,
+                allow_tags=False,
+            ).attach(media, navigate=self._navigator._navigate_to_page)
+            if attached["status"] != "attached":
+                result.update(attached)
+                await self._discard(result)
+                return result
+            result["media"] = attached["media"]
 
         # 5. Image. A dry run never uploads: an attached image cannot be taken
         #    out again and LinkedIn restores it as a draft.

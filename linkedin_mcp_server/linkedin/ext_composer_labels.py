@@ -23,6 +23,7 @@ LABELS: dict[str, dict[str, list[str]]] = {
     },
     "next": {"de": ["weiter", "fertig"], "en": ["next", "done"]},
     "close": {"de": ["schließen", "verwerfen"], "en": ["close", "dismiss", "discard"]},
+    "start_post_media": {"de": ["mediendatei hinzufügen", "medieninhalte", "foto hinzufügen"], "en": ["add media"]},
     "discard": {"de": ["verwerfen", "änderungen verwerfen"], "en": ["discard"]},
     "save": {
         "de": ["speichern", "änderungen speichern"],
@@ -31,6 +32,7 @@ LABELS: dict[str, dict[str, list[str]]] = {
     "cancel": {"de": ["abbrechen"], "en": ["cancel"]},
     # measured 2026-10-09 (de): "Mediendatei hinzufügen"
     "media": {
+        # measured: "Medieninhalte" (member), "Mediendatei hinzufügen" (page)
         "de": ["mediendatei hinzufügen", "medieninhalte", "medien", "foto", "foto hinzufügen"],
         "en": ["add media", "media", "photo", "add a photo"],
     },
@@ -44,14 +46,21 @@ LABELS: dict[str, dict[str, list[str]]] = {
         "en": ["more", "more options"],
     },
     # The image editor: alternative text and person tags.
+    # measured 2026-10-09 (de), both composers: "Alternativer Text", "Tag"
+    # (the tag button reads "Tag, 1 Person getaggt" once someone is tagged).
     "alt_text": {
-        "de": ["alternativtext", "alt-text", "alternativtext hinzufügen"],
-        "en": ["alternative text", "alt text", "add alt text"],
+        "de": ["alternativer text", "alternativtext", "alt-text"],
+        "en": ["alternative text", "alt text"],
     },
-    "tag_people": {
-        "de": ["personen markieren", "markieren"],
-        "en": ["tag people", "tag"],
+    "tag_people": {"de": ["tag", "personen markieren"], "en": ["tag", "tag people"]},
+    # Confirms the alt-text or tag sub-dialog: "Hinzufügen", on a second
+    # visit "Aktualisieren"; the tag list re-opened shows "Speichern".
+    "media_confirm": {
+        "de": ["hinzufügen", "aktualisieren", "speichern"],
+        "en": ["add", "update", "save"],
     },
+    "back": {"de": ["zurück"], "en": ["back"]},
+    "tag_input": {"de": ["namen eingeben"], "en": ["enter a name", "type a name"]},
     "apply": {"de": ["übernehmen", "anwenden", "speichern"], "en": ["apply", "save"]},
     "document_title": {
         "de": ["titel", "dokumenttitel"],
@@ -62,6 +71,27 @@ LABELS: dict[str, dict[str, list[str]]] = {
     "start_post": {
         "de": ["beitrag beginnen", "beitrag erstellen"],
         "en": ["start a post", "create a post"],
+    },
+    # Page composer (measured 2026-10-09, de): schedule clock, its commit
+    # "Planen", the time list, the draft prompt.
+    "schedule": {
+        "de": ["termin für beitrag festlegen", "termin fuer beitrag festlegen", "beitrag planen"],
+        "en": ["schedule post"],
+    },
+    "schedule_commit": {"de": ["planen"], "en": ["schedule"]},
+    "expand_time": {"de": ["zeitauswahl erweitern"], "en": ["expand time selection"]},
+    "draft": {
+        "de": ["als entwurf speichern", "entwurf speichern", "speichern"],
+        "en": ["save as draft", "save draft"],
+    },
+    # Own posts and comments: menu entries and the delete confirmation.
+    "edit_post": {"de": ["beitrag bearbeiten", "bearbeiten"], "en": ["edit post", "edit"]},
+    "delete_post": {"de": ["beitrag löschen", "löschen"], "en": ["delete post", "delete"]},
+    "edit_comment": {"de": ["kommentar bearbeiten", "bearbeiten"], "en": ["edit comment", "edit"]},
+    "delete_comment": {"de": ["kommentar löschen", "löschen"], "en": ["delete comment", "delete"]},
+    "confirm_delete": {
+        "de": ["löschen", "beitrag löschen", "kommentar löschen"],
+        "en": ["delete", "delete post", "delete comment"],
     },
     # Typeahead option hints: a company option carries one of these words.
     "company_hint": {

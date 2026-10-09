@@ -219,8 +219,14 @@ _IDS_JS = r"""
 
 _OPTION_IDS_JS = "() => {" + _IDS_JS + r"""
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-  return [...document.querySelectorAll('[role="listbox"] [role="option"]')].filter(visible)
-      .slice(0, 12).map(o => ({title: (o.innerText || '').split('\n')[0], ids: mcpIds(o)}));
+  // Options anywhere (the tag picker has no listbox), plus the chips of an
+  // already chosen person: unlabelled dialog buttons with a picture.
+  const chips = [...document.querySelectorAll('[role="dialog"] button')].filter(visible)
+      .filter(b => !b.closest('[role="option"]') && !(b.getAttribute('aria-label') || '').trim()
+                   && (b.innerText || '').trim() && b.querySelector('img, svg, figure'));
+  return [...document.querySelectorAll('[role="option"]'), ...chips].filter(visible)
+      .slice(0, 16).map(o => ({title: (o.innerText || '').split('\n')[0],
+                               role: o.getAttribute('role') || 'chip', ids: mcpIds(o)}));
 }"""
 
 _EDITOR_STATE_JS = r"""() => {
@@ -420,3 +426,187 @@ class ExtComposerProbe:
             except Exception as exc:  # noqa: BLE001 - cleanup must not raise
                 out["cleanup_error"] = f"{type(exc).__name__}: {exc}"[:200]
         return out
+
+
+# -- step mode (2026-10-09): media, alt text, tags, identity switch -----------
+
+STEP_ACTIONS = ("click", "upload", "type", "wait", "report", "page")
+_MAX_STEPS = 12
+
+
+def check_steps(steps: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    """Validate a measurement script; refusal or None."""
+    if steps is None:
+        return None
+    if not isinstance(steps, list) or not 1 <= len(steps) <= _MAX_STEPS:
+        return {"status": "invalid_input", "field": "steps",
+                "message": f"1-{_MAX_STEPS} steps."}
+    for i, step in enumerate(steps):
+        action = step.get("action") if isinstance(step, dict) else None
+        if action not in STEP_ACTIONS:
+            return {"status": "invalid_input", "field": f"steps[{i}].action"}
+        if action in ("click", "upload"):
+            bad = check_click_label(str(step.get("label") or ""))
+            if bad or not step.get("label"):
+                return bad or {"status": "invalid_input", "field": f"steps[{i}].label"}
+        if action == "upload":
+            files = step.get("files")
+            if not isinstance(files, list) or not 1 <= len(files) <= 5:
+                return {"status": "invalid_input", "field": f"steps[{i}].files"}
+        if action == "type":
+            text = str(step.get("text") or "")
+            if not 1 <= len(text) <= 60 or "\n" in text:
+                return {"status": "invalid_input", "field": f"steps[{i}].text",
+                        "message": "1-60 characters, no line break (no Enter)."}
+        if action == "wait" and not 0 < float(step.get("seconds") or 0) <= 30:
+            return {"status": "invalid_input", "field": f"steps[{i}].seconds"}
+    return None
+
+
+# Mark the nth visible control with this exact aria-label or text; the
+# forbidden wording is checked against the element's own words.
+_MARK_NTH_JS = r"""(arg) => {
+  document.querySelectorAll('[data-ext-probe]').forEach(e => e.removeAttribute('data-ext-probe'));
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const want = norm(arg.label);
+  const sel = 'button, [role="button"], [role="menuitem"], [role="combobox"], [role="option"], [role="radio"], [role="menuitemradio"], a, img, li';
+  const same = v => arg.prefix ? norm(v).startsWith(want) : norm(v) === want;
+  const hits = [...document.querySelectorAll(sel)].filter(visible).filter(el =>
+    same(el.getAttribute('aria-label')) || same(el.innerText) || same(el.getAttribute('alt')))
+    .filter((e, _, all) => !all.some(o => o !== e && e.contains(o)));
+  const el = hits[arg.nth || 0];
+  if (!el) return {count: hits.length};
+  const own = norm(el.getAttribute('aria-label')) + ' ' + norm(el.innerText);
+  const bad = arg.forbidden.find(w => own.split(/[^a-zäöüß]+/).includes(w));
+  if (bad) return {count: hits.length, refused: bad};
+  el.setAttribute('data-ext-probe', '1');
+  return {count: hits.length};
+}"""
+
+# Everything a media/identity measurement needs, per visible dialog and for
+# any open menu: buttons, inputs, images, progress, live regions.
+_DIALOG_REPORT_JS = r"""() => {
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const t = v => String(v || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+  const roots = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"], dialog, [role="menu"], [role="listbox"]')].filter(visible);
+  return roots.map(d => ({
+    role: d.getAttribute('role') || d.tagName.toLowerCase(),
+    label: t(d.getAttribute('aria-label')),
+    heading: t((d.querySelector('h1, h2, h3') || {}).innerText),
+    buttons: [...d.querySelectorAll('button, [role="button"], [role="menuitem"], [role="option"], [role="radio"], [role="menuitemradio"]')].filter(visible).slice(0, 40)
+      .map(b => ({label: t(b.getAttribute('aria-label')), text: t(b.innerText),
+                  role: b.getAttribute('role') || '', pressed: b.getAttribute('aria-pressed') || b.getAttribute('aria-checked') || '',
+                  disabled: b.disabled === true || b.getAttribute('aria-disabled') === 'true'})),
+    inputs: [...d.querySelectorAll('input, textarea, [contenteditable="true"]')].filter(visible).slice(0, 12)
+      .map(i => ({tag: i.tagName.toLowerCase(), type: i.type || '', label: t(i.getAttribute('aria-label')),
+                  placeholder: t(i.getAttribute('placeholder')), value: t(i.value || i.innerText),
+                  maxlength: i.getAttribute('maxlength') || '', role: i.getAttribute('role') || ''})),
+    images: [...d.querySelectorAll('img, video')].filter(visible).slice(0, 12)
+      .map(i => ({tag: i.tagName.toLowerCase(), src: String(i.src || '').slice(0, 40), alt: t(i.alt),
+                  w: i.width || i.videoWidth || 0, h: i.height || i.videoHeight || 0,
+                  cls: String(i.className || '').slice(0, 80)})),
+    progress: [...d.querySelectorAll('[role="progressbar"], progress')].filter(visible)
+      .map(p => ({now: p.getAttribute('aria-valuenow') || '', label: t(p.getAttribute('aria-label'))})),
+    status: [...d.querySelectorAll('[role="status"], [aria-live]')]
+      .map(s => t(s.getAttribute('aria-label') || s.innerText)).filter(Boolean),
+  }));
+}"""
+
+
+# Focus the one visible input/textarea whose placeholder or aria-label is this.
+_FOCUS_INPUT_JS = r"""(want) => {
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const hits = [...document.querySelectorAll('input, textarea, [contenteditable="true"]')].filter(visible)
+      .filter(i => [i.getAttribute('placeholder'), i.getAttribute('aria-label')].some(v => norm(v) === norm(want)));
+  if (hits.length !== 1) return hits.length;
+  hits[0].focus();
+  return 1;
+}"""
+
+
+async def _report(page: Any) -> Any:
+    roots = await page.evaluate(_DIALOG_REPORT_JS)
+    try:
+        ids = await page.evaluate(_OPTION_IDS_JS, isolated_context=False)
+    except Exception:  # noqa: BLE001 - measurement aid only
+        ids = None
+    if ids:
+        roots.append({"role": "option_ids", "label": "", "heading": "", "buttons": [],
+                      "inputs": [], "images": [], "progress": [], "status": [],
+                      "ids": ids})
+    return roots
+
+
+async def run_probe_steps(probe: "ExtComposerProbe", url: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
+    """Run a bounded measurement script; always discards at the end."""
+    page = probe._page
+    out: dict[str, Any] = {"url": url, "steps": []}
+    await probe._navigator._navigate_to_page(url)
+    await probe._session.check_rate_limit()
+    await probe._session.delay(3.0)
+    try:
+        for step in steps:
+            action = step["action"]
+            rec: dict[str, Any] = {"action": action, "label": step.get("label")}
+            if action in ("click", "upload"):
+                marked = await page.evaluate(
+                    _MARK_NTH_JS,
+                    {"label": step["label"], "nth": int(step.get("nth") or 0),
+                     "prefix": bool(step.get("prefix")),
+                     "forbidden": list(FORBIDDEN_CLICK)},
+                )
+                rec["matches"] = marked.get("count")
+                if marked.get("refused") or marked.get("count", 0) <= int(step.get("nth") or 0):
+                    rec["stopped"] = marked.get("refused") or "not_found"
+                    rec["report"] = await _report(page)
+                    out["steps"].append(rec)
+                    out["status"] = "stopped"
+                    return out
+                if action == "upload":
+                    async with page.expect_file_chooser(timeout=10_000) as info:
+                        await page.click("[data-ext-probe]")
+                    chooser = await info.value
+                    await chooser.set_files([str(f) for f in step["files"]])
+                    rec["files"] = len(step["files"])
+                else:
+                    await page.click("[data-ext-probe]")
+                await asyncio.sleep(float(step.get("settle") or 1.5))
+            elif action == "type":
+                if step.get("into"):
+                    rec["focused"] = await page.evaluate(_FOCUS_INPUT_JS, step["into"])
+                await page.keyboard.type(step["text"], delay=80)
+                await asyncio.sleep(1.5)
+            elif action == "wait":
+                await asyncio.sleep(float(step["seconds"]))
+            elif action == "page":
+                rec["elements"] = await page.evaluate(_REPORT_JS, 200)
+            rec["report"] = await _report(page)
+            out["steps"].append(rec)
+        out["status"] = "probed"
+        return out
+    finally:
+        out["cleanup"] = await _discard_everything(page)
+
+
+async def _discard_everything(page: Any) -> list[str]:
+    """Close dialogs and confirm the discard prompt; never anything else."""
+    arg = {
+        "close": ["schließen", "close", "dismiss", "verwerfen", "discard", "abbrechen", "cancel"],
+        "discard": ["verwerfen", "discard"],
+        "forbidden": ["posten", "post", "senden", "send", "publish", "veröffentlichen",
+                      "planen", "schedule", "speichern", "save"],
+    }
+    done = []
+    for _ in range(6):
+        try:
+            got = await page.evaluate(_PROBE_DISCARD_JS, arg)
+        except Exception as exc:  # noqa: BLE001
+            done.append(f"error:{type(exc).__name__}")
+            break
+        done.append(got)
+        if got == "nothing":
+            break
+        await asyncio.sleep(1.2)
+    return done

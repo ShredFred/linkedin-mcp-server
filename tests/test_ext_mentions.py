@@ -144,3 +144,19 @@ def test_every_label_has_both_languages() -> None:
         assert entry.get("de") and entry.get("en"), key
         assert all(v == v.lower().strip() for v in entry["de"] + entry["en"]), key
     assert "firma" in words("company_hint") and "company" in words("company_hint")
+
+
+def test_check_media(tmp_path) -> None:
+    from linkedin_mcp_server.linkedin.ext_media import check_media
+
+    img = tmp_path / "a.png"
+    img.write_bytes(b"x")
+    items, bad = check_media([{"path": str(img), "alt_text": "Fläche",
+                               "tags": [{"name": "Max", "target": "max-p"}]}])
+    assert bad is None and items[0]["tags"][0].slug == "max-p"
+    assert check_media([{"path": str(tmp_path / "v.mp4")}])[1]["status"] == "media_kind_unmeasured"
+    assert check_media([{"path": str(tmp_path / "x.png")}])[1]["status"] == "media_invalid_path"
+    assert check_media([{"path": str(img), "alt_text": "a" * 1001}])[1]["status"] == "alt_text_invalid"
+    assert check_media([{"path": str(img), "tags": ["max-p"]}])[1]["status"] == "media_tag_invalid"
+    assert check_media([{"path": str(img)}] * 21)[1]["status"] == "media_too_many"
+    assert check_media([{"path": str(img)}, {"path": str(img)}])[1]["status"] == "media_invalid"

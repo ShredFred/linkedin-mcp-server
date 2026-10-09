@@ -755,9 +755,11 @@ def register_ext_stage2_tools(
         [[Name|slug]] markup; measured 2026-10-09: the comment box is the
         same editor as the member composer, so a suggestion is picked by its
         identifier and read back). Not for replies (mention_not_supported_here).
-        as_company: commenting as a page is not built -- answered with
-        comment_identity_switch_unmeasured (no "Kommentieren als" control was
-        found on the measured member post). Dry run by default: the comment editor is filled,
+        as_company: commenting (or reacting) as a page is a documented limit,
+        answered with comment_identity_switch_absent: measured 2026-10-09 on
+        a post of the administered page and on a member's post, the comment
+        box and the reaction button carry no "Kommentieren als" / "Comment
+        as" control. Dry run by default: the comment editor is filled,
         compared with the text and cleared again; nothing is posted. With
         confirm=true one comment is posted and read back. Never use in a loop:
         each comment needs its own approval, and the same text is refused for a
@@ -796,10 +798,11 @@ def register_ext_stage2_tools(
         """
         if as_company:
             return {
-                "status": "comment_identity_switch_unmeasured",
+                "status": "comment_identity_switch_absent",
                 "posted": False,
-                "message": "Commenting as a company page is not built yet: the "
-                "identity switch was not found on the measured post page.",
+                "message": "LinkedIn shows no 'Kommentieren als' control on the "
+                "post (measured 2026-10-09 on a post of the administered page); "
+                "nothing was written.",
             }
         from linkedin_mcp_server.linkedin.ext_mentions import plain_text, prepare_text
 

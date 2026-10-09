@@ -39,6 +39,7 @@ from linkedin_mcp_server.linkedin.ext_engagement import (
     split_comment_lines,
 )
 from linkedin_mcp_server.linkedin.ext_inmail import canon, strip_edit_marker
+from linkedin_mcp_server.linkedin.ext_composer_labels import words
 from linkedin_mcp_server.linkedin.ext_mentions import (
     MentionWriter,
     Segment,
@@ -69,21 +70,14 @@ _GONE_RE = re.compile(
 # Exact menu wording (lower case). The short forms are accepted because the
 # menu is the one we just opened on our own card; "Bearbeiten" on someone
 # else's card never gets this far (author check).
-DELETE_POST_WORDS = ["beitrag löschen", "delete post", "löschen", "delete"]
-EDIT_POST_WORDS = ["beitrag bearbeiten", "edit post", "bearbeiten", "edit"]
-DELETE_COMMENT_WORDS = ["kommentar löschen", "delete comment", "löschen", "delete"]
-EDIT_COMMENT_WORDS = ["kommentar bearbeiten", "edit comment", "bearbeiten", "edit"]
-CONFIRM_DELETE_WORDS = [
-    "löschen",
-    "delete",
-    "beitrag löschen",
-    "delete post",
-    "kommentar löschen",
-    "delete comment",
-]
-SAVE_WORDS = ["speichern", "save", "änderungen speichern", "save changes"]
-CANCEL_WORDS = ["abbrechen", "cancel"]
-DISCARD_WORDS = ["verwerfen", "discard", "änderungen verwerfen"]
+DELETE_POST_WORDS = words("delete_post")
+EDIT_POST_WORDS = words("edit_post")
+DELETE_COMMENT_WORDS = words("delete_comment")
+EDIT_COMMENT_WORDS = words("edit_comment")
+CONFIRM_DELETE_WORDS = words("confirm_delete")
+SAVE_WORDS = words("save")
+CANCEL_WORDS = words("cancel")
+DISCARD_WORDS = words("discard")
 
 
 def parse_comment_ref(comment: str) -> tuple[str | None, str]:
