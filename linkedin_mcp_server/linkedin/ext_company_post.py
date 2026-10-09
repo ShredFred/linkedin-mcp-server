@@ -146,7 +146,8 @@ _MARK_JS = r"""(arg) => {
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
   const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(visible);
-  const dialog = dialogs[dialogs.length - 1];
+  const holding = sel => dialogs.find(d => d.querySelector(sel));
+  const dialog = holding(arg.anchor || '[role="textbox"]');
   const root = arg.scope === 'dialog' ? dialog : document;
   if (!root) return {count: 0, no_dialog: true};
   const sel = 'button, [role="button"], [role="menuitem"]';
@@ -171,8 +172,11 @@ _MARK_JS = r"""(arg) => {
 _AUTHOR_JS = r"""(arg) => {
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(visible);
-  const dialog = dialogs[dialogs.length - 1];
-  if (!dialog) return {ok: false, why: 'no_dialog'};
+  // The composer is the dialog holding the editor -- not the first, not the
+  // last: a messaging overlay is a dialog as well.
+  const dialog = dialogs.find(d => d.querySelector('[role="textbox"]'));
+  if (!dialog) return {ok: false, why: 'no_composer_dialog',
+                       dialogs: dialogs.length};
   const norm = v => String(v || '').replace(/\s+/g, ' ').trim();
   const buttons = [...dialog.querySelectorAll('button, [role="button"]')].filter(visible);
   const texts = buttons.map(b => norm(b.innerText)).filter(Boolean);
@@ -226,10 +230,12 @@ _MEDIA_PRESENT_JS = r"""(selector) => {
 _SET_SCHEDULE_JS = r"""(arg) => {
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(visible);
-  const root = dialogs[dialogs.length - 1];
-  if (!root) return {ok: false, why: 'no_dialog'};
-  const inputs = [...root.querySelectorAll('input')].filter(visible);
   const label = i => String(i.getAttribute('aria-label') || '').toLowerCase();
+  const hasFields = d => [...d.querySelectorAll('input')].filter(visible)
+      .some(i => (i.type || '').toLowerCase() === 'date' || /datum|date/.test(label(i)));
+  const root = dialogs.find(hasFields);
+  if (!root) return {ok: false, why: 'no_schedule_dialog', dialogs: dialogs.length};
+  const inputs = [...root.querySelectorAll('input')].filter(visible);
   const dateInput = inputs.find(i => (i.type || '').toLowerCase() === 'date')
                  || inputs.find(i => /datum|date/.test(label(i)));
   const timeInput = inputs.find(i => (i.type || '').toLowerCase() === 'time')
@@ -312,7 +318,7 @@ _SET_SCHEDULE_JS = r"""(arg) => {
 _DIALOG_TEXT_JS = r"""() => {
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')].filter(visible);
-  const root = dialogs[dialogs.length - 1];
+  const root = dialogs.find(d => d.querySelector('[role="textbox"]'));
   return root ? (root.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 500) : '';
 }"""
 
@@ -336,10 +342,17 @@ class ExtCompanyPostComposer:
         words: list[str] | None = None,
         labels: list[str] | None = None,
         scope: str = "dialog",
+        anchor: str = '[role="textbox"]',
     ) -> dict[str, Any]:
         return await self._page.evaluate(
             _MARK_JS,
-            {"words": words or [], "labels": labels or [], "tag": tag, "scope": scope},
+            {
+                "words": words or [],
+                "labels": labels or [],
+                "tag": tag,
+                "scope": scope,
+                "anchor": anchor,
+            },
         )
 
     async def _discard(self, result: dict[str, Any]) -> None:
@@ -491,7 +504,9 @@ class ExtCompanyPostComposer:
                     await self._discard(result)
                     return result
                 done = await self._mark(
-                    "schedule-done", words=_SCHEDULE_NEXT_WORDS, scope="document"
+                    "schedule-done",
+                    words=_SCHEDULE_NEXT_WORDS,
+                    anchor="input",
                 )
                 if done.get("count") != 1:
                     result["status"] = "schedule_confirm_unavailable"
