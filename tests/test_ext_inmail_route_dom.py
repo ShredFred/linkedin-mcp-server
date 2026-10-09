@@ -146,6 +146,19 @@ async def test_saved_button_and_slug_bound_urn(page, t):
 
 
 @pytest.mark.parametrize("t", LOCALES)
+async def test_saved_lead_with_url_encoded_urn_only(page, t):
+    # 2026-10-09: the message link carries the URN url-encoded; the own-URN
+    # scan saw only the plain form and reported no route for saved leads.
+    html = _profile(
+        t, [f'<a role="menuitem" href="#">{t["unsave"]}</a>'],
+        top_extra=f'<img data-a="urn%3Ali%3Afsd_profile%3A{URN}">',
+    )
+    got = await _target(page, html)
+    assert got["status"] == "ok", (got.get("reason"), got.get("saved_lead"))
+    assert got["route"] == "profile_urn" and URN in got["sales_url"]
+
+
+@pytest.mark.parametrize("t", LOCALES)
 async def test_saved_lead_with_two_urns_is_not_guessed(page, t):
     html = _profile(
         t, [f'<a role="menuitem" href="#">{t["unsave"]}</a>'],

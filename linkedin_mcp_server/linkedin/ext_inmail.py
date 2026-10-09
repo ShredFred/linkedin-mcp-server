@@ -273,7 +273,7 @@ _URN_RE = re.compile(r"urn(?::|%3A)li(?::|%3A)fsd_profile(?::|%3A)(ACoA[A-Za-z0-
 # single one, never the first of several.
 _OWN_URN_JS = r"""(slug) => {
   const out = new Set();
-  const re = /urn:li:fsd_profile:(ACoA[A-Za-z0-9_-]+)/g;
+  const re = /urn(?::|%3A)li(?::|%3A)fsd_profile(?::|%3A)(ACoA[A-Za-z0-9_-]+)/gi;
   const key = ('"publicIdentifier":"' + slug + '"').toLowerCase();
   for (const c of document.querySelectorAll('code, script[type="application/json"]')) {
     const t = (c.textContent || '').replace(/\s*:\s*/g, ':');
