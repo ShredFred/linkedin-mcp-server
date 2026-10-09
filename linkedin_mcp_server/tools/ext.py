@@ -918,8 +918,8 @@ def register_ext_tools(
                 are refused.
             confirm_post: Must be true to publish.
             image_path: Optional local image file to attach.
-            as_company: Posting as a company page is not implemented; the member
-                must be a page admin and that is posted from the browser.
+            as_company: Not handled here. Use create_company_post, which
+                switches the composer author to the page and verifies it.
 
         Returns the composer result; its status is posted_verified (live and
         read back), posted_unverified (published, read-back missed it: check
@@ -942,7 +942,7 @@ def register_ext_tools(
             return {
                 "status": "not_supported",
                 "posted": False,
-                "message": "Company-page posting is not implemented; it requires page admin rights and stays manual.",
+                "message": "Use create_company_post for a page; it switches and verifies the composer author.",
             }
         if not text.strip() or any(
             (ord(c) < 32 and c != "\n") or _hidden_format_char(c) for c in text
