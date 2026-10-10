@@ -127,12 +127,19 @@ def place_facts(place: str | None) -> dict[str, Any]:
     return {"is_online": False, "country": country}
 
 
+_BADGE_RE = re.compile(r"^(Organisiert|Organized|Organised|Veranstalter|Organizer)$", re.I)
+
+
 def parse_event_card(lines: list[str]) -> dict[str, Any]:
     """Title, date, place, organiser, description and attendees from card lines."""
     # A card walk can swallow the section heading above the first card.
     lines = [
         ln for ln in lines if not _SECTION_RE.match(ln) and not _RESULTS_RE.match(ln)
     ]
+    # An organiser page puts a badge above its own events ("Organisiert",
+    # measured de 2026-10-11); it is not the title.
+    while lines and _BADGE_RE.match(lines[0]):
+        lines = lines[1:]
     title = lines[0] if lines else None
     date_line = next((ln for ln in lines[1:4] if _DATE_RE.match(ln)), None)
     place, organiser = None, None
@@ -437,12 +444,15 @@ class ExtEventFinder:
         for it in state["items"]:
             if it["past"] and not include_past:
                 continue
-            card = parse_event_card(it["lines"])
+            raw = list(it["lines"])
+            while raw and _BADGE_RE.match(raw[0]):
+                raw = raw[1:]
+            card = parse_event_card(raw)
             # Organiser pages render date first, then title.
-            if card["title"] and _DATE_RE.match(card["title"]) and len(it["lines"]) > 1:
+            if card["title"] and _DATE_RE.match(card["title"]) and len(raw) > 1:
                 card = {
-                    **parse_event_card(it["lines"][1:]),
-                    "date_text": it["lines"][0],
+                    **parse_event_card(raw[1:]),
+                    "date_text": raw[0],
                 }
             out.append(
                 {

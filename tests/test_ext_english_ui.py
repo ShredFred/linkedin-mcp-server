@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from linkedin_mcp_server.linkedin.ext_composer_labels import LABELS, words
 from linkedin_mcp_server.linkedin.ext_engagement import split_comment_lines
+from linkedin_mcp_server.linkedin.ext_events import parse_event_card
 
 
 def _norm(value: str) -> str:
@@ -88,6 +89,36 @@ class TestEnglishCommentFooter:
             ]
         )
         assert c["text"] == "See you in\n2027\nat the congress."
+
+
+class TestGermanCounterRun:
+    """German UI, measured 2026-10-11 on the same account."""
+
+    def test_translation_offer_ends_the_comment(self):
+        c = split_comment_lines(
+            [
+                "X",
+                "Ridvan Sibic",
+                "• 1.",
+                "AI Engineer",
+                "2 Tag(e)",
+                "Thanks for being part of it!",
+                "Übersetzung anzeigen",
+                "Gefällt mir",
+            ]
+        )
+        assert c["text"] == "Thanks for being part of it!"
+
+    def test_organiser_badge_is_not_the_title(self):
+        card = parse_event_card(
+            [
+                "Organisiert",
+                "Do, 7. Aug. 2025, 14:00",
+                "Webinar KI im Labor",
+                "44 Teilnehmende",
+            ]
+        )
+        assert card["title"] != "Organisiert"
 
 
 class TestEnglishAdminViewLabels:

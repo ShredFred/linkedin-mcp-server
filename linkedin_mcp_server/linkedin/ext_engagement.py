@@ -288,6 +288,9 @@ def split_comment_lines(lines: list[str]) -> dict[str, Any]:
         "like",
         "antworten",
         "reply",
+        # Offered under a comment in another language (measured de 2026-10-11).
+        "übersetzung anzeigen",
+        "show translation",
     }
     text_lines = []
     for line in body:
