@@ -96,6 +96,17 @@ LABELS: dict[str, dict[str, list[str]]] = {
     },
     # Submit of a comment box (measured de: "Kommentieren", admin view).
     "comment_submit": {"de": ["kommentieren"], "en": ["comment"]},
+    # Admin view of a page post (aria-labels). measured de; en 2026-10-10:
+    # "React Like" (not yet reacted; "Unreact Like" once reacted) and
+    # "Open menu for switching identity when interacting with this post".
+    "page_like": {
+        "de": ["mit „gefällt mir“ reagieren", "like"],
+        "en": ["react like", "react with like", "like"],
+    },
+    "switch_identity": {
+        "de": ["identitätswechsel"],
+        "en": ["switching identity", "switch identity"],
+    },
     # Typeahead option hints: a company option carries one of these words.
     "company_hint": {
         "de": ["unternehmen", "firma", "follower"],

@@ -223,8 +223,8 @@ class ExtCompanyActions:
         return await self._page.evaluate(
             _ADMIN_CARD_JS,
             {"activity": activity,
-             "switch_words": ["identitätswechsel", "switch identity", "identity"],
-             "like_labels": ["mit „gefällt mir“ reagieren", "react with like", "like"],
+             "switch_words": words("switch_identity"),
+             "like_labels": words("page_like"),
              "submit_words": words("comment_submit")},
         ) or {}
 
@@ -277,7 +277,7 @@ class ExtCompanyActions:
         card = await self._page.evaluate(
             _ADMIN_CARD_JS,
             {"activity": activity,
-             "switch_words": ["identitätswechsel", "switch identity", "identity"],
+             "switch_words": words("switch_identity"),
              "like_labels": [], "submit_words": words("comment_submit")},
         ) or {}
         await self._page.click('[data-ext-company-act="editor"]')
@@ -412,7 +412,7 @@ class ExtCompanyActions:
         return await self._page.evaluate(
             _ADMIN_CARD_JS,
             {"activity": activity,
-             "switch_words": ["identitätswechsel", "switch identity", "identity"],
-             "like_labels": ["mit „gefällt mir“ reagieren", "react with like", "like"],
+             "switch_words": words("switch_identity"),
+             "like_labels": words("page_like"),
              "submit_words": words("comment_submit")},
         ) or {}

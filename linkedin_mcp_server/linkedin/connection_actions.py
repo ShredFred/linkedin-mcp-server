@@ -169,7 +169,8 @@ function findIncomingActionRow(main) {
 # - hasLabeledActionButton: at least one <button[aria-label]> inside the
 #   action root. Primary action buttons (Follow / Connect /
 #   Save in Sales Navigator) carry aria-label for screen readers; the
-#   profile More button uses aria-expanded instead and is not counted.
+#   profile More button carries aria-expanded and is not counted, even
+#   where it is labeled too (English UI: aria-label="More").
 # - hasLabeledActionAnchor: at least one <a[aria-label]> inside the
 #   action root. LinkedIn renders the Pending state as an anchor (linking
 #   back to the profile URL) carrying aria-label like "Pending, click to
@@ -252,7 +253,10 @@ ACTION_SIGNALS_JS = (
     hasComposeInActionRoot =
       !!actionRoot.querySelector('a[href*="/messaging/compose/"]');
     for (const b of actionRoot.querySelectorAll('button')) {
-      if (b.hasAttribute('aria-label')) {
+      // Fork extension: the English top card labels its More opener
+      // (aria-label="More", measured 2026-10-10); a menu opener is never a
+      // Follow/Connect action, whatever its label says.
+      if (b.hasAttribute('aria-label') && !b.hasAttribute('aria-expanded')) {
         hasLabeledActionButton = true;
         break;
       }

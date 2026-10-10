@@ -282,6 +282,22 @@ def connected_top_card(labels: Labels) -> str:
 """
 
 
+def connected_top_card_labeled_more(labels: Labels) -> str:
+    """1st degree, English UI 2026-10-10: the More opener carries aria-label
+    *and* aria-expanded. A menu opener is not a Follow/Connect action."""
+    return f"""
+<section class="topcard">
+  <h1>Aaron</h1>
+  <div class="actions">
+    <a href="/messaging/compose/?profileUrn=urn%3Ali%3Afsd_profile%3ADDD"
+      aria-disabled="false">{labels.message}</a>
+    <button type="button" aria-expanded="false"
+      aria-label="{labels.more}">{labels.more}</button>
+  </div>
+</section>
+"""
+
+
 def follow_only_top_card(labels: Labels) -> str:
     """Creator-mode profile: a labeled primary button, no invite anchor."""
     return f"""
@@ -496,6 +512,11 @@ STATE_CASES: tuple[tuple[str, Build, ConnectionState], ...] = (
     ),
     ("pending", pending_top_card, "pending"),
     ("already_connected", connected_top_card, "already_connected"),
+    (
+        "already_connected-labeled-more",
+        connected_top_card_labeled_more,
+        "already_connected",
+    ),
     ("follow_only", follow_only_top_card, "follow_only"),
     ("unavailable", restricted_top_card, "unavailable"),
 )

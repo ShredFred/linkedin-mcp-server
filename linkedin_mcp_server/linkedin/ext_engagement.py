@@ -258,6 +258,10 @@ _REL_TIME_RE = re.compile(
 )
 
 
+# "1 reaction" / "12 Reaktionen" under a comment: the start of its footer.
+_COMMENT_COUNT_RE = re.compile(r"^\d[\d.,]*\s+(reactions?|reaktion(en)?)$", re.I)
+
+
 def split_comment_lines(lines: list[str]) -> dict[str, Any]:
     """Comment card: name (repeated), '• 1.', headline, relative time, text..., actions."""
     if not lines:
@@ -287,11 +291,19 @@ def split_comment_lines(lines: list[str]) -> dict[str, Any]:
     }
     text_lines = []
     for line in body:
-        if line.lower() in stop or line.lower().startswith(
-            "status des reaktionsbuttons"
+        low = line.lower()
+        if (
+            low in stop
+            or low.startswith(("status des reaktionsbuttons", "reaction button state"))
+            or _COMMENT_COUNT_RE.match(line)
         ):
             break
         text_lines.append(line)
+    # The English card renders the reaction count as a bare number line right
+    # above the action row (a last line "0", measured 2026-10-10); it is
+    # not text.
+    while text_lines and re.fullmatch(r"\d[\d.,]*", text_lines[-1]):
+        text_lines.pop()
     return {
         "name": name.split("•")[0].strip(),
         "degree": degree,

@@ -274,7 +274,8 @@ _EXPERIENCE_JS = r"""() => {
 
 _EMPLOYMENT_TYPES = re.compile(
     r"\s*·\s*(Vollzeit|Teilzeit|Selbstständig|Freiberuflich|Praktikum|Werkstudent|Werkstudium|Minijob|Befristet|Saisonal|Ausbildung|Duales Studium|"
-    r"Full-time|Part-time|Self-employed|Freelance|Internship|Apprenticeship|Contract)\b.*$",
+    r"Full-time|Part-time|Self-employed|Freelance|Internship|Apprenticeship|Contract|"
+    r"Seasonal|Temporary|Permanent|Trainee|Working student)\b.*$",
     re.I,
 )
 _RANGE_RE = re.compile(r"(Heute|Present)", re.I)

@@ -462,12 +462,13 @@ class ExtActions(ExtNetworkReader):
                 }
             )
         header = await self._page.evaluate(
-            r"""() => { const t=(document.querySelector('main')||document.body).innerText; const m=/(\d[\d.]*)\s*\n+\s*Profilbesucher/.exec(t) || /(\d[\d.]*)\s*\n+\s*Profile viewers/.exec(t); return m ? m[1] : null; }"""
+            r"""() => { const t=(document.querySelector('main')||document.body).innerText; const m=/(\d[\d.,]*)\s*\n+\s*Profilbesucher/.exec(t) || /(\d[\d.,]*)\s*\n+\s*Profile viewers/i.exec(t); return m ? m[1] : null; }"""
         )
         return {
             "url": PROFILE_VIEWS_URL,
             "window": "90_days",
-            "total_viewers": int(header.replace(".", "")) if header else None,
+            # "1.234" (de) and "1,234" (en) are both thousands marks here.
+            "total_viewers": int(re.sub(r"[.,]", "", header)) if header else None,
             "count": len(viewers),
             "viewers": viewers,
         }
