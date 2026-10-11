@@ -190,6 +190,12 @@ def _items(images, **per):
     return items
 
 
+def _one(images, **per):
+    items, bad = check_media([{"path": str(images[0]), "alt_text": "Graue Fläche", **per}])
+    assert bad is None, bad
+    return items
+
+
 def _attacher(pg, *, tags: bool) -> MediaAttacher:
     return MediaAttacher(pg, editor_selector="#ed", media_words=words("media"),
                          allow_tags=tags, poll=0.2, timeout=5.0)
@@ -207,16 +213,34 @@ def test_fixture_is_the_measurement_the_dom_copies() -> None:
 @pytest.mark.parametrize("t", LOCALES)
 async def test_member_alt_text_and_tag_by_identifier(page, images, t) -> None:
     await page.set_content(_html("member", t))
-    items = _items(images, tags=[{"name": "Max Platzhalter", "target": MAX_B}])
+    items = _one(images, tags=[{"name": "Max Platzhalter", "target": MAX_B}])
     got = await _attacher(page, tags=True).attach(items, navigate=_no_nav)
     assert got["status"] == "attached", got
-    assert got["media"][1] == {"file": "blau.png", "alt_text": "verified", "tags": [MAX_B]}
+    assert got["media"][0] == {"file": "grau.png", "alt_text": "verified", "tags": [MAX_B]}
+
+
+@pytest.mark.parametrize("t", LOCALES)
+async def test_member_distinct_metadata_on_several_images_is_refused(page, images, t) -> None:
+    # Member thumbnails are labelled by position only: the file behind each
+    # one cannot be read, so differing alt texts could be swapped silently.
+    await page.set_content(_html("member", t))
+    got = await _attacher(page, tags=True).attach(_items(images), navigate=_no_nav)
+    assert got["status"] == "media_order_unverifiable", got
+
+
+@pytest.mark.parametrize("t", LOCALES)
+async def test_member_same_metadata_on_several_images_is_kept(page, images, t) -> None:
+    await page.set_content(_html("member", t))
+    items, bad = check_media([{"path": str(p), "alt_text": "Fläche"} for p in images])
+    assert bad is None, bad
+    got = await _attacher(page, tags=True).attach(items, navigate=_no_nav)
+    assert got["status"] == "attached", got
 
 
 @pytest.mark.parametrize("t", LOCALES)
 async def test_member_alt_text_that_is_not_kept_is_caught_on_reopen(page, images, t) -> None:
     await page.set_content(_html("member", t, drop_alt=True))
-    got = await _attacher(page, tags=True).attach(_items(images), navigate=_no_nav)
+    got = await _attacher(page, tags=True).attach(_one(images), navigate=_no_nav)
     assert got["status"] == "alt_text_not_saved", got
 
 
@@ -224,7 +248,7 @@ async def test_member_alt_text_that_is_not_kept_is_caught_on_reopen(page, images
 async def test_member_tag_target_absent_is_not_resolved(page, images, t) -> None:
     await page.set_content(_html("member", t))
     other = "ACoAAPLATZHALTER000000000000000000000009"
-    items = _items(images, tags=[{"name": "Max Platzhalter", "target": other}])
+    items = _one(images, tags=[{"name": "Max Platzhalter", "target": other}])
     got = await _attacher(page, tags=True).attach(items, navigate=_no_nav)
     assert got["status"] == "mention_not_resolved", got
 

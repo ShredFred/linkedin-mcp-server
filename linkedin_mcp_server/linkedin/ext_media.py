@@ -350,8 +350,19 @@ class MediaAttacher:
         # composer by position -- either must match the request.
         names = [m["path"].name for m in items]
         by_position = [f"image {i}" for i in range(len(items))]
-        if thumbs not in (names, by_position):
+        if thumbs != names and thumbs != by_position:
             return {"status": "media_order_mismatch", "shown": thumbs, "wanted": names}
+        if thumbs != names and len(items) > 1:
+            # Position labels are assigned by LinkedIn itself, so their match
+            # proves nothing about which file sits where (fixture 2026-10-09:
+            # blob src, no file name). Per-image metadata could land on the
+            # wrong image -- only metadata that is the same on every image is safe.
+            per_image = {(m["alt_text"] or "", repr(m["tags"] or [])) for m in items}
+            if len(per_image) > 1:
+                return {"status": "media_order_unverifiable",
+                        "message": "This composer labels images by position only; "
+                        "per-image alt text or tags cannot be bound to a file. "
+                        "Use the same alt text/tags on every image or one image per post."}
 
         done: list[dict[str, Any]] = []
         for i, item in enumerate(items):

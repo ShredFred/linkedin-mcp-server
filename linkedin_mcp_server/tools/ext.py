@@ -947,7 +947,7 @@ def register_ext_tools(
                 media_mix_unsupported, media_option_unsupported, media_too_many, alt_text_invalid,
                 media_tag_invalid, media_button_unavailable,
                 media_upload_incomplete, media_count_mismatch,
-                media_order_mismatch, media_thumbnail_unavailable,
+                media_order_mismatch, media_order_unverifiable (person composer, several images with differing alt text or tags: thumbnails carry only a position), media_thumbnail_unavailable,
                 alt_text_control_unavailable, alt_text_not_taken,
                 alt_text_confirm_unavailable, alt_text_not_saved,
                 media_tag_control_unavailable, media_tag_confirm_unavailable,
