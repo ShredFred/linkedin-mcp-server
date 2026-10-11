@@ -205,11 +205,16 @@ _COMMENT_CARD_JS = (
   const card = cards[0];
   const own = el => inComment(el) === card;
   const actor = [...card.querySelectorAll('a[href*="/in/"], a[href*="/company/"]')].find(own);
-  let text = card.innerText || '';
-  card.querySelectorAll('[componentkey^="replaceableComment_urn:li:comment:"]').forEach(r => {
-    const t = r.innerText || '';
-    if (t) text = text.replace(t, '');
-  });
+  // Replies are removed from a clone, not by string replace: a reply with
+  // our own wording would otherwise erase our text (bughunt 2026-10-11).
+  const clone = card.cloneNode(true);
+  clone.querySelectorAll('[componentkey^="replaceableComment_urn:li:comment:"]').forEach(r => r.remove());
+  const host = document.createElement('div');
+  host.style.cssText = 'position:fixed;left:-99999px;top:0;';
+  host.appendChild(clone);
+  document.body.appendChild(host);
+  const text = clone.innerText || clone.textContent || '';
+  host.remove();
   // Not "Weitere Antworten laden" / "Mehr anzeigen" (review 2026-10-02).
   const label = /optionen|options|steuerungsmen|control menu/i;
   const menus = [...card.querySelectorAll('button')]
@@ -754,10 +759,18 @@ class ExtOwnContent(ExtActions):
     async def _reread_text(
         self, activity_id: str, comment_id: str | None
     ) -> str | None:
-        await self._post_page(activity_id)
-        post = await self._page.evaluate(_POST_CARD_JS, activity_id)
         if not comment_id:
+            await self._post_page(activity_id)
+            post = await self._page.evaluate(_POST_CARD_JS, activity_id)
             return (post or {}).get("text")
+        # Same route as _is_gone: the permalink pins the comment at the top,
+        # regardless of sorting or collapsed threads. Anything off -> None,
+        # and the caller stays "unverified" (bughunt 2026-10-11).
+        await self._goto(comment_permalink(activity_id, comment_id))
+        if activity_id not in (self._page.url or ""):
+            return None
+        if not await self._page.evaluate(_POST_CARD_JS, activity_id):
+            return None
         card = await self._page.evaluate(_COMMENT_CARD_JS, comment_id)
         if not card or card.get("count") != 1:
             return None

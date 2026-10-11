@@ -428,9 +428,36 @@ def _matching_comment_keys(comments: Any, probe: str) -> set[str]:
         if not isinstance(c, dict):
             continue
         key = str(c.get("key") or "")
-        if key and probe in _canon(str(c.get("text") or "")):
+        if key and _carries_probe(str(c.get("text") or ""), probe):
             keys.add(key)
     return keys
+
+
+# LinkedIn cuts a long comment and appends "…mehr" / "…more" / "… see more".
+_MORE_MARKER_RE = re.compile(
+    r"\s*(?:…|\.\.\.)\s*(?:mehr anzeigen|mehr|see more|more)\s*$", re.IGNORECASE
+)
+# Shortest visible prefix that still counts as our text after a truncation.
+_MIN_VISIBLE_PREFIX = 40
+
+
+def _carries_probe(text: str, probe: str) -> bool:
+    """True when *text* shows *probe*, or -- only after a "…mehr" cut -- a
+    visible prefix of it of at least ``_MIN_VISIBLE_PREFIX`` characters that
+    runs right up to the cut (bughunt 2026-10-11)."""
+    canon = _canon(text)
+    if probe and probe in canon:
+        return True
+    stripped = _canon(_MORE_MARKER_RE.sub("", canon))
+    if stripped == canon or len(probe) < _MIN_VISIBLE_PREFIX:
+        return False
+    head = probe[:_MIN_VISIBLE_PREFIX]
+    idx = stripped.find(head)
+    while idx >= 0:
+        if probe.startswith(stripped[idx:]):
+            return True
+        idx = stripped.find(head, idx + 1)
+    return False
 
 
 class ExtActions(ExtNetworkReader):
