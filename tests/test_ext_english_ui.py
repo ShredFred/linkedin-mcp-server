@@ -139,3 +139,18 @@ class TestEnglishAdminViewLabels:
     def test_new_keys_carry_both_languages(self):
         for key in ("page_like", "switch_identity"):
             assert LABELS[key]["de"] and LABELS[key]["en"]
+
+
+class TestTrailingNumberIsText:
+    def test_year_at_the_end_without_action_row_stays(self):
+        c = split_comment_lines(
+            ["P Verified Profile 1st", "P", "• 1st", "Role", "2d", "See you in", "2026"]
+        )
+        assert c["text"].endswith("2026")
+
+    def test_only_one_count_line_is_dropped(self):
+        c = split_comment_lines(
+            ["P Verified Profile 1st", "P", "• 1st", "Role", "2d",
+             "See you in", "2026", "3", "Like", "Reply"]
+        )
+        assert c["text"].endswith("2026")

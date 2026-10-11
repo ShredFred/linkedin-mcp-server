@@ -293,6 +293,7 @@ def split_comment_lines(lines: list[str]) -> dict[str, Any]:
         "show translation",
     }
     text_lines = []
+    stopped = False
     for line in body:
         low = line.lower()
         if (
@@ -300,12 +301,19 @@ def split_comment_lines(lines: list[str]) -> dict[str, Any]:
             or low.startswith(("status des reaktionsbuttons", "reaction button state"))
             or _COMMENT_COUNT_RE.match(line)
         ):
+            # The action row, not the translation offer above the text end.
+            stopped = low not in {"übersetzung anzeigen", "show translation"}
             break
         text_lines.append(line)
     # The English card renders the reaction count as a bare number line right
     # above the action row (a last line "0", measured 2026-10-10); it is
-    # not text.
-    while text_lines and re.fullmatch(r"\d[\d.,]*", text_lines[-1]):
+    # not text. Only that one line, and only when the action row follows it:
+    # a comment that genuinely ends in "2026" keeps it.
+    if (
+        stopped
+        and text_lines
+        and re.fullmatch(r"\d[\d.,]*", text_lines[-1])
+    ):
         text_lines.pop()
     return {
         "name": name.split("•")[0].strip(),

@@ -58,7 +58,7 @@ from linkedin_mcp_server.linkedin.ext_composer_labels import words
 _MARKUP_RE = re.compile(r"\[\[([^\[\]|\n]{1,100})\|([^\[\]|\s]{1,300})\]\]")
 # A handle-like bare @: not part of an e-mail address (``a@b.de``).
 _BARE_AT_RE = re.compile(r"(?<![\w.])@(?=\w)")
-_SLUG_RE = re.compile(r"^[A-Za-z0-9%._~-]{2,100}$")
+_SLUG_RE = re.compile(r"^[\w%.~-]{2,100}$")
 _PROFILE_ID_RE = re.compile(r"^ACoA[A-Za-z0-9_-]{10,}$")
 _PERSON_URN_RE = re.compile(r"^urn:li:fsd_profile:(ACoA[A-Za-z0-9_-]{10,})$")
 _COMPANY_URN_RE = re.compile(r"^urn:li:(?:fsd_company|organization|company):(\d{1,15})$")
@@ -191,14 +191,15 @@ def apply_mention_list(
         except ValueError as exc:
             return text, {"status": "mention_syntax_invalid", "detail": str(exc)}
         spans = [m.span() for m in _MARKUP_RE.finditer(out)]
-        start = 0
-        while True:
-            at = out.find(name, start)
-            if at < 0:
-                return text, {"status": "mention_name_not_in_text", "mention": name}
-            if not any(a <= at < b for a, b in spans):
-                break
-            start = at + 1
+        # Whole words only: "Anna" must not turn "Annabelle" into markup.
+        word = re.compile(r"(?<!\w)" + re.escape(name) + r"(?!\w)")
+        at = next(
+            (m.start() for m in word.finditer(out)
+             if not any(a <= m.start() < b for a, b in spans)),
+            -1,
+        )
+        if at < 0:
+            return text, {"status": "mention_name_not_in_text", "mention": name}
         out = out[:at] + f"[[{name}|{target}]]" + out[at + len(name) :]
     return out, None
 

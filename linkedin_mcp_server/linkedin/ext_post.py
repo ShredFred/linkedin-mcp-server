@@ -228,13 +228,18 @@ class ExtPostComposer:
             # Images with alt text and tags (ext_media). A dry run attaches
             # too: discarding the composer was measured to leave no draft,
             # and only the real dialog can confirm alt text and tags.
-            attached = await MediaAttacher(
-                self._page,
-                editor_selector=_EDITOR,
-                media_words=_MEDIA_LABELS,
-                allow_tags=True,
-                kinds=("image", "video"),
-            ).attach(media, navigate=self._navigator._navigate_to_page)
+            try:
+                attached = await MediaAttacher(
+                    self._page,
+                    editor_selector=_EDITOR,
+                    media_words=_MEDIA_LABELS,
+                    allow_tags=True,
+                    kinds=("image", "video"),
+                ).attach(media, navigate=self._navigator._navigate_to_page)
+            except BaseException:
+                # A half-attached composer must not stay open (draft risk).
+                await self._discard(result)
+                raise
             if attached["status"] != "attached":
                 result.update(attached)
                 await self._discard(result)

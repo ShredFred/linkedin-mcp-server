@@ -126,7 +126,8 @@ async def dialog_of(page, tag):
 async def test_the_author_is_read_from_the_composer_not_from_the_chat(page):
     await set_page(page)
     got = await page.evaluate(
-        cp._AUTHOR_JS, {"name": "Acme Labs", "commit_words": cp.COMPOSER_WORDS}
+        cp._AUTHOR_JS, {"name": "Acme Labs", "commit_words": cp.COMPOSER_WORDS,
+         "suffix_words": cp.words("author_suffix")}
     )
     assert got["ok"] is True
     assert any("Acme Labs" in t for t in got["texts"])
@@ -137,7 +138,8 @@ async def test_the_author_is_read_from_the_composer_not_from_the_chat(page):
 async def test_a_page_the_composer_does_not_name_is_refused(page):
     await set_page(page)
     got = await page.evaluate(
-        cp._AUTHOR_JS, {"name": "Acme GmbH", "commit_words": cp.COMPOSER_WORDS}
+        cp._AUTHOR_JS, {"name": "Acme GmbH", "commit_words": cp.COMPOSER_WORDS,
+         "suffix_words": cp.words("author_suffix")}
     )
     assert got["ok"] is False
 
@@ -162,7 +164,8 @@ async def test_a_composer_whose_button_reads_planen_is_still_the_composer(page):
     # After a time is set the commit button renames itself.
     await set_page(page, commit="Planen")
     got = await page.evaluate(
-        cp._AUTHOR_JS, {"name": "Acme Labs", "commit_words": cp.COMPOSER_WORDS}
+        cp._AUTHOR_JS, {"name": "Acme Labs", "commit_words": cp.COMPOSER_WORDS,
+         "suffix_words": cp.words("author_suffix")}
     )
     assert got["ok"] is True
     marked = await mark(page, "post", words=cp._SCHEDULE_COMMIT_WORDS)
@@ -320,7 +323,8 @@ async def test_a_closed_composer_counts_as_gone_even_with_the_chat_open(page):
     # from seeing it.
     await page.set_content(f"<main>{CHAT}</main>")
     gone = await page.evaluate(
-        cp._COMPOSER_GONE_JS, {"commit_words": cp.COMPOSER_WORDS}
+        cp._COMPOSER_GONE_JS, {"commit_words": cp.COMPOSER_WORDS,
+         "suffix_words": cp.words("author_suffix")}
     )
     assert gone is True
 
@@ -328,7 +332,8 @@ async def test_a_closed_composer_counts_as_gone_even_with_the_chat_open(page):
 async def test_an_open_composer_is_not_gone(page):
     await set_page(page)
     gone = await page.evaluate(
-        cp._COMPOSER_GONE_JS, {"commit_words": cp.COMPOSER_WORDS}
+        cp._COMPOSER_GONE_JS, {"commit_words": cp.COMPOSER_WORDS,
+         "suffix_words": cp.words("author_suffix")}
     )
     assert gone is False
 
@@ -336,6 +341,32 @@ async def test_an_open_composer_is_not_gone(page):
 async def test_a_composer_showing_planen_is_not_gone_either(page):
     await set_page(page, commit="Planen")
     gone = await page.evaluate(
-        cp._COMPOSER_GONE_JS, {"commit_words": cp.COMPOSER_WORDS}
+        cp._COMPOSER_GONE_JS, {"commit_words": cp.COMPOSER_WORDS,
+         "suffix_words": cp.words("author_suffix")}
     )
     assert gone is False
+
+
+# -- the author must be the page exactly, not a page whose name starts alike ---
+
+
+async def _author(page, button, name):
+    await page.set_content(
+        "<main>" + COMPOSER.replace("Acme Labs Auf Alle posten", button)
+        .replace("POSTWORD", "Posten") + CHAT + "</main>"
+    )
+    return await page.evaluate(
+        cp._AUTHOR_JS,
+        {"name": name, "commit_words": cp.COMPOSER_WORDS,
+         "suffix_words": cp.words("author_suffix")},
+    )
+
+
+async def test_a_shorter_name_does_not_match_a_longer_page(page):
+    got = await _author(page, "Acme Labs Auf Alle posten", "Acme")
+    assert got["ok"] is False
+
+
+async def test_the_exact_name_with_the_audience_suffix_matches(page):
+    got = await _author(page, "Acme Auf Alle posten", "Acme")
+    assert got["ok"] is True

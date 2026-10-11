@@ -81,7 +81,11 @@ class FakePage:
             if self._author_reads > 1 and self.author_after_write is not None:
                 texts = self.author_after_write
             want = str(arg["name"]).lower()
-            return {"ok": any(want in t.lower() for t in texts), "texts": texts}
+            ok = any(
+                t.lower() == want or t.lower().startswith(want + " auf ")
+                for t in texts
+            )
+            return {"ok": ok, "texts": texts}
         if script is mod._MARK_JS:
             tag = arg["tag"]
             return {"count": self.mark_counts.get(tag, 1), "disabled": False, "seen": []}
@@ -431,3 +435,54 @@ def mention_writer_script(page: Any, script: str, arg: Any) -> tuple[bool, Any]:
     if script is em._ENTITIES_JS:
         return True, []
     return False, None
+
+
+# -- media on a dry run: validated, never uploaded -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_with_media_never_calls_attach(monkeypatch, tmp_path) -> None:
+    img = tmp_path / "bild.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n")
+    calls: list[Any] = []
+
+    async def boom(self, *a: Any, **k: Any) -> dict[str, Any]:
+        calls.append(a)
+        raise AssertionError("attach on a dry run")
+
+    monkeypatch.setattr(mod.MediaAttacher, "attach", boom)
+    page = FakePage()
+    result = await run(page, confirm=False, media=[{"path": str(img), "alt_text": "Alt"}])
+    assert calls == []
+    assert result["status"] == "dry_run"
+    assert result["media_step"] == "not_uploaded_dry_run"
+    assert result["media"][0]["file"] == "bild.png"
+    assert not page.committed
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_with_a_missing_media_file_stops(monkeypatch, tmp_path) -> None:
+    async def boom(self, *a: Any, **k: Any) -> dict[str, Any]:
+        raise AssertionError("attach on a dry run")
+
+    monkeypatch.setattr(mod.MediaAttacher, "attach", boom)
+    page = FakePage()
+    result = await run(page, confirm=False, media=[{"path": str(tmp_path / "x.png")}])
+    assert result["status"].startswith("media_")
+    assert not page.committed
+
+
+@pytest.mark.asyncio
+async def test_a_raising_attach_discards_and_reraises(monkeypatch, tmp_path) -> None:
+    img = tmp_path / "bild.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    async def boom(self, *a: Any, **k: Any) -> dict[str, Any]:
+        raise RuntimeError("upload broke")
+
+    monkeypatch.setattr(mod.MediaAttacher, "attach", boom)
+    page = FakePage()
+    with pytest.raises(RuntimeError):
+        await run(page, confirm=True, media=[{"path": str(img)}])
+    assert any('"discard"' in s for s in page.clicked)
+    assert not page.committed

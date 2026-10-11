@@ -204,3 +204,47 @@ async def test_react_as_member_dry_and_confirm(page) -> None:
 async def test_react_as_member_already_reacted(page) -> None:
     got = await _actions(page, _member_html("Gefällt mir")).react(ACT, "like", confirm=True)
     assert got["status"] == "already_reacted", got
+
+
+# -- page like: verified only on a positively recognised un-like control -------
+
+
+async def test_react_as_page_unknown_label_after_click_is_unverified(page) -> None:
+    html = _admin_html().replace(
+        "e.target.setAttribute('aria-label', 'Reaktion „Gefällt mir“ entfernen');",
+        "e.target.setAttribute('aria-label', 'Irgendwas anderes');",
+    )
+    got = await _actions(page, html).react(
+        ACT, "like", confirm=True, page_id="1000001", page_name=PAGE
+    )
+    assert got["status"] == "unverified", got
+
+
+async def test_react_as_page_vanished_card_is_unverified(page) -> None:
+    html = _admin_html().replace(
+        "e.target.setAttribute('aria-label', 'Reaktion „Gefällt mir“ entfernen');",
+        "document.querySelector('[data-urn]').remove();",
+    )
+    got = await _actions(page, html).react(
+        ACT, "like", confirm=True, page_id="1000001", page_name=PAGE
+    )
+    assert got["status"] == "unverified", got
+
+
+# -- the page name is matched exactly, not as a prefix -------------------------
+
+
+def test_placeholder_names_the_page_exactly() -> None:
+    assert ca.placeholder_names("Kommentieren als Acme Labs …", "Acme Labs")
+    assert ca.placeholder_names("Comment as Acme Labs...", "acme labs")
+    assert not ca.placeholder_names("Kommentieren als Acme Labs …", "Acme")
+    assert not ca.placeholder_names("Kommentar hinzufügen …", "Acme Labs")
+    assert not ca.placeholder_names("Kommentieren als Acme Labs …", "")
+
+
+async def test_comment_hits_need_the_author_line_exactly(page) -> None:
+    await page.set_content(f"""<html><body>
+<div data-urn="urn:li:activity:{ACT}"><article>Acme Labs<br>Hallo Welt</article></div></body></html>""")
+    acts = _actions(page, "")
+    assert await acts._comment_hits(ACT, "Hallo Welt", "Acme Labs") == 1
+    assert await acts._comment_hits(ACT, "Hallo Welt", "Acme") == 0

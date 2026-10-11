@@ -32,6 +32,7 @@ caller discards the composer, which was measured to leave no draft behind.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Any
 
@@ -63,7 +64,9 @@ def check_media(items: list[dict[str, Any]] | None) -> tuple[list[dict[str, Any]
     """Normalise ``media``; (items, refusal). Pure, no browser."""
     if not items:
         return [], None
-    if not isinstance(items, list) or len(items) > MAX_IMAGES:
+    if not isinstance(items, list):
+        return [], {"status": "media_invalid", "message": "media is a list"}
+    if len(items) > MAX_IMAGES:
         return [], {"status": "media_too_many", "max": MAX_IMAGES}
     out: list[dict[str, Any]] = []
     for i, raw in enumerate(items):
@@ -92,12 +95,14 @@ def check_media(items: list[dict[str, Any]] | None) -> tuple[list[dict[str, Any]
                 return [], {"status": "document_title_required", "index": i}
             return [{"path": path, "alt_text": None, "tags": [], "kind": kind,
                      "title": title or None}], None
-        if suffix not in IMAGE_SUFFIXES or not path.is_file():
+        if suffix not in IMAGE_SUFFIXES:
+            return [], {"status": "media_unsupported_type", "index": i, "suffix": suffix}
+        if not path.is_file():
             return [], {"status": "media_invalid_path", "index": i, "path": str(path)}
         alt = raw.get("alt_text")
         if alt is not None:
             alt = str(alt).strip()
-            if len(alt) > ALT_MAX or "\n" in alt:
+            if len(alt) > ALT_MAX or any(ord(c) < 32 for c in alt):
                 return [], {"status": "alt_text_invalid", "index": i, "max": ALT_MAX}
         tags: list[Mention] = []
         for tag in raw.get("tags") or []:
@@ -114,7 +119,8 @@ def check_media(items: list[dict[str, Any]] | None) -> tuple[list[dict[str, Any]
             except ValueError as exc:
                 return [], {"status": "media_tag_invalid", "index": i, "detail": str(exc)}
         out.append({"path": path, "alt_text": alt or None, "tags": tags, "kind": "image"})
-    if len({str(m["path"]) for m in out}) != len(out):
+    keys = {os.path.normcase(str(m["path"].expanduser().resolve())) for m in out}
+    if len(keys) != len(out):
         return [], {"status": "media_invalid", "message": "the same file twice"}
     return out, None
 
@@ -541,8 +547,18 @@ async def _video(self: "MediaAttacher", item: dict[str, Any]) -> dict[str, Any]:
 
     if not await self._wait(in_editor):
         return {"status": "media_upload_incomplete", "kind": "video"}
-    nxt = await self._click("media-next", words_=words("next"))
-    if nxt.get("count") != 1 or nxt.get("disabled"):
+    # 'Weiter' stays disabled while the video is processed: wait for it like
+    # the document's 'Fertig' instead of reading a slow upload as stuck.
+    last: dict[str, Any] = {}
+
+    async def next_clicked() -> dict[str, Any] | None:
+        nonlocal last
+        last = await self._click("media-next", words_=words("next")) or {}
+        return last if last.get("count") == 1 and not last.get("disabled") else None
+
+    if not await self._wait(next_clicked):
+        if last.get("count") == 1:
+            return {"status": "media_upload_incomplete", "kind": "video"}
         return {"status": "image_editor_stuck", "kind": "video"}
 
     async def in_composer() -> bool:

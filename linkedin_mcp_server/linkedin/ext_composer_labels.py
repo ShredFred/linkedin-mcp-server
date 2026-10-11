@@ -103,6 +103,18 @@ LABELS: dict[str, dict[str, list[str]]] = {
         "de": ["mit „gefällt mir“ reagieren", "like"],
         "en": ["react like", "react with like", "like"],
     },
+    # Once reacted (measured de fixture, en 2026-10-10): the positive proof
+    # that a page like landed.
+    "page_unlike": {
+        "de": ["reaktion „gefällt mir“ entfernen"],
+        "en": ["unreact like"],
+    },
+    # What may follow the page name on the author/audience button, e.g.
+    # "Acme Auf Alle posten". Anything else after the name is another name.
+    "author_suffix": {
+        "de": ["auf alle posten", "alle", "posten als", "posten"],
+        "en": ["post to anyone", "anyone", "post as", "posting as", "post"],
+    },
     "switch_identity": {
         "de": ["identitätswechsel"],
         "en": ["switching identity", "switch identity"],

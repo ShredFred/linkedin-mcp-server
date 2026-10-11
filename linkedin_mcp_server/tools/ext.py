@@ -942,7 +942,8 @@ def register_ext_tools(
                 everything, and discards (measured: no draft is left).
                 A single mp4/mov video works too (alone, no alt text or
                 tags; measured 2026-10-09); documents only through the page
-                composer. Stops: media_invalid_path, media_kind_unmeasured,
+                composer. Stops: media_invalid, media_invalid_path,
+                media_unsupported_type, media_kind_unmeasured,
                 media_mix_unsupported, media_option_unsupported, media_too_many, alt_text_invalid,
                 media_tag_invalid, media_button_unavailable,
                 media_upload_incomplete, media_count_mismatch,

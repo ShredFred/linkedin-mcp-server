@@ -44,7 +44,7 @@ from linkedin_mcp_server.linkedin.ext_mentions import (
     resolve_targets,
 )
 from linkedin_mcp_server.linkedin.ext_composer_labels import words
-from linkedin_mcp_server.linkedin.ext_media import MediaAttacher
+from linkedin_mcp_server.linkedin.ext_media import MediaAttacher, check_media, describe
 from linkedin_mcp_server.linkedin.ext_post import _IMAGE_SUFFIXES
 from linkedin_mcp_server.linkedin.navigation import PageNavigator
 from linkedin_mcp_server.linkedin.session import PageSession
@@ -216,8 +216,19 @@ _AUTHOR_JS = r"""(arg) => {
   const norm = v => String(v || '').replace(/\s+/g, ' ').trim();
   const buttons = [...dialog.querySelectorAll('button, [role="button"]')].filter(visible);
   const texts = buttons.map(b => norm(b.innerText)).filter(Boolean);
-  const want = String(arg.name || '').toLowerCase();
-  return {ok: texts.some(t => t.toLowerCase().includes(want)), texts: texts.slice(0, 8)};
+  const want = norm(arg.name).toLowerCase();
+  const suffixes = (arg.suffix_words || []).map(w => norm(w).toLowerCase());
+  // Exact author: the text is the name, or the name followed by a known
+  // audience suffix. "Acme" must not match "Acme Labs Auf Alle posten".
+  const isAuthor = t => {
+    const l = t.toLowerCase();
+    if (!want) return false;
+    if (l === want) return true;
+    if (!l.startsWith(want + ' ')) return false;
+    const rest = l.slice(want.length + 1);
+    return suffixes.some(s => rest === s || rest.startsWith(s + ' '));
+  };
+  return {ok: texts.some(isAuthor), texts: texts.slice(0, 8)};
 }"""
 
 _CLEAR_JS = r"""(selector) => {
@@ -395,6 +406,33 @@ _DIALOG_TEXT_JS = r"""(arg) => {
 }"""
 
 
+def _dry_media_check(
+    media: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Read-only media validation for a dry run; never touches the browser.
+
+    Accepts raw items (normalised via ``check_media``) or items the tool layer
+    already normalised (they carry ``kind``), and applies the page composer's
+    own refusals: no tags, files must exist.
+    """
+    if all(isinstance(m, dict) and "kind" in m for m in media):
+        items = list(media)
+    else:
+        items, refusal = check_media(media)
+        if refusal:
+            return [], refusal
+    if any(m.get("tags") for m in items):
+        return [], {
+            "status": "media_tag_unverifiable",
+            "message": "The page composer's tag suggestions carry no identifier "
+            "(measured); a tag by name alone could tag a namesake.",
+        }
+    for i, m in enumerate(items):
+        if not Path(m["path"]).expanduser().is_file():
+            return [], {"status": "media_invalid_path", "index": i, "path": str(m["path"])}
+    return items, None
+
+
 class ExtCompanyPostComposer:
     """Compose, schedule or draft a post authored by a company page."""
 
@@ -470,7 +508,8 @@ class ExtCompanyPostComposer:
 
     async def _author_ok(self, page_name: str) -> dict[str, Any]:
         return await self._page.evaluate(
-            _AUTHOR_JS, {"name": page_name, "commit_words": COMPOSER_WORDS}
+            _AUTHOR_JS, {"name": page_name, "commit_words": COMPOSER_WORDS,
+             "suffix_words": words("author_suffix")}
         )
 
     async def create_company_post(
@@ -673,14 +712,42 @@ class ExtCompanyPostComposer:
 
         # 5a. Images with alt text (ext_media). Tags are refused here: the
         #     page composer's tag suggestions carry no identifier (measured).
-        if media:
-            attached = await MediaAttacher(
+        if media and not confirm:
+            # A dry run never uploads: an attached file cannot be taken out
+            # again and LinkedIn restores it as a draft. Validate read-only and
+            # only locate the media button.
+            items, refusal = _dry_media_check(media)
+            if refusal:
+                result.update(refusal)
+                await self._discard(result)
+                return result
+            button = await self._mark("media", labels=_MEDIA_LABELS)
+            if button.get("count") != 1:
+                result["status"] = "media_button_unavailable"
+                result["found"] = button
+                await self._discard(result)
+                return result
+            result["media"] = describe(items)
+            result["media_step"] = "not_uploaded_dry_run"
+        elif media:
+            attacher = MediaAttacher(
                 self._page,
                 editor_selector=_EDITOR_IN_DIALOG,
                 media_words=_MEDIA_LABELS,
                 allow_tags=False,
                 kinds=("image", "video", "document"),
-            ).attach(media, navigate=self._navigator._navigate_to_page)
+            )
+            try:
+                attached = await attacher.attach(
+                    media, navigate=self._navigator._navigate_to_page
+                )
+            except BaseException:
+                result["status"] = "media_attach_raised"
+                try:
+                    await self._discard(result)
+                except Exception:  # noqa: BLE001 - keep the original error
+                    logger.debug("discard after media failure raised", exc_info=True)
+                raise
             if attached["status"] != "attached":
                 result.update(attached)
                 await self._discard(result)

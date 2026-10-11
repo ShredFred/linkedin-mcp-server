@@ -122,6 +122,20 @@ _ADMIN_CARD_JS = r"""(arg) => {
           placeholder};
 }"""
 
+def placeholder_names(placeholder: Any, page_name: str) -> bool:
+    """True when the comment box placeholder names exactly ``page_name``.
+
+    "Kommentieren als Acme Labs …" names "Acme Labs", not "Acme": the name must
+    close the placeholder (up to an ellipsis or dots).
+    """
+    norm = lambda v: re.sub(r"\s+", " ", str(v or "")).strip().lower()  # noqa: E731
+    want = norm(page_name)
+    text = norm(re.sub(r"[\s.…]+$", "", str(placeholder or "")))
+    if not want:
+        return False
+    return text == want or text.endswith(" " + want)
+
+
 # The identity modal: which radio is checked, with its name.
 _IDENTITY_JS = r"""() => {
   const vis = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
@@ -268,7 +282,7 @@ class ExtCompanyActions:
         # The submit button only appears once text is in the box (measured).
         if card.get("switches") != 1 or card.get("editors") != 1:
             return {**base, "status": "admin_card_controls_unavailable", "found": card}
-        if page_name.strip().lower() not in str(card.get("placeholder") or "").lower():
+        if not placeholder_names(card.get("placeholder"), page_name):
             return {**base, "status": "identity_not_confirmed",
                     "placeholder": card.get("placeholder")}
         wrong = await self._identity_is_page(page_name)
@@ -323,7 +337,10 @@ class ExtCompanyActions:
               const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
               const want = norm(arg.text).slice(0, 80);
               return [...card.querySelectorAll('article, .comments-comment-entity, [data-id^="urn:li:comment"]')]
-                .filter(c => norm(c.innerText).includes(want) && norm(c.innerText).includes(norm(arg.page)))
+                // The author is a line of its own: "Acme" must not count a
+                // comment by "Acme Labs".
+                .filter(c => norm(c.innerText).includes(want) &&
+                             String(c.innerText || '').split('\n').some(l => norm(l) === norm(arg.page)))
                 .length;
             }""",
             {"activity": activity, "text": text, "page": page_name},
@@ -402,10 +419,18 @@ class ExtCompanyActions:
         self.clicked = True
         await self._page.click('[data-ext-company-act="like"]')
         await asyncio.sleep(self._poll * 6)
-        after = await self._admin_card_again(activity)
-        changed = after.get("like_label") != before
+        after = await self._page.evaluate(
+            _ADMIN_CARD_JS,
+            {"activity": activity, "switch_words": [],
+             "like_labels": words("page_unlike"), "submit_words": []},
+        ) or {}
+        # Verified only on positive proof: the one card is still there and
+        # carries exactly one recognised un-like control. A vanished card or a
+        # changed-but-unknown label is not proof.
+        verified = after.get("cards") == 1 and after.get("likes") == 1
         return {**base, "reacted": True,
-                "status": "verified" if changed else "unverified",
+                "status": "verified" if verified else "unverified",
+                "label_before": before,
                 "label_after": after.get("like_label")}
 
     async def _admin_card_again(self, activity: str) -> dict[str, Any]:
