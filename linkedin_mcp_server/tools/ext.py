@@ -187,6 +187,10 @@ def check_invite_note(note: str | None) -> dict[str, Any] | None:
     """Browser-free refusal for a connection note; None when it may go."""
     if note is None:
         return None
+    if has_markup(note):
+        # An invitation note has no @-mention entity either: the markup
+        # would arrive as literal brackets.
+        return {"status": "mention_not_supported_in_messages", "message": "LinkedIn messages carry no @-mentions; write the name as plain text."}
     if not note.strip():
         return {
             "status": "invalid_note",
@@ -1311,6 +1315,8 @@ def register_ext_tools(
         canary_key, bad = _recipient(canary)
         if bad:
             return {**bad, "field": "canary"}
+        if has_markup(message):
+            return {"status": "mention_not_supported_in_messages", "message": "LinkedIn messages carry no @-mentions; write the name as plain text."}
         refusal = refuse_an_invalid_message(canary_key, message)
         if refusal is not None:
             return refusal
