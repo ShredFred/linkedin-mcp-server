@@ -246,7 +246,35 @@ _POST_LEDGER_STATUS = {
     "posted_verified": "posted_verified",
     "posted_unverified": "posted",
     "post_unconfirmed": "unknown",
+    # 2026-10-12: decided outcomes after the click (ext_post_outcome). The
+    # composer was discarded and the post is not in recent activity.
+    "not_posted": "not_posted",
+    "draft_discarded": "not_posted",
 }
+
+
+def _resolve_post_ledger(text: str, activity_id: str | None) -> list[str]:
+    """Mark open post attempts for this text as verified (verify_post found it)."""
+    ledger = outreach.Ledger.default()
+    sha = outreach.text_sha(text)
+    resolved = []
+    for row in ledger.latest_by_attempt().values():
+        if (
+            row.get("kind") == "post"
+            and sha in outreach.row_text_shas(row)
+            and row.get("status") in {"unknown", "attempted", "posted"}
+            and row.get("attempt")
+        ):
+            outcome_row: dict[str, Any] = {
+                "attempt": row["attempt"],
+                "status": "posted_verified",
+                "detail": "verify_post",
+            }
+            if activity_id:
+                outcome_row["activity"] = activity_id
+            ledger.append(outcome_row)
+            resolved.append(row["attempt"])
+    return resolved
 
 
 def _composer(extractor: Any) -> ExtPostComposer:
@@ -898,6 +926,62 @@ def register_ext_tools(
 
     @mcp.tool(
         timeout=tool_timeout,
+        title="Verify Post",
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+        tags={TAG, "post"},
+    )
+    async def verify_post(
+        text: str,
+        ctx: Context,
+        page_id: str | None = None,
+        wait: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Read-only: is a post with this text live on the member's recent
+        activity (or, with page_id, on that company page's feed)? This is
+        the documented way to resolve post_unconfirmed / posted_unverified
+        from create_post or create_company_post -- never repost to find out.
+
+        Matching is on the first 120 characters after normalisation (case,
+        whitespace, punctuation, quotes, emoji and URLs are ignored; a card
+        truncated with "... mehr" matches on its visible part, >= 30 chars).
+
+        Args:
+            text: The post text as it was sent to create_post.
+            page_id: Numeric company page id for a page post.
+            wait: true = retry with backoff for ~60 s (activity feed lag).
+
+        Returns status found / not_found with post_url, activity_id,
+        age_seconds (from the card's relative time, null if unreadable) and
+        all matches. When found, ledger rows for this text that were
+        unknown / attempted / posted are marked posted_verified (local
+        ledger only; the 30-day same-text block stays in force either way).
+        """
+        from linkedin_mcp_server.linkedin.ext_company_post import PAGE_POSTS_URL
+        from linkedin_mcp_server.linkedin.ext_post import RECENT_ACTIVITY_URL
+
+        if not (text or "").strip():
+            return {"status": "invalid_input", "field": "text"}
+        if page_id is not None and not str(page_id).strip().isdigit():
+            return {"status": "invalid_input", "field": "page_id"}
+        url = (
+            PAGE_POSTS_URL.format(page_id=str(page_id).strip())
+            if page_id
+            else RECENT_ACTIVITY_URL
+        )
+        found = await _run(
+            ctx,
+            "verify_post",
+            lambda ex: _composer(ex).verify_post(text, url=url, wait=wait),
+        )
+        if found.get("found"):
+            found["ledger_resolved"] = _resolve_post_ledger(
+                text, found.get("activity_id")
+            )
+        return found
+
+    @mcp.tool(
+        timeout=tool_timeout,
         title="Create Post",
         annotations={"destructiveHint": True, "openWorldHint": True},
         tags={TAG, "post", "actions"},
@@ -974,10 +1058,17 @@ def register_ext_tools(
         invalid_input (mention_check not off/warn/strict, or as_company
         without company_name / not a page reference).
 
-        Returns the composer result; its status is posted_verified (live and
-        read back), posted_unverified (published, read-back missed it: check
-        recent activity, do not repost), post_unconfirmed (may be live: do
-        not repost, check recent activity), dry_run, or a stop before the
+        Returns the composer result; outcome is posted / not_posted /
+        draft_saved / unknown. After the click the composer is polled (30 s)
+        and the post read back from recent activity with backoff (~60 s).
+        status is posted_verified (live, post_url read back), posted_unverified
+        (composer closed, read-back missed it: do not repost, call
+        verify_post), not_posted (composer stayed open or LinkedIn showed an
+        error; discarded, not in recent activity), draft_discarded (LinkedIn
+        offered save-as-draft; discarded), post_unconfirmed (unknown: do not
+        repost, call verify_post), media_upload_pending (upload still running
+        after 60 s; discarded), duplicate_live (an identical post is live
+        within 24 h; nothing written), dry_run, or a stop before the
         publish click (composer_unavailable, editor_has_media, invalid_image,
         post_button_disabled, post_button_unavailable: safe to fix and retry).
         Refusals before anything is booked: not_supported (as_company),

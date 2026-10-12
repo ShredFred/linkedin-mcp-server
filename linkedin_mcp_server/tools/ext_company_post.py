@@ -49,9 +49,12 @@ logger = logging.getLogger(__name__)
 # unconfirmed schedule may have been accepted and blocks it too.
 _LEDGER_STATUS = {
     "scheduled": "posted",
+    "posted_verified": "posted_verified",
     "schedule_unconfirmed": "unknown",
     "posted_unverified": "posted",
     "post_unconfirmed": "unknown",
+    "not_posted": "not_posted",
+    "draft_discarded": "not_posted",
     "draft_saved": "posted",
 }
 
@@ -129,7 +132,11 @@ def register_ext_company_post_tools(
         draft_saved, scheduled (time confirmed in the composer),
         posted_unverified (published, composer closed),
         schedule_unconfirmed / post_unconfirmed (may be live or scheduled: do
-        NOT retry, check the page). dry_run did nothing. Stops before any
+        NOT retry, resolve with verify_post(page_id=...)). publish mode also
+        returns outcome (posted / not_posted / draft_saved / unknown) with
+        posted_verified + post_url when read back from the page feed,
+        not_posted / draft_discarded (composer discarded), media_upload_pending,
+        duplicate_live (identical page post within 24 h). dry_run did nothing. Stops before any
         commit, safe to fix and retry: author_control_unavailable,
         composer_opener_unavailable, author_not_confirmed, author_lost,
         text_not_written, media_button_unavailable,

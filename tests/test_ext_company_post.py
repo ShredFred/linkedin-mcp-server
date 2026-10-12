@@ -115,6 +115,14 @@ class FakePage:
         if script is mod._CLEAR_JS:
             self.text = ""
             return True
+        from linkedin_mcp_server.linkedin import ext_post_outcome as oc
+
+        if script is oc.STATE_JS:
+            return {"editor": not self.editor_gone, "editor_chars": 4 if not self.editor_gone else 0}
+        if script is oc.CARDS_JS:
+            return []
+        if script is oc.DISCARD_PROMPT_JS:
+            return {"clicked": False, "count": 0}
         if script is mod._COMPOSER_GONE_JS:
             # Asks for an editor *and* a commit button, so an open chat window
             # does not answer it -- that was the false alarm of 2026-10-09.
@@ -246,7 +254,9 @@ async def test_a_time_the_field_does_not_take_is_not_scheduled() -> None:
 async def test_the_composer_is_opened_from_the_page_admin_view() -> None:
     page = FakePage()
     await run(page, confirm=False)
-    assert page.goto_urls == [ADMIN_POSTS_URL.format(page_id=PAGE_ID)]
+    # First the read-only duplicate check on the public page feed, then the
+    # composer from the admin view.
+    assert page.goto_urls[-1] == ADMIN_POSTS_URL.format(page_id=PAGE_ID)
     assert '[data-ext-company="start"]' in page.clicked
 
 
@@ -405,10 +415,13 @@ async def test_a_published_post_that_closed_the_composer_is_reported_unverified(
 
 
 @pytest.mark.asyncio
-async def test_a_composer_still_open_after_the_click_is_unconfirmed() -> None:
+async def test_a_composer_still_open_after_the_click_is_not_posted() -> None:
+    # Still open with text after the settle timeout and not in the page feed:
+    # discarded, not posted (2026-10-12: was post_unconfirmed).
     page = FakePage(editor_gone=False)
     result = await run(page)
-    assert result["status"] == "post_unconfirmed"
+    assert result["status"] == "not_posted"
+    assert result["outcome"] == "not_posted"
     assert result["posted"] is False
 
 

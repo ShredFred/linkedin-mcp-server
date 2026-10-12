@@ -17,6 +17,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from linkedin_mcp_server.linkedin import ext_post_outcome as outcome
 from linkedin_mcp_server.linkedin.ext_composer_labels import words
 from linkedin_mcp_server.linkedin.ext_mentions import (
     MentionWriter,
@@ -201,6 +202,24 @@ class ExtPostComposer:
                 return {**result, **unresolved}
             result["mentions"] = [m.describe() for m in mentions_of(segments)]
 
+        # Duplicate check against the live profile, not only the ledger: a
+        # post made by hand or by an earlier unconfirmed run is visible here.
+        live = await self.find_live(text)
+        dup = outcome.recent_duplicate(live["matches"])
+        if dup and confirm_post:
+            return {
+                **result,
+                "status": "duplicate_live",
+                "outcome": "not_posted",
+                "retry_safe": False,
+                "post_url": dup["post_url"],
+                "age_seconds": dup["age_seconds"],
+                "message": "An identical post is already live within the last 24 h "
+                "(or its age is unreadable); nothing was written.",
+            }
+        if dup:
+            result["live_duplicate"] = dup
+
         await self._navigator._navigate_to_page(SHARE_URL)
         await self._session.check_rate_limit()
         try:
@@ -325,50 +344,69 @@ class ExtPostComposer:
             await self._leave()
             return {**result, "status": "post_button_disabled"}
 
+        # An image still uploading would be posted without it, or the click
+        # is swallowed: wait for the progress indicator to go, else stop.
+        if not await outcome.wait_for_upload(self._page, _EDITOR, self._session.delay):
+            await self._discard(result)
+            return {
+                **result,
+                "status": "media_upload_pending",
+                "outcome": "not_posted",
+                "retry_safe": True,
+                "message": "An upload was still in progress after 60 s; composer discarded, nothing published.",
+            }
+
         # Set directly before the publish click: an exception before it means
         # nothing was published, one after it may have published.
         self.clicked = True
         await self._page.click('[data-ext-target="post"]')
-        try:
-            await self._page.wait_for_selector(
-                _EDITOR, state="detached", timeout=20_000
-            )
-        except Exception:
-            return {
-                **result,
-                "status": "post_unconfirmed",
-                "retry_safe": False,
-                "message": "Clicked post but the composer did not close; check the profile before retrying.",
-            }
-        # Read back: the newest activity should carry the text.
-        await self._session.delay(4.0)
-        await self._navigator._navigate_to_page(RECENT_ACTIVITY_URL)
-        await self._session.delay(4.0)
-        body = await self._page.evaluate(
-            "() => (document.querySelector('main')||document.body).innerText"
+        decided = await outcome.decide(
+            page=self._page,
+            editor=_EDITOR,
+            sleep=self._session.delay,
+            navigate=self._navigator._navigate_to_page,
+            discard=self._discard,
+            post_words=_POST_WORDS,
+            text=text,
+            activity_url=RECENT_ACTIVITY_URL,
         )
-        from linkedin_mcp_server.ext_outreach import canonical_text
+        return {**result, **decided}
 
-        first_line = canonical_text(text.split("\n", 1)[0])[:80]
-        found = first_line in canonical_text(body or "")
-        # The activity id is what a follow-up comment needs; without it the
-        # first comment has to be found by hand, which is exactly the step this
-        # tool exists to remove.
-        activity = await self._page.evaluate(_ACTIVITY_URN_JS, first_line)
-        urn = (activity or {}).get("urn")
-        # The page text holds older posts too: an earlier post with the same
-        # first line made a failed publish read as verified. Only the newest
-        # activity carrying the line counts.
-        found = found and bool((activity or {}).get("newest"))
+    async def find_live(self, text: str, *, url: str = RECENT_ACTIVITY_URL) -> dict[str, Any]:
+        """Read-only: is this text in recent activity? (one read, no retries)."""
+        rb = await outcome.read_activity(
+            self._page,
+            self._navigator._navigate_to_page,
+            self._session.delay,
+            text,
+            url,
+            waits=(0.0,),
+            want_fresh=False,
+        )
+        return rb
+
+    async def verify_post(
+        self, text: str, *, url: str = RECENT_ACTIVITY_URL, wait: bool = False
+    ) -> dict[str, Any]:
+        """Read-only lookup of an own post by text; ``wait`` uses the ~60 s backoff."""
+        rb = await outcome.read_activity(
+            self._page,
+            self._navigator._navigate_to_page,
+            self._session.delay,
+            text,
+            url,
+            waits=outcome.READBACK_WAITS if wait else (0.0,),
+            want_fresh=False,
+        )
+        hit = rb["matches"][0] if rb["matches"] else None
         return {
-            **result,
-            "posted": True,
-            "verified": found,
-            "retry_safe": False,
-            "status": "posted_verified" if found else "posted_unverified",
-            "activity_id": urn.rsplit(":", 1)[1] if urn else None,
-            "post_url": (
-                f"https://www.linkedin.com/feed/update/{urn}/" if urn else None
-            ),
-            "post_url_matched_text": bool((activity or {}).get("matched")),
+            "status": "found" if hit else "not_found",
+            "found": bool(hit),
+            "post_url": (hit or {}).get("post_url"),
+            "activity_id": (hit.get("urn") or "").rsplit(":", 1)[-1] or None if hit else None,
+            "age_seconds": (hit or {}).get("age_seconds"),
+            "matches": rb["matches"],
+            "attempts": rb["attempts"],
+            "activity_url": url,
+            "text_prefix": outcome.prefix(text),
         }

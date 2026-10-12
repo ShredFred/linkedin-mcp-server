@@ -48,10 +48,16 @@ class FakePage:
     async def evaluate(self, script: str, arg: Any = None, **_: Any) -> Any:
         if script is ext_post._MEDIA_PRESENT_JS:
             return self.leftover
-        if script is ext_post._ACTIVITY_URN_JS:
-            if self.urn is None:
-                return None
-            return {"urn": self.urn, "matched": True, "newest": self.newest}
+        from linkedin_mcp_server.linkedin import ext_post_outcome as oc
+
+        if script is oc.STATE_JS:
+            # After the click the composer closes.
+            return {"editor": not self.clicked, "editor_chars": 0}
+        if script is oc.CARDS_JS:
+            if not self.clicked or self.urn is None:
+                return []
+            age = "Gerade eben" if self.newest else "1 Wo."
+            return [{"urn": self.urn, "text": f"Frederik {age} {self.body}"}]
         handled, value = mention_writer_script(self, script, arg)
         if handled:
             return value
@@ -101,7 +107,7 @@ async def test_restored_draft_with_media_stops_before_writing() -> None:
 
 @pytest.mark.asyncio
 async def test_published_post_returns_the_activity_id_for_the_first_comment() -> None:
-    page = FakePage(urn="urn:li:activity:7123456789012345678", body="Erste Zeile")
+    page = FakePage(urn="urn:li:activity:7123456789012345678", body="Erste Zeile zweite")
     result = await composer(page).create_post(
         "Erste Zeile\n\nzweite", image_path=None, confirm_post=True
     )
@@ -115,7 +121,7 @@ async def test_published_post_returns_the_activity_id_for_the_first_comment() ->
 
 @pytest.mark.asyncio
 async def test_missing_urn_is_reported_as_none_not_guessed() -> None:
-    page = FakePage(urn=None, body="Erste Zeile")
+    page = FakePage(urn=None, body="Erste Zeile zweite")
     result = await composer(page).create_post(
         "Erste Zeile", image_path=None, confirm_post=True
     )
@@ -141,7 +147,7 @@ async def test_older_post_with_same_first_line_does_not_verify() -> None:
     # The activity page also lists last week's post that opened with the same
     # line; the newest card does not carry it, so the publish is unverified.
     page = FakePage(
-        urn="urn:li:activity:7000000000000000001", body="Erste Zeile", newest=False
+        urn="urn:li:activity:7000000000000000001", body="Erste Zeile zweite", newest=False
     )
     result = await composer(page).create_post(
         "Erste Zeile\n\nzweite", image_path=None, confirm_post=True

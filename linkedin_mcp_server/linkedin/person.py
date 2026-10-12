@@ -285,6 +285,11 @@ class PersonReader:
                         sections[section_name] = extracted.text
                         if extracted.references:
                             references[section_name] = extracted.references
+                        if section_name == "posts":
+                            # Fork (2026-10-12): own activity cards carry their
+                            # urn only as data-urn, never as a link, so the
+                            # anchor scan returned no post URL at all.
+                            await self._add_post_urls(references)
                     elif extracted.text == RATE_LIMITED_SECTION_TEXT:
                         section_errors[section_name] = rate_limited_section_error()
                         # Stop rather than walk the remaining sections. Each one
@@ -360,6 +365,25 @@ class PersonReader:
             await callbacks.on_complete("person profile", result)
 
         return result
+
+    async def _add_post_urls(self, references: dict[str, Any]) -> None:
+        from linkedin_mcp_server.linkedin import ext_post_outcome as oc
+
+        try:
+            cards = await self._session.page.evaluate(oc.CARDS_JS) or []
+        except Exception:  # noqa: BLE001 - references are best effort
+            logger.debug("post urn read failed", exc_info=True)
+            return
+        refs = list(references.get("posts", []))
+        known = {r.get("url") for r in refs}
+        for c in cards:
+            url = oc.post_url(c.get("urn"))
+            if url and url not in known:
+                known.add(url)
+                head = " ".join(str(c.get("text") or "").split())[:160]
+                refs.append({"kind": "feed_post", "url": url, "text": head})
+        if refs:
+            references["posts"] = refs
 
     async def get_my_profile(
         self,

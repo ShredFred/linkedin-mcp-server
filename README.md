@@ -69,6 +69,7 @@
 > - `send_inmail` — Send one InMail through Sales Navigator (spends one credit) to a 2nd/3rd-degree member.
 > - `send_message` — Without confirm_send=true this is a dry run only: nothing is sent.
 > - `set_contact_note` — Local keywords and a short note per contact (~/.linkedin-mcp/contact-notes.json), shown by follow_up_list.
+> - `verify_post` — Read-only: is a post with this text live on the member's recent activity (or, with page_id, on that company page's feed)? This is the documented way to resolve post_unconfirmed / posted_unverified from create_post or create_company_post -- never repost to find out.
 > - `withdraw_invitations` — Withdraw pending connection invitations older than older_than_days (default 21).
 >
 > **Changed behaviour**

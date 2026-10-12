@@ -222,6 +222,7 @@ def test_fork_tools_are_registered_and_tagged():
         "get_event_status",
         "list_sent_invitations",
         "create_post",
+        "verify_post",
         "send_message",
         "send_campaign_batch",
         "connect_with_person",

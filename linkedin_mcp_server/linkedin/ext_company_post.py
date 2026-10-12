@@ -43,6 +43,7 @@ from linkedin_mcp_server.linkedin.ext_mentions import (
     plain_text,
     resolve_targets,
 )
+from linkedin_mcp_server.linkedin import ext_post_outcome as outcome
 from linkedin_mcp_server.linkedin.ext_composer_labels import words
 from linkedin_mcp_server.linkedin.ext_media import MediaAttacher, check_media, describe
 from linkedin_mcp_server.linkedin.ext_post import _IMAGE_SUFFIXES
@@ -53,6 +54,7 @@ logger = logging.getLogger(__name__)
 
 MODES = ("draft", "schedule", "publish")
 
+PAGE_POSTS_URL = "https://www.linkedin.com/company/{page_id}/posts/?feedView=all"
 ADMIN_POSTS_URL = "https://www.linkedin.com/company/{page_id}/admin/page-posts/published/"
 
 # Opens the page composer from the admin view. Text, not aria-label.
@@ -556,6 +558,30 @@ class ExtCompanyPostComposer:
                 return {**result, **unresolved}
             result["mentions"] = [m.describe() for m in wanted]
 
+        if mode == "publish":
+            # Same live duplicate check as the personal composer (24 h).
+            live = await outcome.read_activity(
+                self._page,
+                self._navigator._navigate_to_page,
+                self._session.delay,
+                text,
+                PAGE_POSTS_URL.format(page_id=page_id),
+                waits=(0.0,),
+                want_fresh=False,
+            )
+            dup = outcome.recent_duplicate(live["matches"])
+            if dup and confirm:
+                return {
+                    **result,
+                    "status": "duplicate_live",
+                    "outcome": "not_posted",
+                    "post_url": dup["post_url"],
+                    "age_seconds": dup["age_seconds"],
+                    "message": "An identical page post is already live within 24 h; nothing was written.",
+                }
+            if dup:
+                result["live_duplicate"] = dup
+
         await self._navigator._navigate_to_page(url)
         await self._session.check_rate_limit()
         await self._session.delay(3.0)
@@ -860,15 +886,31 @@ class ExtCompanyPostComposer:
             await self._discard(result)
             return result
 
+        if not await outcome.wait_for_upload(
+            self._page, _EDITOR_IN_DIALOG, self._session.delay
+        ):
+            result["status"] = "media_upload_pending"
+            result["outcome"] = "not_posted"
+            await self._discard(result)
+            return result
+
         self.clicked = True
         await self._page.click('[data-ext-company="post"]')
-        await self._session.delay(5.0)
-
-        gone = await self._page.evaluate(
-            _COMPOSER_GONE_JS, {"commit_words": COMPOSER_WORDS}
-        )
         if mode == "schedule":
+            await self._session.delay(5.0)
+            gone = await self._page.evaluate(
+                _COMPOSER_GONE_JS, {"commit_words": COMPOSER_WORDS}
+            )
             status = "scheduled" if gone else "schedule_unconfirmed"
-        else:
-            status = "posted_unverified" if gone else "post_unconfirmed"
-        return {**result, "status": status, "posted": mode == "publish" and gone}
+            return {**result, "status": status, "posted": False}
+        decided = await outcome.decide(
+            page=self._page,
+            editor=_EDITOR_IN_DIALOG,
+            sleep=self._session.delay,
+            navigate=self._navigator._navigate_to_page,
+            discard=self._discard,
+            post_words=_POST_WORDS,
+            text=text,
+            activity_url=PAGE_POSTS_URL.format(page_id=page_id),
+        )
+        return {**result, **decided}
