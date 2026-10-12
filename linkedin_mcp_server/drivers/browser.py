@@ -9,8 +9,10 @@ automatic profile persistence.
 import asyncio
 import logging
 import os
+import re
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 from collections.abc import Coroutine, Mapping, Sequence
 from typing import Any, TypeVar
 
@@ -311,6 +313,14 @@ async def _feed_auth_succeeds(
         # and both destinations here outlive the call -- the trace is written to
         # disk and the log is what users paste into issue reports.
         await _log_feed_failure_context(browser, detail)
+        if barrier is None and await _still_on_a_signed_in_feed(browser):
+            # The navigation failed, but the page it left behind is the signed-in
+            # feed itself: no redirect to a login, the feed's own title. That is
+            # positive evidence the session is alive and the failure was load or
+            # contention. Returning False here retired a valid shared profile on
+            # 2026-10-12 (a 30 s goto timeout under several concurrent clients)
+            # and logged every one of them out. Not an auth verdict either way.
+            raise BrowserBusyError() from exc
         if barrier is None:
             # Nothing loaded and no barrier, so nothing proves the session is
             # dead -- and with a proxy in front, the most likely cause is the
@@ -322,6 +332,34 @@ async def _feed_auth_succeeds(
             # profile aside and starts a login through the same broken proxy.
             raise_if_proxy_configured(exc)
         return False
+
+
+_SIGNED_IN_FEED_TITLE = re.compile(r"^(\(\d+\)\s*)?Feed \| LinkedIn$")
+
+
+async def _still_on_a_signed_in_feed(browser: BrowserManager) -> bool:
+    """Whether the page is LinkedIn's feed as only a signed-in member sees it.
+
+    Both the URL and the title, because each alone is weak: a dead session that
+    has not redirected yet still sits on ``/feed/``, and the title is what a
+    logged-out visitor never gets there (they are sent to a login or authwall).
+    Any read failure answers ``False``, which keeps the existing verdict.
+    """
+    try:
+        url = browser.page.url
+        title = await browser.page.title()
+    except Exception:
+        return False
+    if not isinstance(url, str) or not isinstance(title, str):
+        return False
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    on_linkedin = host == "linkedin.com" or host.endswith(".linkedin.com")
+    return (
+        on_linkedin
+        and parsed.path.rstrip("/") == "/feed"
+        and bool(_SIGNED_IN_FEED_TITLE.match(title.strip()))
+    )
 
 
 def _launch_options() -> tuple[dict[str, Any], dict[str, int]]:

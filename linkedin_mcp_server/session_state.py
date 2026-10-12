@@ -809,6 +809,23 @@ def profile_in_use_by(profile_dir: Path) -> Path | None:
     which the operator can resolve by stopping the container, whereas the
     opposite corrupts two sessions silently.
     """
+    if os.name == "nt":
+        # Fork (2026-10-12): on Windows Chromium writes no SingletonLock symlink;
+        # it holds ``lockfile`` open without sharing for its lifetime. Without
+        # this branch a live foreign Chrome was invisible here, and a profile it
+        # was using got rotated away (all sessions logged out). A lockfile left
+        # by a crash opens fine and counts as free, like a stale symlink.
+        win_lock = profile_dir / "lockfile"
+        if win_lock.exists():
+            try:
+                fd = os.open(win_lock, os.O_RDWR)
+            except PermissionError:
+                return win_lock
+            except OSError:
+                return None
+            os.close(fd)
+        return None
+
     candidate = profile_dir / _CHROMIUM_LOCK_NAME
     try:
         target = os.readlink(candidate)

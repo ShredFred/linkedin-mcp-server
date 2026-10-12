@@ -99,7 +99,9 @@ from linkedin_mcp_server.session_state import (
     load_source_state,
     portable_cookie_path,
     profile_exists,
+    restore_source_profile,
     rotate_source_profile,
+    run_deferring_cancels,
     source_state_path,
 )
 from linkedin_mcp_server.setup import UNGUARDED, interactive_login
@@ -378,6 +380,11 @@ class BootstrapState:
     #: No login can lift that, so none is started until a session reappears on
     #: disk or a stale one is retired for a fresh login.
     account_restricted: bool = False
+    #: The quarantine `invalidate_auth_and_trigger_relogin` moved the session
+    #: into before the login started. Kept so the move can be undone when the
+    #: login ends -- by failure, cancellation or process exit -- without a new
+    #: session: discarding it stranded every client logged out on 2026-10-12.
+    retired_before_login: Path | None = None
 
 
 _state = BootstrapState()
@@ -4572,7 +4579,9 @@ async def invalidate_auth_and_trigger_relogin(
         # profile. What must not happen is the login standing down there, which
         # is why the generation it was told about travels with it.
         try:
-            _force_move_auth_state_aside(stale_generation)
+            _state.retired_before_login = _force_move_auth_state_aside(
+                stale_generation
+            )
         except AuthenticationBootstrapFailedError as exc:
             logger.info(
                 "Could not retire the stale session yet (%s); the login will "
@@ -4613,7 +4622,7 @@ async def invalidate_auth_and_trigger_relogin(
 
 def _move_auth_state_aside(
     *, force: bool = False, superseded_by: str | None | object = UNGUARDED
-) -> None:
+) -> Path | None:
     """Move auth artifacts to a timestamped backup directory.
 
     Args:
@@ -4631,11 +4640,11 @@ def _move_auth_state_aside(
             waited for.
     """
     if not force and _auth_ready():
-        return
+        return None
     # Quarantine creation lives in session_state so the routine rotation on a
     # new session and this stale-state path produce identically shaped backups.
     try:
-        rotate_source_profile(get_profile_dir(), superseded_by=superseded_by)
+        return rotate_source_profile(get_profile_dir(), superseded_by=superseded_by)
     except PeerSessionInPlaceError:
         # Ahead of RuntimeError, which it subclasses, and deliberately not turned
         # into a bootstrap failure: nothing failed. Somebody else signed in, so
@@ -4655,9 +4664,37 @@ def _move_auth_state_aside(
 
 def _force_move_auth_state_aside(
     superseded_by: str | None | object = UNGUARDED,
-) -> None:
+) -> Path | None:
     """Move auth artifacts aside unconditionally (no ``_auth_ready()`` guard)."""
-    _move_auth_state_aside(force=True, superseded_by=superseded_by)
+    return _move_auth_state_aside(force=True, superseded_by=superseded_by)
+
+
+def _restore_retired_before_login() -> None:
+    """Put back the session retired ahead of a login that never replaced it.
+
+    Synchronous and exception-free, because it also runs from ``atexit``: a
+    short-lived stdio client that triggers a login and exits cannot finish it,
+    and on 2026-10-12 exactly that left the shared profile empty for every other
+    client. ``restore_source_profile`` refuses while a browser may still be on
+    the profile and when a new session has been committed, so this only ever
+    undoes a rotation nobody replaced.
+    """
+    retired = _state.retired_before_login
+    _state.retired_before_login = None
+    if retired is None:
+        return
+    try:
+        if restore_source_profile(retired, get_profile_dir()):
+            logger.info("Restored the session retired before an unfinished login")
+    except Exception as exc:  # noqa: BLE001 - atexit must not raise
+        logger.warning(
+            "Could not restore the retired session (%s); it is kept at %s",
+            exc,
+            retired,
+        )
+
+
+atexit.register(_restore_retired_before_login)
 
 
 def _move_invalid_auth_state_aside(
@@ -4680,11 +4717,19 @@ async def _run_login_flow() -> None:
     # a login there is normally nothing to do. Kept because a login can be
     # reached before that setup finishes. Skipped for a custom executable, and
     # the dependencies.py binary-missing path remains the recovery route.
-    if not _uses_custom_chrome():
-        await _ensure_browser_installed()
-    success = await interactive_login(
-        get_profile_dir(), superseded_by=_state.login_supersedes
-    )
+    success = False
+    try:
+        if not _uses_custom_chrome():
+            await _ensure_browser_installed()
+        success = await interactive_login(
+            get_profile_dir(), superseded_by=_state.login_supersedes
+        )
+    finally:
+        if success:
+            _state.retired_before_login = None
+        elif _state.retired_before_login is not None:
+            # A cancel must not abandon the move back half done.
+            await run_deferring_cancels(_restore_retired_before_login)
     if not success:
         raise AuthenticationBootstrapFailedError(
             "LinkedIn login was not completed. Retry the tool call to reopen the browser and continue setup."
