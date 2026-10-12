@@ -338,3 +338,26 @@ async def test_verify_post_not_found_is_read_only() -> None:
     assert r["status"] == "not_found" and r["post_url"] is None
     assert r["attempts"] == len(oc.READBACK_WAITS)
     assert not page.clicked
+
+
+# Live 2026-10-12: card text starts with header chrome, the post follows the age.
+def test_card_body_skips_header_chrome():
+    card = ("Feed-Beitrag\nBoosten Sie diesen Beitrag\nJessica Schneider\n• Sie\n"
+            "Wir helfen Herstellern\nIhre Serviceleistungen anzeigen\n2 Std.\n"
+            "Morgen geht es los: Ab Dienstag bin ich auf dem HärtereiKongress in Köln.")
+    assert oc.card_body(card).startswith("Morgen geht es los")
+
+
+def test_card_body_without_age_keeps_text():
+    assert oc.card_body("nur Text ohne Alter") == "nur Text ohne Alter"
+
+
+def test_card_body_just_now():
+    assert oc.card_body("Kopf\nGerade eben\nHallo Welt") == "Hallo Welt"
+
+
+def test_cards_js_scans_all_attributes_and_encoded_urns():
+    js = oc.CARDS_JS
+    assert "document.querySelectorAll('*')" in js
+    assert "%3A" in js
+    assert "acts(p.outerHTML).size > 1" in js

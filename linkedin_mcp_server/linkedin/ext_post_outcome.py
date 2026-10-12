@@ -101,6 +101,17 @@ def card_age_seconds(card_text: str) -> int | None:
     return int(m.group(1)) * seconds if seconds else None
 
 
+def card_body(card_text: str, limit: int = 160) -> str:
+    """The post text of a card, without the header chrome before the age.
+
+    Live cards start with "Feed-Beitrag", the boost banner, author and
+    headline; a 160-character head of that identifies nothing. Everything
+    after the first age token is the post itself."""
+    raw = card_text or ""
+    m = _NOW_RE.search(raw[:600]) or _AGE_RE.search(raw[:600])
+    body = raw[m.end():] if m else raw
+    return " ".join(body.split())[:limit]
+
 def card_matches(card_text: str, text: str) -> bool:
     """Does an activity card carry this post text (lossy, see module doc)?"""
     want = prefix(text)
@@ -164,14 +175,45 @@ def recent_duplicate(hits: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 # Activity cards: the urn and the card's text. Generic attributes only.
 CARDS_JS = r"""() => {
-  const seen = new Set();
-  return [...document.querySelectorAll('[data-urn], [data-id], [data-activity-urn]')]
-    .map(el => ({
-      urn: el.getAttribute('data-urn') || el.getAttribute('data-id')
-           || el.getAttribute('data-activity-urn') || '',
-      text: (el.innerText || '').slice(0, 4000),
-    }))
-    .filter(c => /^urn:li:(activity|share|ugcPost):\d+$/.test(c.urn) && !seen.has(c.urn) && seen.add(c.urn));
+  // Live 2026-10-12: own activity cards no longer carry data-urn; the urn sits
+  // in other attributes (componentkey, tracking JSON, hrefs, often %3A-encoded).
+  // Scan every attribute, normalise the urn, and take the text of the nearest
+  // card-like ancestor.
+  const RX = /urn(?::|%3A)li(?::|%3A)(activity|share|ugcPost)(?::|%3A)(\d{6,})/gi;
+  const CARD = 'article, [role="article"], .feed-shared-update-v2, [data-finite-scroll-hotkey-item], li';
+  const out = new Map();
+  // The card is the largest ancestor that still holds at most one post: a
+  // share urn sits on a small "boost" banner, the activity urn on the card,
+  // and both must resolve to the same card text. A list of cards holds
+  // several activity urns, so the climb stops below it.
+  const acts = s => new Set([...String(s).matchAll(/activity(?::|%3A)(\d{6,})/gi)].map(m => m[1]));
+  const container = el => {
+    let best = el.closest(CARD) || el;
+    let n = el;
+    for (let i = 0; i < 25 && n.parentElement && n.parentElement !== document.body; i++) {
+      const p = n.parentElement;
+      if (acts(p.outerHTML).size > 1) break;
+      n = p;
+      best = n;
+    }
+    return best;
+  };
+  for (const el of document.querySelectorAll('*')) {
+    for (const a of el.attributes) {
+      if (!/urn/i.test(a.value)) continue;
+      RX.lastIndex = 0;
+      let m;
+      while ((m = RX.exec(a.value)) !== null) {
+        const type = m[1].toLowerCase() === 'ugcpost' ? 'ugcPost' : m[1].toLowerCase();
+        const urn = `urn:li:${type}:${m[2]}`;
+        if (out.has(urn)) continue;
+        out.set(urn, { urn, text: (container(el).innerText || '').slice(0, 4000) });
+      }
+    }
+  }
+  // Activity urns first (stable): they are what comment/analytics tools take.
+  const isAct = c => c.urn.includes(':activity:') ? 0 : 1;
+  return [...out.values()].sort((x, y) => isAct(x) - isAct(y));
 }"""
 
 # The composer's state after the publish click. Read in one pass so every poll

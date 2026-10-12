@@ -380,7 +380,7 @@ class PersonReader:
             url = oc.post_url(c.get("urn"))
             if url and url not in known:
                 known.add(url)
-                head = " ".join(str(c.get("text") or "").split())[:160]
+                head = oc.card_body(str(c.get("text") or ""))
                 refs.append({"kind": "feed_post", "url": url, "text": head})
         if refs:
             references["posts"] = refs
