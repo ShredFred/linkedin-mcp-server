@@ -94,6 +94,17 @@ def _insert(rng: random.Random, text: str, piece: str) -> str:
 # --- check_outgoing / check_links / hidden_format_char / utf16_len ----------
 
 
+MENTION = "mention_not_supported_in_messages"
+
+
+def _mention_markup(text: str) -> bool:
+    """Mention markup is refused before the other checks (still a refusal); only then is that status
+    acceptable. Same predicate as the production check, so the test cannot drift from it."""
+    from linkedin_mcp_server.linkedin.ext_mentions import has_markup
+
+    return has_markup(text)
+
+
 def test_check_outgoing_never_raises_and_returns_known_status():
     rng = random.Random(SEED)
     for case in range(CASES):
@@ -105,7 +116,7 @@ def test_check_outgoing_never_raises_and_returns_known_status():
             "invalid_message",
             "message_too_long",
             "content_check_failed",
-        }, (case, text, result)
+        } or (result["status"] == MENTION and _mention_markup(text)), (case, text, result)
 
 
 def test_forbidden_character_is_refused_wherever_it_stands():
@@ -119,7 +130,8 @@ def test_forbidden_character_is_refused_wherever_it_stands():
             text = text + "x" * MESSAGE_MAX_UTF16  # length must not mask it
         assert hidden_format_char(bad), bad
         result = check_outgoing(text, max_utf16=MESSAGE_MAX_UTF16)
-        assert result is not None and result["status"] == "invalid_message", (
+        ok = {"invalid_message"} | ({MENTION} if _mention_markup(text) else set())
+        assert result is not None and result["status"] in ok, (
             case,
             repr(text),
             result,
@@ -171,7 +183,8 @@ def test_wrong_calendly_account_is_refused_wherever_it_stands():
         text = _text(rng).replace("‮", "") + sep + bad + rng.choice(["", " ok"])
         text = "".join(c for c in text if not hidden_format_char(c))
         result = check_outgoing(text, max_utf16=MESSAGE_MAX_UTF16)
-        assert result and result["status"] == "content_check_failed", (
+        ok = {"content_check_failed"} | ({MENTION} if _mention_markup(text) else set())
+        assert result and result["status"] in ok, (
             case,
             repr(text),
         )
