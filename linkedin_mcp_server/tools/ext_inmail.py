@@ -153,6 +153,7 @@ def register_ext_inmail_tools(
         profile_url: str | None = None,
         confirm: bool = False,
         allow_repeat: bool = False,
+        allow_open_profile: bool = False,
     ) -> dict[str, Any]:
         """
         Send one InMail through Sales Navigator (spends one credit) to a
@@ -162,6 +163,11 @@ def register_ext_inmail_tools(
         Chain before anything leaves: control characters, subject required,
         links (https, Calendly account), placeholders, salutation against the
         profile name, ledger (one InMail per person unless allow_repeat), pacer.
+
+        allow_open_profile: send to an Open Profile (free message) instead of
+        stopping with open_profile. Only when the credit line says free and
+        names no cost; every other check stays, and the ledger marks the row
+        open_profile=true. Off by default.
 
         Status codes: dry_run, verified, unverified, unknown, first_degree
         (use send_message), open_profile, no_inmail_credits,
@@ -215,6 +221,12 @@ def register_ext_inmail_tools(
             spent = _pace("profile_view", tool="send_inmail")
             if spent:
                 return {"recipient": username, **spent}
+            if allow_open_profile and confirm:
+                # The composer reads the inbox balance first (free lines name
+                # none): a page read like inmail_credits, paced as one.
+                spent = _pace("page_read", tool="send_inmail")
+                if spent:
+                    return {"recipient": username, **spent}
             reader = _reader(ex)
             target = await reader.inmail_target(username)
             if target["status"] == "first_degree":
@@ -242,7 +254,13 @@ def register_ext_inmail_tools(
                     "target_name": target.get("name"),
                 }
             if not confirm:
-                result = await reader.inmail(target, subject, body, confirm=False)
+                result = await reader.inmail(
+                    target,
+                    subject,
+                    body,
+                    confirm=False,
+                    allow_open_profile=allow_open_profile,
+                )
                 return {"recipient": username, "target": target, **result}
             attempt = uuid.uuid4().hex
             sha = outreach.text_sha(subject + "\n" + body)
@@ -269,7 +287,13 @@ def register_ext_inmail_tools(
                 return {"recipient": username, **refused}
             try:
                 result = await _before_deadline(
-                    lambda: reader.inmail(target, subject, body, confirm=True),
+                    lambda: reader.inmail(
+                        target,
+                        subject,
+                        body,
+                        confirm=True,
+                        allow_open_profile=allow_open_profile,
+                    ),
                     lambda: getattr(reader, "clicked", True),
                 )
             except BaseException:
@@ -292,8 +316,24 @@ def register_ext_inmail_tools(
                     **_book_deadline(ledger, attempt, result, "not_sent"),
                 }
             status = result["status"] if result.get("sent") else "not_sent"
+            # Only an Open Profile send carries the free marks: every other
+            # row keeps exactly its earlier shape.
+            free_marks = (
+                {
+                    "open_profile": True,
+                    "free": True,
+                    "credit_check": result.get("credit_check"),
+                    # None: the balance could not be compared (unknown).
+                    "credit_spent_despite_free": result.get(
+                        "credit_spent_despite_free"
+                    ),
+                }
+                if result.get("open_profile")
+                else {}
+            )
             ledger.append(
                 {
+                    **free_marks,
                     "attempt": attempt,
                     "status": status,
                     "detail": result["status"],

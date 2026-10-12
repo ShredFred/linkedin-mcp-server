@@ -56,7 +56,7 @@ class _Reader:
     async def inmail_target(self, username):
         return self.target
 
-    async def inmail(self, target, subject, body, confirm):
+    async def inmail(self, target, subject, body, confirm, allow_open_profile=False):
         self.calls.append(confirm)
         return self.sent or {"status": "dry_run"}
 
@@ -458,9 +458,7 @@ def test_every_tool_maps_ledger_corrupt_to_status(name):
     import linkedin_mcp_server.tools.ext as m
 
     fn = _TOOLS[name].fn
-    assert getattr(fn, "_ext_ledger_guarded", False), (
-        f"{name} not behind _ledger_guard"
-    )
+    assert getattr(fn, "_ext_ledger_guarded", False), f"{name} not behind _ledger_guard"
 
     async def boom(*a, **k):
         raise outreach.LedgerCorrupt(outreach.Ledger.default().path, 7)
@@ -581,7 +579,9 @@ def test_parallel_invites_send_once(monkeypatch):
     mcp = _register(monkeypatch, ex)
     _first_two_checks_free(monkeypatch)
     outs = _gather(
-        mcp, "connect_with_person", {"linkedin_username": "dieter", "confirm_send": True}
+        mcp,
+        "connect_with_person",
+        {"linkedin_username": "dieter", "confirm_send": True},
     )
     assert sorted(o.get("status", "sent") for o in outs) == ["duplicate", "sent"]
     assert len(_attempted("invite")) == 1
@@ -741,7 +741,9 @@ def test_inmail_readback_error_after_click_is_unverified(monkeypatch):
         async def inmail_target(self, username):
             return target
 
-        async def inmail(self, target, subject, body, confirm):
+        async def inmail(
+            self, target, subject, body, confirm, allow_open_profile=False
+        ):
             return await reader.inmail(target, subject, body, confirm=confirm)
 
     out = _inmail(monkeypatch, _Wrap())
@@ -830,7 +832,7 @@ class _Clicky:
     async def inmail_target(self, username):
         return self.target
 
-    async def inmail(self, target, subject, body, confirm):
+    async def inmail(self, target, subject, body, confirm, allow_open_profile=False):
         self.clicked = self.click_first
         raise RuntimeError("boom")
 

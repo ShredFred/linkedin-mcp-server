@@ -412,7 +412,9 @@ def test_send_inmail(monkeypatch, phase, want):
         async def inmail_target(self, username):
             return {"status": "ok", "name": "Anna Muster"}
 
-        async def inmail(self, target, subject, body, confirm):
+        async def inmail(
+            self, target, subject, body, confirm, allow_open_profile=False
+        ):
             self.clicked = phase != "a"
             raise asyncio.CancelledError()
 

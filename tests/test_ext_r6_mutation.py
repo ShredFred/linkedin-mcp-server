@@ -145,7 +145,7 @@ def _inmail_reader(monkeypatch, send_raises):
         return send if chain is mi._SN_SEND else subject
 
     monkeypatch.setattr(mi, "first_match", first_match)
-    monkeypatch.setattr(mi, "credit_refusal", lambda c: None)
+    monkeypatch.setattr(mi, "credit_refusal", lambda c, **kw: None)
     monkeypatch.setattr(mi, "parse_degree", lambda t: 2)
 
     class Page(_Field):

@@ -135,13 +135,25 @@ def parse_credits(text: str) -> dict[str, Any]:
     }
 
 
-def credit_refusal(credits: dict[str, Any]) -> str | None:
+def credit_refusal(
+    credits: dict[str, Any], *, allow_open_profile: bool = False
+) -> str | None:
     """Status that stops the send on the composer's credit line; None to go.
 
     Measured cost is 1. A different cost, or fewer credits left than it
     costs, is not a send we have priced: stop rather than spend.
+
+    An Open Profile stops the send unless the caller asked for it with
+    *allow_open_profile*, and even then only when the line says "free" and
+    names no cost and no exhausted balance. Every other case is unchanged.
     """
     if credits.get("free"):
+        if (
+            allow_open_profile
+            and credits.get("cost") is None
+            and not credits.get("none_left")
+        ):
+            return None
         return "open_profile"
     if credits.get("none_left"):
         return "no_inmail_credits"
@@ -245,11 +257,16 @@ _MENU_JS = r"""() => [...document.querySelectorAll('[role=menu] a, [role=menu] [
   .map(e => ({t: (e.innerText || '').trim(), h: e.getAttribute('href')}))
   .filter(x => x.t || x.h)"""
 
-_SN_MESSAGE_LABEL = re.compile(r"^\s*(Nachricht( senden)?|InMail( senden)?|Message|Send (InMail|message))\s*$", re.I)
+_SN_MESSAGE_LABEL = re.compile(
+    r"^\s*(Nachricht( senden)?|InMail( senden)?|Message|Send (InMail|message))\s*$",
+    re.I,
+)
 # The same button by aria-label: icon buttons and labels with the name in them
 # ("Nachricht an <Name> senden", "Message <Name>") carry no exact text.
 # "Nachrichten" and "Messaging" (the inbox) are cut off by the word boundary.
-_SN_MESSAGE_ARIA = re.compile(r"^\s*(Nachricht|InMail|Message|Send (InMail|message))\b", re.I)
+_SN_MESSAGE_ARIA = re.compile(
+    r"^\s*(Nachricht|InMail|Message|Send (InMail|message))\b", re.I
+)
 # Positive evidence that this member cannot receive an InMail. Only this (or a
 # disabled message button) turns a missing route into inmail_not_allowed
 # (2026-10-08: a profile with a visible "Nachricht" button was refused merely
@@ -481,8 +498,10 @@ class ExtInmail(ExtActions):
                 "route": route,
             }
         reason = (
-            "ambiguous_profile_urn" if urns
-            else "saved_lead_without_urn" if saved
+            "ambiguous_profile_urn"
+            if urns
+            else "saved_lead_without_urn"
+            if saved
             else "no_view_link"
         )
         return {**result, "status": "no_sales_navigator_route", "reason": reason}
@@ -494,13 +513,20 @@ class ExtInmail(ExtActions):
         body: str,
         *,
         confirm: bool,
+        allow_open_profile: bool = False,
     ) -> dict[str, Any]:
         """Open the Sales Navigator composer, fill it, then send or discard."""
         # True from the moment the send button is clicked: an exception before
         # it means nothing left, one after it means it may have.
         self.clicked = False
         try:
-            return await self._inmail(target, subject, body, confirm=confirm)
+            return await self._inmail(
+                target,
+                subject,
+                body,
+                confirm=confirm,
+                allow_open_profile=allow_open_profile,
+            )
         except BaseException:
             # A filled composer must not survive an exception before the send
             # click: it would sit open on the shared page as a ready draft.
@@ -515,7 +541,17 @@ class ExtInmail(ExtActions):
         body: str,
         *,
         confirm: bool,
+        allow_open_profile: bool = False,
     ) -> dict[str, Any]:
+        # A free composer line names no balance, so a free send could not be
+        # checked against one. Read it from the inbox first (one page read,
+        # only for a confirmed send that may go to an Open Profile).
+        balance_before: int | None = None
+        if allow_open_profile and confirm:
+            try:
+                balance_before = (await self.inmail_credits()).get("remaining")
+            except Exception:
+                logger.warning("InMail balance before send unreadable", exc_info=True)
         await self._goto(target["sales_url"])
         await self._wait(3.0, 5.0)
         # The lead page renders its action bar late, and the label varies
@@ -549,8 +585,12 @@ class ExtInmail(ExtActions):
         if last and last.casefold() not in lead_text.casefold():
             # The lead page must show the profile's surname; the URN fallback
             # route above must never reach another person.
-            return {"status": "lead_mismatch", "sent": False, "expected": name,
-                    "page": self._page.url}
+            return {
+                "status": "lead_mismatch",
+                "sent": False,
+                "expected": name,
+                "page": self._page.url,
+            }
         await button.click()
         dialog = self._page.locator(_SN_DIALOG).last
         try:
@@ -561,19 +601,33 @@ class ExtInmail(ExtActions):
         text = await dialog.inner_text()
         # Only the header: the recipient panel below quotes their posts, and a
         # post saying "for free" must not read as an Open Profile.
-        header = re.split(r"Empfängerinformationen|Recipient information", text)[0]
+        parts = re.split(r"Empfängerinformationen|Recipient information", text)
+        header = parts[0]
         credits = parse_credits(header)
+        # Without the panel marker the "header" is the whole dialog, and a
+        # quoted post can say "for free": an Open Profile is then not proven,
+        # so the opt-in does not apply and the send stops as before.
+        if len(parts) < 2:
+            allow_open_profile = False
+        # An inbox that already shows no credits left counts as none_left:
+        # the opt-in never sends against an exhausted balance.
+        if balance_before == 0:
+            allow_open_profile = False
         subject_field = await first_match(dialog, _SN_SUBJECT)
         body_field = dialog.locator('textarea[name="message"]').first
-        base = {"credits": credits, "composer": "sales_navigator"}
+        base: dict[str, Any] = {"credits": credits, "composer": "sales_navigator"}
 
         async def discard(status: str, **extra: Any) -> dict[str, Any]:
             await self._close_sn_dialog(dialog)
             return {**base, "status": status, "sent": False, **extra}
 
-        stop = credit_refusal(credits)
+        stop = credit_refusal(credits, allow_open_profile=allow_open_profile)
         if stop is not None:
             return await discard(stop)
+        if credits.get("free"):
+            # Only reachable with allow_open_profile and a "free" line without
+            # cost: marked so the ledger and the caller can tell it apart.
+            base["open_profile"] = True
         if subject_field is None or await body_field.count() == 0:
             return await discard("composer_fields_missing")
         await subject_field.fill(subject)
@@ -610,6 +664,10 @@ class ExtInmail(ExtActions):
             credits_after = await self.inmail_credits()
         except Exception as exc:
             logger.warning("InMail read-back after send failed", exc_info=True)
+            if base.get("open_profile"):
+                # No balance after the send: whether a credit went is unknown.
+                base["credit_check"] = "unavailable"
+                base["credit_spent_despite_free"] = None
             return {
                 **base,
                 "status": "verified" if delivered else "unverified",
@@ -624,6 +682,16 @@ class ExtInmail(ExtActions):
             and credits_after.get("remaining") is not None
             and credits_after["remaining"] < credits["remaining"]
         )
+        if base.get("open_profile"):
+            # Announced as free: compare the balance anyway and report a drop,
+            # never hide it. Unknown on either side is said, not assumed.
+            before = credits["remaining"]
+            if before is None:
+                before = balance_before
+            after_left = credits_after.get("remaining")
+            known = before is not None and after_left is not None
+            base["credit_check"] = "measured" if known else "unavailable"
+            base["credit_spent_despite_free"] = (after_left < before) if known else None
         return {
             **base,
             "status": "verified" if (delivered or spent) else "unverified",
@@ -660,11 +728,17 @@ class ExtInmail(ExtActions):
         if block:
             return {**base, "status": "inmail_not_allowed", "evidence": block.group(0)}
         if disabled:
-            return {**base, "status": "inmail_not_allowed",
-                    "evidence": "message_button_disabled"}
+            return {
+                **base,
+                "status": "inmail_not_allowed",
+                "evidence": "message_button_disabled",
+            }
         upsell = any(
-            re.search(r"Premium|Upgrade|Sales Navigator (testen|kostenlos)|Try Sales Navigator",
-                      x or "", re.I)
+            re.search(
+                r"Premium|Upgrade|Sales Navigator (testen|kostenlos)|Try Sales Navigator",
+                x or "",
+                re.I,
+            )
             for x in labels
         )
         return {
