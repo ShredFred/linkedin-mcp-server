@@ -411,3 +411,18 @@ async def test_resolve_me_leaves_page_urls_alone() -> None:
 
     u = "https://www.linkedin.com/company/1/posts/?feedView=all"
     assert await oc.resolve_me(object(), navigate, u) == u
+
+
+@pytest.mark.parametrize("label", ["2. Okt.", "9. Dez. 2025", "20. Mai", "Oct 2", "Dec 9, 2025"])
+def test_dated_card_is_older_than_the_duplicate_window(label: str) -> None:
+    # Live 2026-10-12: cards older than a week show a date, not "3 Std.".
+    age = oc.card_age_seconds(f"Jessica Schneider\n{label}\nText")
+    assert age is not None and age > oc.DUPLICATE_WINDOW_SECONDS
+
+
+def test_card_body_after_a_date() -> None:
+    assert oc.card_body("Feed-Beitrag\nBoosten\n2. Okt.\nIn knapp zwei Wochen") == "In knapp zwei Wochen"
+
+
+def test_halle_number_is_not_a_date() -> None:
+    assert oc.card_age_seconds("Halle 10.2, Stand B-015") is None

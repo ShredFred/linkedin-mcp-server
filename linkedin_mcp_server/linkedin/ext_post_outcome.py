@@ -63,6 +63,13 @@ _AGE_RE = re.compile(
     r"(?<![\w])(\d{1,3})\s*(sek\.?|s|min\.?|m|std\.?|h|tg\.?|tag(?:e)?|t|d|wo\.?|w|mon\.?|mo\.?|j|y|yr)(?![\w])",
     re.IGNORECASE,
 )
+# Older than a week LinkedIn shows a date ("2. Okt.", "9. Dez. 2025", "Oct 2").
+# Its exact age does not matter here; a lower bound of 8 days is enough to
+# keep it out of the 24 h duplicate window instead of failing closed.
+_DATE_RE = re.compile(
+    r"(?<![\w])(?:\d{1,2}\.\s?[A-Za-z\u00c4\u00e4\u00d6\u00f6\u00dc\u00fc]{3,5}\.?(?:\s\d{4})?|[A-Z][a-z]{2}\s\d{1,2}(?:,\s\d{4})?)(?![\w])"
+)
+DATED_CARD_MIN_AGE = 8 * 86400
 _NOW_RE = re.compile(r"(?<![\w])(gerade eben|jetzt|now|just now)(?![\w])", re.IGNORECASE)
 _UNIT_SECONDS = {
     "s": 1, "sek": 1, "m": 60, "min": 60, "h": 3600, "std": 3600,
@@ -95,7 +102,7 @@ def card_age_seconds(card_text: str) -> int | None:
         return 0
     m = _AGE_RE.search(head)
     if not m:
-        return None
+        return DATED_CARD_MIN_AGE if _DATE_RE.search(head) else None
     unit = m.group(2).lower().rstrip(".")
     seconds = _UNIT_SECONDS.get(unit)
     return int(m.group(1)) * seconds if seconds else None
@@ -108,7 +115,7 @@ def card_body(card_text: str, limit: int = 160) -> str:
     headline; a 160-character head of that identifies nothing. Everything
     after the first age token is the post itself."""
     raw = card_text or ""
-    m = _NOW_RE.search(raw[:600]) or _AGE_RE.search(raw[:600])
+    m = _NOW_RE.search(raw[:600]) or _AGE_RE.search(raw[:600]) or _DATE_RE.search(raw[:600])
     body = raw[m.end():] if m else raw
     return " ".join(body.split())[:limit]
 
