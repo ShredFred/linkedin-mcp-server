@@ -145,7 +145,10 @@ async def test_composer_closes_slowly_is_polled_not_checked_once() -> None:
 
 @pytest.mark.asyncio
 async def test_feed_lag_is_retried_with_backoff() -> None:
-    page = ScriptPage([CLOSED], [[], [], [], [card(TEXT)]])
+    # Feed lag = the page renders, but older cards only (an empty page is now
+    # a render wait inside one attempt, see test_read_activity_waits_for_cards).
+    old = card("Ein aelterer Beitrag ohne Bezug zum neuen Text, lang genug.")
+    page = ScriptPage([CLOSED], [[old], [old], [old], [old, card(TEXT)]])
     env = Env()
     r = await decide(page, env)
     assert r["status"] == "posted_verified"
@@ -361,3 +364,25 @@ def test_cards_js_scans_all_attributes_and_encoded_urns():
     assert "document.querySelectorAll('*')" in js
     assert "%3A" in js
     assert "acts(p.outerHTML).size > 1" in js
+
+
+
+async def test_read_activity_waits_for_cards_to_render():
+    # Live 2026-10-12: the first evaluate after navigation returned no card.
+    answers = iter([[], [], [{"urn": "urn:li:activity:7515394313292390400", "text": "2 Std.\nHallo Welt Beitrag"}]])
+
+    class Page:
+        async def evaluate(self, js, arg=None):
+            return next(answers)
+
+    slept = []
+
+    async def sleep(s):
+        slept.append(s)
+
+    async def navigate(url):
+        return None
+
+    rb = await oc.read_activity(Page(), navigate, sleep, "Hallo Welt Beitrag", "u", waits=(0.0,), want_fresh=False)
+    assert rb["found"] and rb["urn"].endswith("7515394313292390400")
+    assert slept.count(oc.CARD_RENDER_INTERVAL) == 2

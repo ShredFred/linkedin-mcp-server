@@ -331,6 +331,23 @@ async def settle(
         waited += poll
 
 
+# Live 2026-10-12: the activity page is a SPA; right after navigation the feed
+# is often not rendered yet and one evaluate returns no card at all, which
+# read as "not_found" for a post that was live. Poll until cards show up.
+CARD_RENDER_POLLS = 12
+CARD_RENDER_INTERVAL = 1.0
+
+
+async def _render_cards(page: Any, sleep: Sleep) -> list[dict[str, Any]]:
+    cards: list[dict[str, Any]] = []
+    for i in range(CARD_RENDER_POLLS):
+        cards = await page.evaluate(CARDS_JS) or []
+        if cards:
+            return cards
+        if i < CARD_RENDER_POLLS - 1:
+            await sleep(CARD_RENDER_INTERVAL)
+    return cards
+
 async def read_activity(
     page: Any,
     navigate: Navigate,
@@ -349,7 +366,7 @@ async def read_activity(
         await sleep(wait)
         attempts += 1
         await navigate(url)
-        cards = await page.evaluate(CARDS_JS) or []
+        cards = await _render_cards(page, sleep)
         hits = find_matches(cards, text)
         hit = fresh_hit(hits) if want_fresh else (hits[0] if hits else None)
         if hit:
