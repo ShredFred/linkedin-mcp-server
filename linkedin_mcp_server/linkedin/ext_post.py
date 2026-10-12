@@ -17,7 +17,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from linkedin_mcp_server.linkedin import ext_post_outcome as outcome
+import linkedin_mcp_server.linkedin.ext_post_outcome as outcome
 from linkedin_mcp_server.linkedin.ext_composer_labels import words
 from linkedin_mcp_server.linkedin.ext_mentions import (
     MentionWriter,

@@ -57,7 +57,7 @@ class FakePage:
             if not self.clicked or self.urn is None:
                 return []
             age = "Gerade eben" if self.newest else "1 Wo."
-            return [{"urn": self.urn, "text": f"Frederik {age} {self.body}"}]
+            return [{"urn": self.urn, "text": f"Erika {age} {self.body}"}]
         handled, value = mention_writer_script(self, script, arg)
         if handled:
             return value

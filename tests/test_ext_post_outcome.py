@@ -16,14 +16,14 @@ from linkedin_mcp_server.linkedin.ext_post import ExtPostComposer
 
 TEXT = (
     "Härteprüfung „automatisiert“ – 15× schneller 🚀\n\n"
-    "Wie wir Korngrößen nach ASTM E112 messen: https://mivia.ai/blog/korn "
+    "Wie wir Korngrößen nach ASTM E112 messen: https://example.org/blog/korn "
     "#Metallografie und was das im Labor bedeutet, mit allen Details."
 )
 URN = "urn:li:activity:7300000000000000001"
 
 
 def card(text: str, urn: str = URN, age: str = "Gerade eben") -> dict[str, Any]:
-    return {"urn": urn, "text": f"Frederik Stadler\n{age} • \n{text}"}
+    return {"urn": urn, "text": f"Erika Muster\n{age} • \n{text}"}
 
 
 OPEN = {"editor": True, "editor_chars": 200}
@@ -102,7 +102,7 @@ def test_normalize_drops_url_quotes_emoji_and_hashtag_rendering() -> None:
 
 
 def test_link_preview_stripped_url_still_matches() -> None:
-    shown = TEXT.replace("https://mivia.ai/blog/korn ", "")
+    shown = TEXT.replace("https://example.org/blog/korn ", "")
     assert oc.card_matches(card(shown)["text"], TEXT)
 
 
@@ -347,7 +347,7 @@ async def test_verify_post_not_found_is_read_only() -> None:
 
 # Live 2026-10-12: card text starts with header chrome, the post follows the age.
 def test_card_body_skips_header_chrome():
-    card = ("Feed-Beitrag\nBoosten Sie diesen Beitrag\nJessica Schneider\n• Sie\n"
+    card = ("Feed-Beitrag\nBoosten Sie diesen Beitrag\nErika Muster\n• Sie\n"
             "Wir helfen Herstellern\nIhre Serviceleistungen anzeigen\n2 Std.\n"
             "Morgen geht es los: Ab Dienstag bin ich auf dem HärtereiKongress in Köln.")
     assert oc.card_body(card).startswith("Morgen geht es los")
@@ -398,10 +398,10 @@ async def test_resolve_me_uses_the_redirected_slug() -> None:
     p = P()
 
     async def navigate(u):
-        p.url = "https://www.linkedin.com/in/jessica-schneider-078028203/"
+        p.url = "https://www.linkedin.com/in/erika-muster-0001/"
 
     got = await oc.resolve_me(p, navigate, "https://www.linkedin.com/in/me/recent-activity/all/")
-    assert got == "https://www.linkedin.com/in/jessica-schneider-078028203/recent-activity/all/"
+    assert got == "https://www.linkedin.com/in/erika-muster-0001/recent-activity/all/"
 
 
 @pytest.mark.asyncio
@@ -416,7 +416,7 @@ async def test_resolve_me_leaves_page_urls_alone() -> None:
 @pytest.mark.parametrize("label", ["2. Okt.", "9. Dez. 2025", "20. Mai", "Oct 2", "Dec 9, 2025"])
 def test_dated_card_is_older_than_the_duplicate_window(label: str) -> None:
     # Live 2026-10-12: cards older than a week show a date, not "3 Std.".
-    age = oc.card_age_seconds(f"Jessica Schneider\n{label}\nText")
+    age = oc.card_age_seconds(f"Erika Muster\n{label}\nText")
     assert age is not None and age > oc.DUPLICATE_WINDOW_SECONDS
 
 

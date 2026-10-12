@@ -953,7 +953,10 @@ def register_ext_tools(
 
         Returns status found / not_found with post_url, activity_id,
         age_seconds (from the card's relative time, null if unreadable) and
-        all matches. When found, ledger rows for this text that were
+        all matches, plus cards_seen and landed_url to diagnose a not_found
+        (0 cards = page not rendered or wrong page). invalid_input: empty
+        text or a non-numeric page_id (field names which). When found,
+        ledger rows for this text that were
         unknown / attempted / posted are marked posted_verified (local
         ledger only; the 30-day same-text block stays in force either way).
         """
@@ -1396,7 +1399,7 @@ def register_ext_tools(
         nothing in flight, call again for remaining). Other refusals: canary_not_configured (no canary:
         LINKEDIN_MCP_CANARY unset and none passed), invalid_recipient (bad canary, with
         field=canary), invalid_message, message_too_long, pace_lock_busy
-        (retry shortly).
+        (retry shortly), mention_not_supported_in_messages (@-mention markup in the message text).
         """
         if not (canary or "").strip():
             return {
@@ -1628,7 +1631,7 @@ def register_ext_tools(
         Tool deadline: answered before it with a top-level status and
         deadline_reached=true: not_sent (retry_safe=true, deadline before the
         send click, no invite booked) or unknown (retry_safe=false, may have
-        left; the person stays blocked).
+        left; the person stays blocked). mention_not_supported_in_messages: @-mention markup in the invitation note.
         """
         username, bad = _recipient(linkedin_username)
         if bad:

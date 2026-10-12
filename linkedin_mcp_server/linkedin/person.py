@@ -367,7 +367,8 @@ class PersonReader:
         return result
 
     async def _add_post_urls(self, references: dict[str, Any]) -> None:
-        from linkedin_mcp_server.linkedin import ext_post_outcome as oc
+        # Direct module import: the layering test forbids the package facade.
+        import linkedin_mcp_server.linkedin.ext_post_outcome as oc
 
         try:
             cards = await self._session.page.evaluate(oc.CARDS_JS) or []

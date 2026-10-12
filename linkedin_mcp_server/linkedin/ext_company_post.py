@@ -43,7 +43,7 @@ from linkedin_mcp_server.linkedin.ext_mentions import (
     plain_text,
     resolve_targets,
 )
-from linkedin_mcp_server.linkedin import ext_post_outcome as outcome
+import linkedin_mcp_server.linkedin.ext_post_outcome as outcome
 from linkedin_mcp_server.linkedin.ext_composer_labels import words
 from linkedin_mcp_server.linkedin.ext_media import MediaAttacher, check_media, describe
 from linkedin_mcp_server.linkedin.ext_post import _IMAGE_SUFFIXES
