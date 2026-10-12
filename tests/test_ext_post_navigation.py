@@ -109,3 +109,13 @@ async def test_offsite_cleanup_redirect_raises():
     # Upstream #1235 refuses the landing first; the fork check stays behind it.
     with pytest.raises((OffSiteNavigationError, OffLinkedInLandingError)):
         await _composer(page).create_post("Text", image_path=None, confirm_post=False)
+
+
+async def test_dry_run_does_not_read_live_activity():
+    # 2026-10-12: the live duplicate check ran in dry runs too, an extra
+    # navigation per dry run. It belongs before a real publish only.
+    page = _page([(ext_post.SHARE_URL, 200), (ext_post.FEED_URL, 200)])
+    composer = _composer(page)
+    composer.find_live = AsyncMock(side_effect=AssertionError("dry run read activity"))
+    await composer.create_post("Text", image_path=None, confirm_post=False)
+    composer.find_live.assert_not_awaited()

@@ -204,7 +204,9 @@ class ExtPostComposer:
 
         # Duplicate check against the live profile, not only the ledger: a
         # post made by hand or by an earlier unconfirmed run is visible here.
-        live = await self.find_live(text)
+        # Only before a real publish: a dry run must not cost an extra
+        # navigation (rate limit), and its navigation contract stays SHARE+FEED.
+        live = await self.find_live(text) if confirm_post else {"matches": []}
         dup = outcome.recent_duplicate(live["matches"])
         if dup and confirm_post:
             return {

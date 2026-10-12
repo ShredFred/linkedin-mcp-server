@@ -558,8 +558,9 @@ class ExtCompanyPostComposer:
                 return {**result, **unresolved}
             result["mentions"] = [m.describe() for m in wanted]
 
-        if mode == "publish":
-            # Same live duplicate check as the personal composer (24 h).
+        if mode == "publish" and confirm:
+            # Same live duplicate check as the personal composer (24 h); not in a
+            # dry run, which must not cost an extra navigation.
             live = await outcome.read_activity(
                 self._page,
                 self._navigator._navigate_to_page,
