@@ -28,6 +28,10 @@ PAID_LINE = "1 von 150 InMail-Guthaben verwenden"
 def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv(outreach.LEDGER_ENV, str(tmp_path / "ledger.jsonl"))
     monkeypatch.setenv(outreach.NOTES_ENV, str(tmp_path / "notes.json"))
+    import linkedin_mcp_server.tools.ext_inmail as mi
+
+    monkeypatch.setattr(mi, "_balance", {"remaining": None, "at": None})
+    monkeypatch.setattr(mi, "_pending_free_checks", {})
 
 
 # -- credit_refusal -------------------------------------------------------------
@@ -232,18 +236,30 @@ def test_composer_paid_line_unmarked():
 
 
 class _Reader:
-    def __init__(self, result):
+    def __init__(self, result, balances=()):
         self.result = result
         self.calls = []
+        self.kwargs = []
         self.clicked = False
+        self.balances = list(balances)
+        self.balance_reads = 0
 
     async def inmail_target(self, username):
         return {"status": "ok", "name": "Dieter Köhler"}
 
-    async def inmail(self, target, subject, body, confirm, allow_open_profile=False):
+    async def inmail(
+        self, target, subject, body, confirm, allow_open_profile=False, **kw
+    ):
         self.calls.append((confirm, allow_open_profile))
+        self.kwargs.append(kw)
         self.clicked = confirm
         return self.result
+
+    async def inmail_credits(self):
+        self.balance_reads += 1
+        if self.balances:
+            return {"remaining": self.balances.pop(0)}
+        raise RuntimeError("inbox unreadable")
 
 
 def _tool(monkeypatch, reader, **over):
@@ -382,3 +398,157 @@ def test_free_send_stops_when_inbox_shows_no_credits():
     out, sends = _send(FREE_LINE, confirm=True, allow=True, balances=(0, 0))
     assert out["status"] == "open_profile"
     assert sends == []
+
+
+# -- 2026-10-12: the balance reads leave the send deadline ------------------------
+
+FREE_SENT = {
+    "status": "verified",
+    "sent": True,
+    "open_profile": True,
+    "credits": {"free": True, "cost": None, "remaining": None},
+    "credits_after": {},
+    "credit_check": "deferred",
+    "credit_spent_despite_free": None,
+}
+
+
+def _send_kw(header, balances, **kw):
+    obj, page = _composer(header, balances)
+    out = asyncio.run(obj.inmail(TARGET, "Betreff", "Guten Tag", confirm=True, **kw))
+    return out, page
+
+
+def test_composer_given_balance_reads_no_inbox():
+    out, page = _send_kw(
+        FREE_LINE,
+        (),
+        allow_open_profile=True,
+        balance_before=150,
+        defer_credit_check=True,
+    )
+    assert out["sent"] is True and out["open_profile"] is True
+    assert out["credit_check"] == "deferred"
+    assert out["credit_spent_despite_free"] is None
+    assert page.balance_reads == 0
+
+
+def test_composer_given_zero_balance_still_stops():
+    out, page = _send_kw(
+        FREE_LINE,
+        (),
+        allow_open_profile=True,
+        balance_before=0,
+        defer_credit_check=True,
+    )
+    assert out["status"] == "open_profile" and out["sent"] is False
+    assert page.balance_reads == 0
+
+
+def test_composer_defer_does_not_touch_paid_send():
+    out, page = _send_kw(
+        PAID_LINE,
+        (149,),
+        allow_open_profile=True,
+        balance_before=150,
+        defer_credit_check=True,
+    )
+    assert out["sent"] is True and "credit_check" not in out
+    assert page.balance_reads == 1  # the existing read-back of a paid send
+
+
+def test_tool_without_flag_passes_nothing_new(monkeypatch):
+    reader = _Reader({"status": "verified", "sent": True}, balances=(150,))
+    _tool(monkeypatch, reader, credits_before=150)
+    assert reader.kwargs == [{}]
+    assert reader.balance_reads == 0
+
+
+def test_tool_reads_balance_before_the_send_deadline(monkeypatch):
+    reader = _Reader(dict(FREE_SENT), balances=(150,))
+    out = _tool(monkeypatch, reader, allow_open_profile=True)
+    assert out["status"] == "verified"
+    assert reader.balance_reads == 1
+    assert reader.kwargs == [{"balance_before": 150, "defer_credit_check": True}]
+    (row,) = _rows()
+    assert row["credit_check"] == "deferred"
+
+
+def test_tool_uses_credits_before_and_cache(monkeypatch):
+    reader = _Reader(dict(FREE_SENT), balances=(150,))
+    _tool(monkeypatch, reader, allow_open_profile=True, credits_before=140)
+    assert reader.balance_reads == 0
+    assert reader.kwargs[0]["balance_before"] == 140
+
+
+def test_tool_unreadable_balance_says_unavailable(monkeypatch):
+    reader = _Reader(dict(FREE_SENT), balances=())
+    out = _tool(monkeypatch, reader, allow_open_profile=True)
+    assert reader.kwargs[0]["balance_before"] is None
+    assert out["credit_check"] == "unavailable"
+    (row,) = _rows()
+    assert row["credit_check"] == "unavailable"
+
+
+@pytest.mark.parametrize("bad", [-1, -150])
+def test_tool_rejects_bad_credits_before(monkeypatch, bad):
+    reader = _Reader(dict(FREE_SENT))
+    out = _tool(monkeypatch, reader, allow_open_profile=True, credits_before=bad)
+    assert out["status"] == "invalid_credits_before"
+    assert reader.calls == []
+
+
+def _credits_tool(monkeypatch, reader):
+    import linkedin_mcp_server.tools.ext as m
+    import linkedin_mcp_server.tools.ext_inmail as mi
+
+    async def fake_run(ctx, tool, body):
+        return await body(object())
+
+    monkeypatch.setattr(m, "_run", fake_run)
+    monkeypatch.setattr(mi, "_reader", lambda ex: reader)
+    mcp = FastMCP("t")
+    m.register_ext_tools(mcp)
+
+    async def go():
+        async with Client(mcp) as c:
+            return (await c.call_tool("inmail_credits", {})).structured_content
+
+    return asyncio.run(go())
+
+
+@pytest.mark.parametrize("after,spent", [(150, False), (149, True)])
+def test_deferred_check_closed_by_next_balance_read(monkeypatch, after, spent):
+    reader = _Reader(dict(FREE_SENT), balances=(150,))
+    _tool(monkeypatch, reader, allow_open_profile=True)
+    reader.balances = [after]
+    out = _credits_tool(monkeypatch, reader)
+    assert out["remaining"] == after
+    (row,) = _rows()
+    assert row["credit_check"] == "measured"
+    assert row["credit_spent_despite_free"] is spent
+    assert row["status"] == "verified"
+
+
+def test_deferred_check_voided_by_another_inmail(monkeypatch):
+    reader = _Reader(dict(FREE_SENT), balances=(150,))
+    _tool(monkeypatch, reader, allow_open_profile=True)
+    paid = _Reader({"status": "verified", "sent": True})
+    _tool(monkeypatch, paid, linkedin_username="other")
+    first = next(r for r in _rows() if r.get("open_profile"))
+    assert first["credit_check"] == "unavailable"
+    assert first["credit_spent_despite_free"] is None
+
+
+def test_click_clears_balance_cache(monkeypatch):
+    # A cached balance must not survive a send click: the next Open Profile
+    # send reads the inbox again, so an inbox at 0 still stops it.
+    import linkedin_mcp_server.tools.ext_inmail as mi
+
+    reader = _Reader(dict(FREE_SENT), balances=(150,))
+    _tool(monkeypatch, reader, allow_open_profile=True)
+    assert mi._cached_balance() is None
+    second = _Reader(dict(FREE_SENT), balances=(0,))
+    _tool(monkeypatch, second, allow_open_profile=True, linkedin_username="other")
+    assert second.balance_reads == 1
+    assert second.kwargs[0]["balance_before"] == 0

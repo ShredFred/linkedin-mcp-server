@@ -9,10 +9,12 @@ checks (links, placeholders, salutation), ledger duplicate check, pacer.
 from __future__ import annotations
 
 import re
+import time
 import uuid
 from datetime import datetime
 from typing import Any
 
+import anyio
 from fastmcp import Context, FastMCP
 
 from linkedin_mcp_server import ext_outreach as outreach
@@ -39,6 +41,64 @@ from linkedin_mcp_server.linkedin.ext_inmail import (
 TAG = "ext"
 SUBJECT_MAX = 200
 INMAIL_BODY_MAX = 1900
+
+
+# Open Profile sends: the inbox balance is read outside the send deadline and
+# kept briefly per process; the comparison after a free send is deferred to the
+# next balance read. Live 2026-10-12: with two inbox page reads inside the
+# send deadline (one before, one after the click) it ran out three times
+# before the click and once after it.
+BALANCE_CACHE_SECONDS = 300.0
+BALANCE_READ_SECONDS = 30.0
+_balance: dict[str, Any] = {"remaining": None, "at": None}
+# attempt id -> balance before the free send, waiting for the next read.
+_pending_free_checks: dict[str, int] = {}
+
+
+def _is_count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _remember_balance(remaining: Any) -> None:
+    if _is_count(remaining):
+        _balance.update(remaining=remaining, at=time.monotonic())
+
+
+def _cached_balance() -> int | None:
+    at = _balance.get("at")
+    if at is None or time.monotonic() - at > BALANCE_CACHE_SECONDS:
+        return None
+    return _balance.get("remaining")
+
+
+def _resolve_free_checks(ledger: Any, remaining: Any) -> None:
+    """Close the deferred free-send checks with a fresh inbox balance."""
+    if not _is_count(remaining):
+        return
+    for attempt, before in list(_pending_free_checks.items()):
+        _pending_free_checks.pop(attempt, None)
+        ledger.append(
+            {
+                "attempt": attempt,
+                "credit_check": "measured",
+                "credits_after": remaining,
+                "credit_spent_despite_free": remaining < before,
+            }
+        )
+
+
+def _void_free_checks(ledger: Any, why: str) -> None:
+    """Another InMail is about to be clicked: the comparison would mix sends."""
+    for attempt in list(_pending_free_checks):
+        _pending_free_checks.pop(attempt, None)
+        ledger.append(
+            {
+                "attempt": attempt,
+                "credit_check": "unavailable",
+                "credit_spent_despite_free": None,
+                "credit_check_detail": why,
+            }
+        )
 
 
 def _reader(extractor: Any) -> ExtInmail:
@@ -154,6 +214,7 @@ def register_ext_inmail_tools(
         confirm: bool = False,
         allow_repeat: bool = False,
         allow_open_profile: bool = False,
+        credits_before: int | None = None,
     ) -> dict[str, Any]:
         """
         Send one InMail through Sales Navigator (spends one credit) to a
@@ -168,6 +229,15 @@ def register_ext_inmail_tools(
         stopping with open_profile. Only when the credit line says free and
         names no cost; every other check stays, and the ledger marks the row
         open_profile=true. Off by default.
+
+        credits_before: optional InMail balance the caller read just before
+        (inmail_credits); only used with allow_open_profile. Saves the inbox
+        read before the send. Otherwise a balance read within the last 5
+        minutes is reused, else the inbox is read once before anything is
+        booked. The balance after a free send is compared at the next balance
+        read (inmail_credits or the next Open Profile send): the ledger row
+        carries credit_check="deferred" until then, and "unavailable" if
+        another InMail is sent first. invalid_credits_before: not an int >= 0.
 
         Status codes: dry_run, verified, unverified, unknown, first_degree
         (use send_message), open_profile, no_inmail_credits,
@@ -197,6 +267,8 @@ def register_ext_inmail_tools(
         ident = linkedin_username or profile_url
         if not ident:
             return {"status": "recipient_required"}
+        if credits_before is not None and not _is_count(credits_before):
+            return {"status": "invalid_credits_before"}
         username, bad = _recipient(ident)
         if bad:
             return bad
@@ -221,13 +293,28 @@ def register_ext_inmail_tools(
             spent = _pace("profile_view", tool="send_inmail")
             if spent:
                 return {"recipient": username, **spent}
-            if allow_open_profile and confirm:
-                # The composer reads the inbox balance first (free lines name
-                # none): a page read like inmail_credits, paced as one.
-                spent = _pace("page_read", tool="send_inmail")
-                if spent:
-                    return {"recipient": username, **spent}
             reader = _reader(ex)
+            balance_before: int | None = None
+            if allow_open_profile and confirm:
+                # Free lines name no balance: it is known before the composer
+                # opens, never read inside the send deadline.
+                balance_before = credits_before
+                if balance_before is None:
+                    balance_before = _cached_balance()
+                if balance_before is None:
+                    # A page read like inmail_credits, paced as one.
+                    spent = _pace("page_read", tool="send_inmail")
+                    if spent:
+                        return {"recipient": username, **spent}
+                    read: Any = None
+                    with anyio.move_on_after(BALANCE_READ_SECONDS):
+                        try:
+                            read = (await reader.inmail_credits()).get("remaining")
+                        except Exception:
+                            read = None
+                    balance_before = read if _is_count(read) else None
+                    _remember_balance(balance_before)
+                    _resolve_free_checks(ledger, balance_before)
             target = await reader.inmail_target(username)
             if target["status"] == "first_degree":
                 return {
@@ -285,6 +372,18 @@ def register_ext_inmail_tools(
             )
             if refused:
                 return {"recipient": username, **refused}
+            # From the click on, a pending free-send comparison would count
+            # this InMail's credit too.
+            _void_free_checks(ledger, "another InMail sent before the check")
+            # The balance may change with this click: a cached value must not
+            # stand in for the inbox at the next Open Profile send (its
+            # balance_before == 0 stop). A paid send re-reads it afterwards.
+            _balance.update(remaining=None, at=None)
+            extra = (
+                {"balance_before": balance_before, "defer_credit_check": True}
+                if allow_open_profile
+                else {}
+            )
             try:
                 result = await _before_deadline(
                     lambda: reader.inmail(
@@ -293,6 +392,7 @@ def register_ext_inmail_tools(
                         body,
                         confirm=True,
                         allow_open_profile=allow_open_profile,
+                        **extra,
                     ),
                     lambda: getattr(reader, "clicked", True),
                 )
@@ -331,6 +431,14 @@ def register_ext_inmail_tools(
                 if result.get("open_profile")
                 else {}
             )
+            if result.get("credit_check") == "deferred":
+                if balance_before is None:
+                    # Nothing to compare against later: say so now.
+                    result = {**result, "credit_check": "unavailable"}
+                    free_marks["credit_check"] = "unavailable"
+                else:
+                    _pending_free_checks[attempt] = balance_before
+            _remember_balance((result.get("credits_after") or {}).get("remaining"))
             ledger.append(
                 {
                     **free_marks,
@@ -368,9 +476,12 @@ def register_ext_inmail_tools(
         spent = _pace("page_read", tool="inmail_credits")
         if spent:
             return spent
-        return await _run(
-            ctx, "inmail_credits", lambda ex: _reader(ex).inmail_credits()
-        )
+        out = await _run(ctx, "inmail_credits", lambda ex: _reader(ex).inmail_credits())
+        if isinstance(out, dict) and _is_count(out.get("remaining")):
+            _remember_balance(out["remaining"])
+            if _pending_free_checks:
+                _resolve_free_checks(outreach.Ledger.default(), out["remaining"])
+        return out
 
     @mcp.tool(
         timeout=max(tool_timeout, 120.0),

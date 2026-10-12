@@ -426,6 +426,7 @@ async def first_match(scope: Any, chain: tuple[Any, ...], *, last: bool = False)
 
 
 _MESSAGE_BUTTON_POLL_SECONDS = 1.0
+_UNSET: Any = object()  # balance_before not supplied: read it here
 
 
 class ExtInmail(ExtActions):
@@ -514,8 +515,18 @@ class ExtInmail(ExtActions):
         *,
         confirm: bool,
         allow_open_profile: bool = False,
+        balance_before: Any = _UNSET,
+        defer_credit_check: bool = False,
     ) -> dict[str, Any]:
-        """Open the Sales Navigator composer, fill it, then send or discard."""
+        """Open the Sales Navigator composer, fill it, then send or discard.
+
+        *balance_before*: the inbox balance the caller already read (None =
+        unknown). When given, the composer does not read the inbox itself --
+        that page read used to sit inside the send deadline and ate it.
+        *defer_credit_check*: for an Open Profile send, skip the inbox read
+        after the click; the caller compares the balance later
+        (credit_check="deferred"). Paid sends are not affected by either.
+        """
         # True from the moment the send button is clicked: an exception before
         # it means nothing left, one after it means it may have.
         self.clicked = False
@@ -526,6 +537,8 @@ class ExtInmail(ExtActions):
                 body,
                 confirm=confirm,
                 allow_open_profile=allow_open_profile,
+                balance_before=balance_before,
+                defer_credit_check=defer_credit_check,
             )
         except BaseException:
             # A filled composer must not survive an exception before the send
@@ -542,12 +555,17 @@ class ExtInmail(ExtActions):
         *,
         confirm: bool,
         allow_open_profile: bool = False,
+        balance_before: Any = _UNSET,
+        defer_credit_check: bool = False,
     ) -> dict[str, Any]:
         # A free composer line names no balance, so a free send could not be
         # checked against one. Read it from the inbox first (one page read,
-        # only for a confirmed send that may go to an Open Profile).
-        balance_before: int | None = None
-        if allow_open_profile and confirm:
+        # only for a confirmed send that may go to an Open Profile) -- unless
+        # the caller already read it outside the send deadline.
+        read_here = balance_before is _UNSET
+        if read_here or not (allow_open_profile and confirm):
+            balance_before = None
+        if allow_open_profile and confirm and read_here:
             try:
                 balance_before = (await self.inmail_credits()).get("remaining")
             except Exception:
@@ -661,6 +679,20 @@ class ExtInmail(ExtActions):
             after = canon(await dialog.inner_text()) if await dialog.count() else ""
             delivered = canon(body)[:150] in after
             sent_url = self._page.url
+            if base.get("open_profile") and defer_credit_check:
+                # The caller compares the balance after its answer: an inbox
+                # read here ran past the deadline and turned a sent message
+                # into "unknown".
+                base["credit_check"] = "deferred"
+                base["credit_spent_despite_free"] = None
+                return {
+                    **base,
+                    "status": "verified" if delivered else "unverified",
+                    "sent": True,
+                    "delivered_in_dialog": delivered,
+                    "credits_after": {},
+                    "url": sent_url,
+                }
             credits_after = await self.inmail_credits()
         except Exception as exc:
             logger.warning("InMail read-back after send failed", exc_info=True)
