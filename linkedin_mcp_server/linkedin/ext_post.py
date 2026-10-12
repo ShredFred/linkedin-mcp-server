@@ -411,4 +411,6 @@ class ExtPostComposer:
             "attempts": rb["attempts"],
             "activity_url": url,
             "text_prefix": outcome.prefix(text),
+            "cards_seen": rb.get("cards_seen"),
+            "landed_url": rb.get("landed_url"),
         }

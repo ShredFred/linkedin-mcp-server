@@ -321,7 +321,9 @@ async def test_identical_live_post_refuses_publish_before_composer() -> None:
     )
     assert r["status"] == "duplicate_live" and r["posted"] is False
     assert r["post_url"].endswith(f"{URN}/")
-    assert nav.urls == ["https://www.linkedin.com/in/me/recent-activity/all/"]
+    # /in/me/ first: the activity alias is not redirected live (2026-10-12).
+    assert nav.urls[0] == "https://www.linkedin.com/in/me/"
+    assert nav.urls[-1].endswith("/recent-activity/all/")
     assert not page.clicked
 
 
@@ -386,3 +388,26 @@ async def test_read_activity_waits_for_cards_to_render():
     rb = await oc.read_activity(Page(), navigate, sleep, "Hallo Welt Beitrag", "u", waits=(0.0,), want_fresh=False)
     assert rb["found"] and rb["urn"].endswith("7515394313292390400")
     assert slept.count(oc.CARD_RENDER_INTERVAL) == 2
+
+
+@pytest.mark.asyncio
+async def test_resolve_me_uses_the_redirected_slug() -> None:
+    class P:
+        url = "about:blank"
+
+    p = P()
+
+    async def navigate(u):
+        p.url = "https://www.linkedin.com/in/jessica-schneider-078028203/"
+
+    got = await oc.resolve_me(p, navigate, "https://www.linkedin.com/in/me/recent-activity/all/")
+    assert got == "https://www.linkedin.com/in/jessica-schneider-078028203/recent-activity/all/"
+
+
+@pytest.mark.asyncio
+async def test_resolve_me_leaves_page_urls_alone() -> None:
+    async def navigate(u):
+        raise AssertionError("no navigation for a company feed")
+
+    u = "https://www.linkedin.com/company/1/posts/?feedView=all"
+    assert await oc.resolve_me(object(), navigate, u) == u

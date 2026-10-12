@@ -348,6 +348,24 @@ async def _render_cards(page: Any, sleep: Sleep) -> list[dict[str, Any]]:
             await sleep(CARD_RENDER_INTERVAL)
     return cards
 
+ME_ALIAS = "/in/me/"
+_SLUG_RE = re.compile(r"/in/([^/?#]+)")
+
+
+async def resolve_me(page: Any, navigate: Navigate, url: str) -> str:
+    """Replace the /in/me/ alias with the member's real slug.
+
+    Live 2026-10-12: /in/me/recent-activity/all/ is not redirected; the page
+    stays empty (0 cards) and every lookup read as not_found. /in/me/ itself
+    does redirect, so resolve the slug there first. Unresolvable -> url as is.
+    """
+    if ME_ALIAS not in url:
+        return url
+    await navigate("https://www.linkedin.com/in/me/")
+    m = _SLUG_RE.search(str(getattr(page, "url", "") or ""))
+    slug = m.group(1) if m else "me"
+    return url if slug == "me" else url.replace(ME_ALIAS, f"/in/{slug}/", 1)
+
 async def read_activity(
     page: Any,
     navigate: Navigate,
@@ -362,11 +380,16 @@ async def read_activity(
     attempts = 0
     hits: list[dict[str, Any]] = []
     hit = None
+    cards_seen = 0
+    landed = ""
+    url = await resolve_me(page, navigate, url)
     for wait in waits:
         await sleep(wait)
         attempts += 1
         await navigate(url)
         cards = await _render_cards(page, sleep)
+        cards_seen = len(cards)
+        landed = str(getattr(page, "url", "") or "")
         hits = find_matches(cards, text)
         hit = fresh_hit(hits) if want_fresh else (hits[0] if hits else None)
         if hit:
@@ -379,6 +402,9 @@ async def read_activity(
         "matches": hits,
         "attempts": attempts,
         "activity_url": url,
+        # Diagnosis for not_found: 0 cards = page not rendered or wrong page.
+        "cards_seen": cards_seen,
+        "landed_url": landed,
     }
 
 
