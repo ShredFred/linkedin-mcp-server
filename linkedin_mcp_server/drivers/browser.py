@@ -746,7 +746,18 @@ async def get_or_create_browser(
             # until the MCP server was restarted. Tear the dead one down
             # (settling the profile lease) and launch a fresh one instead.
             logger.warning("Browser is no longer alive; restarting it")
-            await _run_deferring_cancels(_close_browser_locked())
+            try:
+                await _run_deferring_cancels(_close_browser_locked())
+            except BrowserShutdownUnconfirmedError:
+                raise
+            except Exception as exc:
+                # Same verdict as the upstream path (`_shut_down_unusable_browser`):
+                # a teardown that throws while the lease is still marked open did
+                # not confirm Chromium left the profile, and the caller must not
+                # see a raw driver error it might retry into a second launch.
+                if get_profile_lease().browser_open or _browser_lease is not None:
+                    raise BrowserShutdownUnconfirmedError() from exc
+                raise
         if _browser is not None:
             return _browser
         return await _create_browser()

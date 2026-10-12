@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncio
+import os
 import threading
 
 import pytest
@@ -1388,6 +1389,27 @@ def _on_the_tool_path() -> Any:
     return call
 
 
+def _dir_link(alias: Path, target: Path) -> None:
+    """A directory alias: a symlink, or on Windows without the symlink
+    privilege (WinError 1314, no Developer Mode) a junction, which resolves the
+    same way for these tests and needs no privilege."""
+    try:
+        alias.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) != 1314:
+            raise
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(alias))
+
+
+def _dir_unlink(alias: Path) -> None:
+    try:
+        alias.unlink()
+    except (IsADirectoryError, PermissionError):
+        os.rmdir(alias)  # a junction
+
+
 @pytest.fixture
 def two_roots(tmp_path, monkeypatch):
     """A profile root reached through a symlink the test can point elsewhere.
@@ -1403,15 +1425,15 @@ def two_roots(tmp_path, monkeypatch):
     for root in (a, b):
         (root / "profile").mkdir(parents=True)
     alias = tmp_path / "selected"
-    alias.symlink_to(a, target_is_directory=True)
+    _dir_link(alias, a)
     monkeypatch.setattr(
         session_state, "get_source_profile_dir", _resolve_the_configured_profile
     )
     set_config(AppConfig(browser=BrowserConfig(user_data_dir=str(alias / "profile"))))
 
     def retarget(root: Path) -> None:
-        alias.unlink()
-        alias.symlink_to(root, target_is_directory=True)
+        _dir_unlink(alias)
+        _dir_link(alias, root)
 
     return SimpleNamespace(a=a / "profile", b=b / "profile", retarget=retarget)
 
