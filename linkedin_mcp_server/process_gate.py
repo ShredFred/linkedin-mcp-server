@@ -10,6 +10,11 @@ _PREFIX = b"release "
 _NONCE_BYTES = 32
 _NONCE_LENGTH = _NONCE_BYTES * 2
 _MAX_FRAME = len(_PREFIX) + _NONCE_LENGTH + 1
+# The gate is started detached, so it has no console to share. A console
+# target started from it without this flag gets a new, visible console window
+# (seen with the daemon owner on Windows). The gate runs with -I -S, so the
+# package-wide no_console default is not installed here and must be explicit.
+_NO_WINDOW = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
 
 
 def _arguments(argv: list[str]) -> tuple[str, list[str]]:
@@ -51,6 +56,7 @@ def main(argv: list[str] | None = None) -> int:
             stdout=1,
             stderr=2,
             close_fds=True,
+            creationflags=_NO_WINDOW,
         )
     except OSError:
         return 70

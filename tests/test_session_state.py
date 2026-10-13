@@ -28,6 +28,8 @@ from linkedin_mcp_server.session_state import (
     write_source_state,
 )
 
+from symlink_support import requires_symlinks
+
 
 def test_write_source_state_creates_generation(monkeypatch, isolate_profile_dir):
     monkeypatch.setattr(
@@ -195,7 +197,7 @@ def test_get_runtime_id_marks_container(monkeypatch):
     )
     monkeypatch.setattr(
         "linkedin_mcp_server.session_state.Path.exists",
-        lambda self: str(self) == "/.dockerenv",
+        lambda self: self.as_posix() == "/.dockerenv",
     )
 
     assert get_runtime_id() == "linux-amd64-container"
@@ -211,7 +213,7 @@ def test_get_runtime_id_marks_container_from_cgroup_v2_mountinfo(monkeypatch):
     )
     monkeypatch.setattr(
         "linkedin_mcp_server.session_state.Path.exists",
-        lambda self: str(self) == "/proc/1/mountinfo",
+        lambda self: self.as_posix() == "/proc/1/mountinfo",
     )
     monkeypatch.setattr(
         "linkedin_mcp_server.session_state.Path.read_text",
@@ -234,7 +236,7 @@ def test_get_runtime_id_ignores_non_root_overlay_mounts(monkeypatch):
     )
     monkeypatch.setattr(
         "linkedin_mcp_server.session_state.Path.exists",
-        lambda self: str(self) == "/proc/1/mountinfo",
+        lambda self: self.as_posix() == "/proc/1/mountinfo",
     )
     monkeypatch.setattr(
         "linkedin_mcp_server.session_state.Path.read_text",
@@ -263,7 +265,7 @@ def test_get_runtime_id_ignores_other_containers_on_the_host(monkeypatch):
     )
     monkeypatch.setattr(
         "linkedin_mcp_server.session_state.Path.exists",
-        lambda self: str(self) == "/proc/1/mountinfo",
+        lambda self: self.as_posix() == "/proc/1/mountinfo",
     )
     monkeypatch.setattr(
         "linkedin_mcp_server.session_state.Path.read_text",
@@ -576,6 +578,7 @@ class TestRotateSourceProfile:
         assert rotate_source_profile(isolate_profile_dir) is None
         assert quarantine_dirs(isolate_profile_dir) == []
 
+    @requires_symlinks
     def test_refuses_while_another_process_holds_the_profile(self, isolate_profile_dir):
         """Rotating underneath a live Chromium — a second CLI run, or a
         container sharing the mounted auth root — corrupts both sessions."""
@@ -592,6 +595,7 @@ class TestRotateSourceProfile:
         assert profile_dir.exists()
         assert quarantine_dirs(profile_dir) == []
 
+    @requires_symlinks
     def test_stale_lock_does_not_block_forever(self, isolate_profile_dir):
         """Chromium leaves its lock behind on a crash. Treating that as a live
         owner would wedge every future login behind a manual file deletion."""
@@ -944,6 +948,7 @@ class TestRestoreSourceProfile:
         assert "new" in (profile_dir / "Local State").read_text()
 
 
+@requires_symlinks
 def test_rotation_refuses_while_a_container_holds_a_derived_profile(
     isolate_profile_dir,
 ):
@@ -976,6 +981,7 @@ def test_restore_ignores_a_half_written_marker(isolate_profile_dir):
     assert "working" in (profile_dir / "Local State").read_text()
 
 
+@requires_symlinks
 def test_lock_from_another_host_counts_as_held(isolate_profile_dir):
     """A container writing into the mounted auth root records its own hostname
     and a pid from its namespace. Probing that pid against this host is
@@ -991,6 +997,7 @@ def test_lock_from_another_host_counts_as_held(isolate_profile_dir):
     assert profile_dir.exists()
 
 
+@requires_symlinks
 def test_a_foreign_host_lock_names_what_would_free_the_profile(isolate_profile_dir):
     """Measured on macOS: the host name changed after a crash, so the lock this
     machine left behind read as another host's and refused every login for good.
@@ -1017,6 +1024,7 @@ def test_a_foreign_host_lock_names_what_would_free_the_profile(isolate_profile_d
     assert profile_dir.exists()
 
 
+@requires_symlinks
 def test_a_live_lock_on_this_host_does_not_suggest_deleting_it(isolate_profile_dir):
     profile_dir = isolate_profile_dir
     _seed_session(profile_dir)
@@ -1047,6 +1055,7 @@ def test_uncommitted_debris_is_parked_not_deleted(isolate_profile_dir):
     assert '{"debris": true}' in (parked / "profile" / "Local State").read_text()
 
 
+@requires_symlinks
 def test_socket_and_cookie_links_are_not_read_as_owners(isolate_profile_dir):
     """Only SingletonLock encodes <host>-<pid>. SingletonSocket holds a path and
     SingletonCookie an opaque token, so parsing them the same way turns a

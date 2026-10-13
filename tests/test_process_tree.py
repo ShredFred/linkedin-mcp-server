@@ -278,7 +278,15 @@ def test_gate_uses_explicit_standard_handles(monkeypatch: pytest.MonkeyPatch):
     assert calls == [
         (
             ["target", "arg"],
-            {"stdin": 0, "stdout": 1, "stderr": 2, "close_fds": True},
+            {
+                "stdin": 0,
+                "stdout": 1,
+                "stderr": 2,
+                "close_fds": True,
+                # A detached gate has no console; without CREATE_NO_WINDOW a
+                # console target opened a visible window on Windows.
+                "creationflags": 0x08000000 if os.name == "nt" else 0,
+            },
         )
     ]
 

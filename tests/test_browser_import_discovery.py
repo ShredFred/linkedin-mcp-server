@@ -13,6 +13,8 @@ from linkedin_mcp_server.browser_import.discovery import (
     resolve_cookies_db,
 )
 
+from symlink_support import requires_symlinks
+
 
 def _write_local_state(root, info_cache):
     root.mkdir(parents=True, exist_ok=True)
@@ -145,6 +147,7 @@ def test_browser_roots_discovers_sibling_channel_without_duplicates(
     assert len(roots) == 2  # no duplicates
 
 
+@requires_symlinks
 def test_browser_roots_dedups_root_reachable_via_two_base_dirs(tmp_path, monkeypatch):
     # Two base dirs that resolve to the same place (e.g. Windows LOCALAPPDATA and
     # APPDATA pointing at one user-data tree) must not yield the root twice.
