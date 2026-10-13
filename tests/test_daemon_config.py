@@ -337,6 +337,11 @@ class TestDaemonLogState:
         assert log_path.is_file()
         assert not list(tmp_path.glob(".daemon-log-*")), "and nothing stayed staged"
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="on Windows the log is hardened while still staged, so a failure "
+        "publishes nothing (_publish_windows_daemon_log); this is the POSIX path",
+    )
     def test_failed_fresh_log_hardening_leaves_the_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -461,6 +466,32 @@ class TestDaemonLogState:
         assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
 
 
+@pytest.fixture
+def _owner_job_handoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give an in-process ``daemon_owner.main`` the Windows Job handoff it requires.
+
+    On Windows the owner refuses to start without ``--job-name`` naming the Job
+    its frontend assigned it to, before it reads the configuration. These tests
+    drive the steps after that handoff in-process, where there is no Job, so
+    every one of them stopped at the first refusal. The Job check keeps its own
+    tests in test_process_tree.
+    """
+    if os.name != "nt":
+        return
+    from linkedin_mcp_server import daemon_owner
+
+    real_main = daemon_owner.main
+    monkeypatch.setattr(
+        daemon_owner.WindowsJob, "verify_current_process", lambda _name: None
+    )
+    monkeypatch.setattr(
+        daemon_owner,
+        "main",
+        lambda argv=None: real_main([*(argv or []), "--job-name", "test-job"]),
+    )
+
+
+@pytest.mark.usefixtures("_owner_job_handoff")
 class TestRefusing:
     def test_the_frontends_own_invocation_does_not_cross(self):
         # An owner that adopted the frontend's transport would try to serve
