@@ -80,6 +80,11 @@ class _Owner:
         self.done.append(("killed", self.pid))
         self.alive = not self.dies
 
+    def wait(self, timeout=None):
+        # Windows has no zombies, so the harness waits on the handle there.
+        if self.alive:
+            raise psutil.TimeoutExpired(timeout)
+
     def create_time(self):
         if not self.alive:
             raise psutil.NoSuchProcess(self.pid)
@@ -264,7 +269,8 @@ class _Scene:
         no launch marker, no kernel ticks, the original holding the lock.
         The close makes the original give way to successor 84."""
         monkeypatch.setattr(harness, "kernel_start_ticks", lambda *a, **k: None)
-        monkeypatch.setattr(harness.os, "getpgid", lambda pid: pid)
+        # Modelled, so it is set where the platform has none (Windows).
+        monkeypatch.setattr(harness.os, "getpgid", lambda pid: pid, raising=False)
         monkeypatch.setattr(harness, "open_lifetime", lambda *a, **k: None)
         monkeypatch.setattr(harness, "wait_for_marker", lambda *a, **k: None)
         monkeypatch.setattr(
