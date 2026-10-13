@@ -109,13 +109,19 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 @pytest.fixture(scope="session")
-def _stand_in_home(tmp_path_factory):
-    return tmp_path_factory.mktemp("home")
+def _stand_in_homes(tmp_path_factory):
+    import itertools
+
+    return tmp_path_factory.mktemp("homes"), itertools.count()
 
 
 @pytest.fixture(autouse=True)
-def keep_out_of_the_real_home(request, _stand_in_home, monkeypatch):
-    """Point ``Path.home()`` and ``~`` at a stand-in home for every test.
+def keep_out_of_the_real_home(request, _stand_in_homes, monkeypatch):
+    """Point ``Path.home()`` and ``~`` at a fresh stand-in home for every test.
+
+    One per test, not one per session: a shared one carried ``~/.linkedin-mcp``
+    from one test into the next. A counter under one session directory costs a
+    single ``mkdir``, cheaper than a numbered ``tmp_path`` for every test.
 
     ``HOME`` and ``USERPROFILE`` are what ``expanduser`` and ``Path.home`` read,
     and the installer's home fallback went through them into the real account.
@@ -128,8 +134,11 @@ def keep_out_of_the_real_home(request, _stand_in_home, monkeypatch):
     """
     if "real_state_root" in request.fixturenames:
         return
-    monkeypatch.setenv("HOME", str(_stand_in_home))
-    monkeypatch.setenv("USERPROFILE", str(_stand_in_home))
+    root, counter = _stand_in_homes
+    home = root / str(next(counter))
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
 
 
 @pytest.fixture(autouse=True)

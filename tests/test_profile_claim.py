@@ -35,6 +35,8 @@ from linkedin_mcp_server.session_state import (
     source_state_path,
 )
 
+from symlink_support import requires_symlinks
+
 
 #: Long enough that a second process racing into the same decision has landed,
 #: short enough not to weigh on the suite. Only spent when the guard works.
@@ -264,6 +266,7 @@ class TestRefusingARootNobodyClaimed:
 
         assert _sentinels_survive(foreign)
 
+    @requires_symlinks
     def test_a_symlink_onto_a_foreign_root_is_refused(self, tmp_path):
         """The case a lexical check misses.
 
@@ -280,6 +283,7 @@ class TestRefusingARootNobodyClaimed:
 
         assert _sentinels_survive(foreign)
 
+    @requires_symlinks
     def test_a_symlinked_route_to_our_own_root_is_still_ours(self, tmp_path):
         """One directory, two spellings, and resolving is what makes them one.
 
