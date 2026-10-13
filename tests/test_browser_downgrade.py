@@ -31,6 +31,26 @@ from linkedin_mcp_server.core.browser import BrowserManager
 from linkedin_mcp_server.exceptions import BrowserDowngradeError
 
 
+#: Read before any fixture can force it: whether this platform can ask a
+#: binary for its version without starting a browser.
+_ASKING_IS_SAFE_HERE = a_version_can_be_asked_for()
+
+
+@pytest.fixture(autouse=True)
+def _the_comparison_runs_on_every_platform(monkeypatch):
+    """Let the comparison run where asking a binary is never done (Windows).
+
+    Every test here hands the guard a version it made up, so nothing is ever
+    asked; forcing the answer only lets the refusal logic run on Windows too.
+    The platform class sets it back to False for its own tests, and the one
+    test that asks a real binary is skipped where that would start a browser.
+    """
+    monkeypatch.setattr(
+        "linkedin_mcp_server.browser_downgrade.a_version_can_be_asked_for",
+        lambda: True,
+    )
+
+
 def _shell_wrapper(tmp_path: Path, body: str) -> Path:
     """An executable standing in for a ``CHROME_PATH`` that is not a browser.
 
@@ -346,6 +366,10 @@ class TestAskingTheBinary:
         ):
             assert version_of("/anything") is None
 
+    @pytest.mark.skipif(
+        not _ASKING_IS_SAFE_HERE,
+        reason="--version starts a browser on this platform instead of answering",
+    )
     async def test_the_installed_browser_answers(self):
         """The one assertion here that a Chromium update can break.
 
@@ -670,8 +694,26 @@ def _fake_playwright(
     return start
 
 
+class _SettledJob:
+    """A Windows Job whose earlier drain already proved it empty."""
+
+    closed = True
+    drained = True
+
+
 class TestWhatTheLaunchDoes:
     """The guard where it actually sits, not the helper on its own."""
+
+    @pytest.fixture(autouse=True)
+    def _no_windows_job_for_the_fake_driver(self, monkeypatch):
+        """As in test_core_browser: the fake driver has no Node process to put
+        in a Job, so on Windows the launch stopped before the guard. A settled,
+        proved Job stands in; containment has its own tests."""
+        if os.name == "nt":
+            monkeypatch.setattr(
+                "linkedin_mcp_server.core.browser.contain_browser_launch",
+                lambda _driver: _SettledJob(),
+            )
 
     def _manager(self, profile: Path, **kwargs) -> BrowserManager:
         return BrowserManager(user_data_dir=profile, headless=True, **kwargs)
