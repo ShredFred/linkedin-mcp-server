@@ -1004,6 +1004,11 @@ class TestFailingFast:
         assert lookup.state is OwnerState.ABSENT
         assert inspections == 1
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="on Windows the spawn waits for the in-flight reader to settle "
+        "(_exclusion_state), so no start can overlap an inspection begun before it",
+    )
     def test_aborted_start_discards_an_inspection_begun_before_it(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -1054,6 +1059,11 @@ class TestFailingFast:
         assert outcome.attachment_lookup.state is OwnerState.ATTACHABLE
         assert inspections == 2
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="on Windows the spawn waits for the in-flight reader to settle "
+        "(_exclusion_state), so no start can overlap an inspection begun before it",
+    )
     def test_successful_commit_gets_a_fresh_descriptor_inspection(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -1814,6 +1824,19 @@ def real_state_root(tmp_path: Path):
     here can collide with the user's own state or with a parallel test, and the
     same derivation gives cleanup an exact target.
     """
+    if os.name == "nt":
+        # The real root inherits this account's legacy pre-v2 directory, and
+        # production refuses every election while it is not the tombstone it
+        # writes itself. Only the account's owner may remove it, so a host
+        # that still has one cannot run these, and says why.
+        from linkedin_mcp_server.private_state import PrivateStateError
+
+        try:
+            daemon_descriptor_module._legacy_windows_tombstone_exists(
+                daemon_descriptor_module._account_home()
+            )
+        except PrivateStateError as exc:
+            pytest.skip(f"the account's real daemon state root is refused: {exc}")
     profile = tmp_path / "auth" / "profile"
     profile.mkdir(parents=True, exist_ok=True)
     yield profile
@@ -6213,11 +6236,14 @@ class TestVersionSkew:
             election_module, "_ask_to_stand_down", lambda attachment: asked.append(1)
         )
 
+        # The election returns as soon as the owner answers, so a generous
+        # deadline costs nothing; 0.1 s was shorter than one private-state
+        # read takes on Windows under -n 4 load.
         outcome = obtain_owner(
             auth_root,
             profile,
             config,
-            deadline_seconds=0.1,
+            deadline_seconds=2.0,
             settlement_seconds=0,
             connect=lambda attachment, timeout: Reach.ANSWERED,
         )
@@ -6243,11 +6269,14 @@ class TestVersionSkew:
             election_module, "_ask_to_stand_down", lambda attachment: asked.append(1)
         )
 
+        # The election returns as soon as the owner answers, so a generous
+        # deadline costs nothing; 0.1 s was shorter than one private-state
+        # read takes on Windows under -n 4 load.
         outcome = obtain_owner(
             auth_root,
             profile,
             config,
-            deadline_seconds=0.1,
+            deadline_seconds=2.0,
             settlement_seconds=0,
             connect=lambda attachment, timeout: Reach.ANSWERED,
         )
@@ -6932,7 +6961,9 @@ class TestNotHoldingTheLockForever:
         # process ends, which is precisely what an in-process test cannot see.
         # Not `tmp_path / "home"`, which the isolation fixture already made.
         home = tmp_path / "child-home"
-        home.mkdir()
+        # Hardened for the same reason as the fixture's home: on Windows the
+        # daemon refuses a home whose permissions are still inherited.
+        harden_directory(home)
         auth_root = tmp_path / "child-auth"
         auth_root.mkdir()
 
