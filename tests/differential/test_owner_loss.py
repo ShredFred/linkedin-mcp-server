@@ -30,6 +30,8 @@ from unittest.mock import MagicMock
 
 import httpx2
 import psutil
+import signal
+
 import pytest
 
 from differential import harness, owner_loss
@@ -1854,6 +1856,15 @@ async def test_a_port_that_cannot_be_bound_again_is_invalid_evidence(losing):
     assert [c["tool"] for c in result.record["calls"]] == [harness.READ_TOOL]
 
 
+#: The stop seam suspends the owner with SIGSTOP and resumes it with SIGCONT;
+#: Windows has neither, so the row is handed no way to stop its owner there.
+_needs_a_stop_seam = pytest.mark.skipif(
+    not hasattr(signal, "SIGSTOP"),
+    reason="the owner is stopped with SIGSTOP, which this platform lacks",
+)
+
+
+@_needs_a_stop_seam
 async def test_a_stopped_owner_is_resumed_by_the_row_and_serves_again(losing):
     result = await losing.run(ROW_OWNER_ERROR)
 
@@ -1873,6 +1884,7 @@ async def test_a_stopped_owner_is_resumed_by_the_row_and_serves_again(losing):
     ]
 
 
+@_needs_a_stop_seam
 async def test_a_tool_run_on_the_stopped_owner_fails_the_row(losing):
     losing.runs_while_stopped = True
     result = await losing.run(ROW_OWNER_ERROR)
@@ -1881,6 +1893,7 @@ async def test_a_tool_run_on_the_stopped_owner_fails_the_row(losing):
     assert any("a tool ran on the stopped owner" in p for p in findings), findings
 
 
+@_needs_a_stop_seam
 async def test_a_stop_the_script_left_is_resumed_and_fails_as_the_harnesss(
     losing, monkeypatch
 ):
@@ -1908,6 +1921,7 @@ async def test_a_stop_the_script_left_is_resumed_and_fails_as_the_harnesss(
     assert any("the row left its owner stopped" in p for p in result.record["problems"])
 
 
+@_needs_a_stop_seam
 async def test_a_stop_left_by_a_row_that_failed_is_resumed_in_the_teardown(
     losing, monkeypatch
 ):
