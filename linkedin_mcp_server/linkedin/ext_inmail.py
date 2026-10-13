@@ -257,6 +257,13 @@ def credit_mentions(text: str, cap: int = 3) -> list[str]:
 _SENT_LABEL_RE = re.compile(
     r"^\s*(Gesendet|Gesendete Nachrichten|Sent|Sent messages)\b", re.IGNORECASE
 )
+_SENT_LABEL_EXACT_RE = re.compile(
+    r"^\s*(Gesendet|Gesendete Nachrichten|Sent|Sent messages)\s*$", re.IGNORECASE
+)
+_ACTIVITY_SUFFIX_RE = re.compile(
+    r"\s+(?:war zuletzt\b.*\baktiv|ist (?:gerade )?aktiv|was (?:last )?active\b.*|is active(?: now)?)\.?\s*$",
+    re.IGNORECASE,
+)
 _OWN_PREFIX_RE = re.compile(r"^\s*(Sie|You)\s*:\s*", re.IGNORECASE)
 _TIME_RE = re.compile(
     r"^\s*(?:\d{1,2}[:.]\d{2}(?:\s*(?:AM|PM|Uhr))?"
@@ -311,6 +318,8 @@ def parse_sent_item(item: Any) -> dict[str, Any] | None:
     if not other:
         return None
     name, body = other[0], other[1:]
+    # 13.10. live: "Max Muster war zuletzt Vor 3 Tagen aktiv." -- der Aktivitaetshinweis haengt am Namen.
+    name = _ACTIVITY_SUFFIX_RE.sub("", name).strip() or name
     when = " ".join(times) or None
     snippet_idx = next((i for i, x in enumerate(body) if _OWN_PREFIX_RE.match(x)), None)
     subject = subject_source = None
@@ -374,14 +383,23 @@ _FILTER_TRIGGER: tuple[Any, ...] = (
     ),
     ("button", r"^\s*(Posteingang|Inbox|Gesendet|Sent)\s*$"),
 )
+_MENU_LABELS_JS = """() => Array.from(document.querySelectorAll(
+  '[role="menuitem"], [role="option"], [role="menuitemradio"], .artdeco-dropdown__content li'))
+  .filter(e => e.offsetParent !== null)
+  .map(e => (e.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 60))
+  .filter(t => t)
+  .concat(Array.from(document.querySelectorAll('select option')).map(o => 'select:' + (o.textContent || '').trim()).slice(0, 20))"""
+_TRIGGER_HTML_JS = (
+    """(el) => (el.outerHTML || '').replace(/\\s+/g, ' ').slice(0, 600)"""
+)
 _SENT_OPTION: tuple[Any, ...] = (
     (
         '[role="menuitem"], [role="option"], [role="menuitemradio"]',
-        r"^\s*(Gesendet|Sent)\s*$",
+        r"^\s*(Gesendet|Gesendete Nachrichten|Sent|Sent messages)\s*$",
     ),
     (
         ".artdeco-dropdown__content li, .artdeco-dropdown__content button",
-        r"^\s*(Gesendet|Sent)\s*$",
+        r"^\s*(Gesendet|Gesendete Nachrichten|Sent|Sent messages)\s*$",
     ),
 )
 
@@ -1117,12 +1135,42 @@ class ExtInmail(ExtActions):
             await trigger.click()
             await self._wait(0.8, 1.4)
             option = await first_match(self._page, _SENT_OPTION)
+            menu_text = ""
             if option is None:
+                # 13.10. live: das Sales-Navigator-Menue ("hue-menu") traegt keine Standardrollen. Gesucht wird
+                # im Container, den der Ausloeser per aria-controls benennt, nach genau der Beschriftung.
+                menu_id = await trigger.get_attribute("aria-controls")
+                if menu_id and re.fullmatch(r"[A-Za-z0-9_-]+", menu_id):
+                    menu = self._page.locator(f"#{menu_id}")
+                    try:
+                        menu_text = (await menu.inner_text(timeout=3000)).strip()
+                    except Exception:
+                        menu_text = ""
+                    kandidat = menu.get_by_text(_SENT_LABEL_EXACT_RE)
+                    if await kandidat.count() == 1:
+                        option = kandidat.first
+            if option is None:
+                # 13.10. live: "sent_option_not_found" ohne jeden Hinweis, wie die Option wirklich heisst.
+                # Die sichtbaren Menueeintraege (nur Beschriftungen, hoechstens 20) machen den Befund pruefbar.
+                try:
+                    angeboten = await self._page.evaluate(_MENU_LABELS_JS) or []
+                except Exception:
+                    angeboten = []
                 try:
                     await self._page.keyboard.press("Escape")
                 except Exception:
                     logger.debug("closing the filter menu failed", exc_info=True)
-                return empty("sent_option_not_found", filter_label=before)
+                try:
+                    ausloeser = await trigger.evaluate(_TRIGGER_HTML_JS)
+                except Exception:
+                    ausloeser = ""
+                return empty(
+                    "sent_option_not_found",
+                    filter_label=before,
+                    offered=angeboten[:40],
+                    trigger_html=ausloeser,
+                    menu_text=menu_text[:600],
+                )
             await option.click()
             await self._wait(2.0, 3.0)
         label_loc = await first_match(self._page, _FILTER_TRIGGER)

@@ -373,3 +373,45 @@ class TestTool:
         monkeypatch.setitem(outreach.PACE_BUDGETS, "page_read", {"day": 0, "week": 0})
         _, out = self._call({"limit": 5})
         assert out["status"] == "pace_budget_spent"
+
+
+@pytest.mark.parametrize(
+    "zeile",
+    [
+        "Max Muster war zuletzt Vor 3 Tagen aktiv.",
+        "Max Muster ist gerade aktiv",
+        "Max Muster was last active 3 days ago",
+        "Max Muster is active now",
+    ],
+)
+def test_activity_suffix_is_not_part_of_the_name(zeile):
+    """Live 2026-10-13: the activity note stood in the recipient name."""
+    out = mod.parse_sent_item(
+        {
+            "href": "/sales/inbox/2-x",
+            "lines": [zeile, "Mo", "Sie: Hallo Herr Muster, Text"],
+        }
+    )
+    assert out["recipient"] == "Max Muster"
+
+
+def test_name_without_suffix_is_unchanged():
+    out = mod.parse_sent_item(
+        {"href": "/sales/inbox/2-x", "lines": ["Aktiva Werke", "Mo", "Sie: Hallo"]}
+    )
+    assert out["recipient"] == "Aktiva Werke"
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["Gesendet", "Gesendete Nachrichten", "Sent", "Sent messages", " gesendet "],
+)
+def test_exact_sent_label(label):
+    assert mod._SENT_LABEL_EXACT_RE.match(label)
+
+
+@pytest.mark.parametrize(
+    "label", ["Alle Nachrichten", "Gesendet von Erika", "Unsent", "Posteingang"]
+)
+def test_other_labels_are_not_sent(label):
+    assert not mod._SENT_LABEL_EXACT_RE.match(label)
