@@ -37,6 +37,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import logging
+import os
 import secrets
 import socket
 import threading
@@ -454,6 +455,17 @@ class _AttachedControl:
         with self._closing:
             with contextlib.suppress(OSError):
                 self._connection.shutdown(socket.SHUT_RDWR)
+            if os.name == "nt":
+                # Winsock does not wake a blocked ``recv`` on ``shutdown``;
+                # only ``closesocket`` does. Measured on Windows: the parked
+                # read stayed parked and this close never returned. Detaching
+                # first leaves the socket object holding no handle, so neither
+                # the wrapper nor the final close below can later close a
+                # number Windows has handed to something else.
+                with contextlib.suppress(OSError):
+                    handle = self._connection.detach()
+                    if handle != -1:
+                        socket.close(handle)
             with contextlib.suppress(OSError, ValueError):
                 self._stream.close()
             with contextlib.suppress(OSError):

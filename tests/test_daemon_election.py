@@ -6209,7 +6209,9 @@ class TestVersionSkew:
             auth_root,
             profile,
             config,
-            deadline_seconds=0.1,
+            # 1 s rather than 0.1 s: the descriptor read alone can take longer
+            # than 0.1 s on Windows under -n 4, and then nobody is ever asked.
+            deadline_seconds=1.0,
             settlement_seconds=0,
             # Would attach if version were not consulted, which is what makes
             # this test about the version rather than about reachability.
