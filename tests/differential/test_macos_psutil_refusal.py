@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any
 
 import psutil
+import sys
+
 import pytest
 
 from differential import harness
@@ -153,6 +155,11 @@ def test_a_watcher_whose_executable_guess_is_refused_records_the_refusal(
     assert cmdline == () and "cmdline: AccessDenied" in failures
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the census opens processes with oneshot(), which on Windows expects "
+    "psutil's memoized exe() that this stand-in replaces",
+)
 @_refusals()
 @pytest.mark.parametrize("native", ["denied", "empty"])
 def test_a_census_whose_executable_guess_is_refused_stays_unresolved(
