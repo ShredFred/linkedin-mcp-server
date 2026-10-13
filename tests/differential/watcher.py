@@ -779,6 +779,8 @@ class Sampler:
         self.own_pid = os.getpid() if own_pid is None else own_pid
         self._pids = pids
         self._open = open_process
+        #: One parent map per sample on Windows; see ``_windows_ppids``.
+        self._ppids: dict[int, int] | None = None
         self._clock = clock
         self._user_of = user_of
         self.user = harness_user() if user is None else user
@@ -1041,7 +1043,11 @@ class Sampler:
         exe_read = False
         pid = process.pid
         try:
-            ppid = self._timed("ppid", pid, process.ppid)
+            ppids = self._ppids
+            if ppids is not None and pid in ppids:
+                ppid = self._timed("ppid", pid, lambda: ppids[pid])
+            else:
+                ppid = self._timed("ppid", pid, process.ppid)
         except _UNREADABLE as exc:
             failures.append(f"ppid: {type(exc).__name__}")
         try:
@@ -1059,6 +1065,22 @@ class Sampler:
             failures.append(f"cmdline: {type(exc).__name__}")
         return ppid, exe, cmdline, failures, exe_read
 
+    def _windows_ppids(self) -> dict[int, int] | None:
+        """Every parent on Windows from one snapshot, or None to ask each.
+
+        ``psutil.Process.ppid`` on Windows takes a snapshot of the whole
+        process table on every call (``ppid_map``), about 28 ms each. Asked
+        once per process, the baseline sample took 26 s against a 15 s bound;
+        one snapshot per sample answers all of them. Only for the real
+        ``psutil.Process``: an injected opener keeps its own ``ppid``.
+        """
+        if os.name != "nt" or self._open is not psutil.Process:
+            return None
+        try:
+            return dict(psutil._psplatform.ppid_map())
+        except Exception:  # noqa: BLE001 - fall back to asking each process
+            return None
+
     def sample(self) -> dict[int, ProcessRecord]:
         began = self._timer()
         cpu = {"began": self._cpu()}
@@ -1074,6 +1096,7 @@ class Sampler:
             lambda: [pid for pid in self._pids() if pid != self.idle_pid],
         )
         cpu["enumeration"] = self._cpu()
+        self._ppids = self._windows_ppids()
         self._slowest = None
         first = self._baseline is None
         sample: dict[int, ProcessRecord] = {}
