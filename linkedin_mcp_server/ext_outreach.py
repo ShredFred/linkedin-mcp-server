@@ -407,6 +407,30 @@ PACE_BUDGETS: dict[str, dict[str, int]] = {
     "repost": {"day": 3, "week": 10},
     "repost_undo": {"day": 3, "week": 10},
 }
+# Dated temporary raises (operator, 2026-10-13: full event search). Each entry
+# applies through its "until" day (local date) inclusive and falls back to
+# PACE_BUDGETS by itself afterwards; nothing needs to be reverted by hand.
+PACE_TEMP_RAISES: dict[str, dict[str, Any]] = {
+    "search": {"day": 130, "week": 750, "until": "2026-10-20",
+               "reason": "operator 2026-10-13: temporary for full event search"},
+}
+
+
+def pace_budget(action: str, now: datetime | None = None) -> dict[str, int]:
+    """Effective day/week cap: PACE_BUDGETS unless a dated raise is still running."""
+    base = PACE_BUDGETS[action]
+    raise_ = PACE_TEMP_RAISES.get(action)
+    if raise_:
+        today = (now or datetime.now()).astimezone().date()
+        try:
+            until = datetime.strptime(str(raise_["until"]), "%Y-%m-%d").date()
+        except (KeyError, ValueError):
+            return base  # unreadable end date: never an open-ended raise
+        if today <= until:
+            return {"day": int(raise_["day"]), "week": int(raise_["week"])}
+    return base
+
+
 # Everything that is visible to another member counts against one total.
 PACE_WRITE_KINDS = {
     "like",
@@ -748,7 +772,7 @@ class Pacer:
         if action not in PACE_BUDGETS:
             raise ValueError(f"unknown pace action: {action}")
         events = events if events is not None else self._events()
-        budget = PACE_BUDGETS[action]
+        budget = pace_budget(action)
         day = self._sum(events, {action}, day_start())
         week = self._sum(events, {action}, week_window_start())
         left = min(budget["day"] - day, budget["week"] - week)
@@ -1181,7 +1205,8 @@ def pace_report() -> dict[str, Any]:
     """
     return {
         "schema": "ext-pace-report.v1",
-        "budgets": PACE_BUDGETS,
+        "budgets": {a: pace_budget(a) for a in PACE_BUDGETS},
+        "temp_raises": PACE_TEMP_RAISES,
         "write_kinds": sorted(PACE_WRITE_KINDS),
         "write_total_per_day": PACE_WRITE_TOTAL_PER_DAY,
         **Pacer(Ledger.default()).summary(),
