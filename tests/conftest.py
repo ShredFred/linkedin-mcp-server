@@ -25,6 +25,113 @@ import pytest  # noqa: E402
 pytest_plugins = ("linkedin.support.navigation", "differential.accounting")
 
 
+# --------------------------------------------------------------------------- #
+# Temporary directories and the developer's real home
+# --------------------------------------------------------------------------- #
+
+#: The account's real home, read before any test can redirect it.
+_REAL_HOME = os.path.expanduser("~")
+
+#: What a test run must never leave in the real home. The installer root falls
+#: back to the home when %TEMP% is refused, and daemon state lives there; a
+#: test that reaches either path writes into the developer's account.
+_REAL_HOME_PATTERNS = ("linkedin-mcp-installer-*", ".mcp-server-linkedin*")
+
+#: Per-run temporary roots under the checkout, newest kept, the rest pruned.
+#: Deliberately short: daemon state nests a 64-character hash several levels
+#: below a test's directory, and a longer root pushed those paths past the
+#: Windows MAX_PATH of 260 (WinError 3 on os.replace).
+_RUN_TMP_ROOT = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".pt")
+_RUN_TMP_KEEP = 3
+
+
+def _real_home_entries() -> set[str]:
+    import glob
+
+    found: set[str] = set()
+    for pattern in _REAL_HOME_PATTERNS:
+        found.update(glob.glob(os.path.join(_REAL_HOME, pattern)))
+    return found
+
+
+def _prune_old_runs() -> None:
+    import shutil
+
+    try:
+        runs = sorted(
+            (entry for entry in os.scandir(_RUN_TMP_ROOT) if entry.is_dir()),
+            key=lambda entry: entry.stat().st_mtime,
+        )
+    except FileNotFoundError:
+        return
+    for entry in runs[: max(len(runs) - (_RUN_TMP_KEEP - 1), 0)]:
+        shutil.rmtree(entry.path, ignore_errors=True)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config):
+    """Give every run its own basetemp under the checkout, unless one is named.
+
+    pytest's default keeps numbered runs under %TEMP%\\pytest-of-<user> behind a
+    ``pytest-current`` link; on Windows that link can become unreadable
+    (WinError 5) and then every later run fails at session end. A unique
+    directory per run needs no link, and old runs are pruned to the newest few.
+    Workers inherit the controller's choice.
+    """
+    if hasattr(config, "workerinput") or config.option.basetemp:
+        return
+    import secrets
+
+    _prune_old_runs()
+    os.makedirs(_RUN_TMP_ROOT, exist_ok=True)
+    config.option.basetemp = os.path.join(_RUN_TMP_ROOT, secrets.token_hex(3))
+
+
+def pytest_sessionstart(session):
+    if not hasattr(session.config, "workerinput"):
+        session.config._real_home_before = _real_home_entries()
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Fail the run if it left anything new in the developer's real home."""
+    before = getattr(session.config, "_real_home_before", None)
+    if before is None:
+        return
+    new = sorted(_real_home_entries() - before)
+    if new:
+        reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+        message = "this run left new entries in the real home directory: " + ", ".join(
+            new
+        )
+        if reporter is not None:
+            reporter.write_line(message, red=True)
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+@pytest.fixture(scope="session")
+def _stand_in_home(tmp_path_factory):
+    return tmp_path_factory.mktemp("home")
+
+
+@pytest.fixture(autouse=True)
+def keep_out_of_the_real_home(request, _stand_in_home, monkeypatch):
+    """Point ``Path.home()`` and ``~`` at a stand-in home for every test.
+
+    ``HOME`` and ``USERPROFILE`` are what ``expanduser`` and ``Path.home`` read,
+    and the installer's home fallback went through them into the real account.
+    ``APPDATA``/``LOCALAPPDATA`` stay as they are (see
+    ``ignore_the_developers_environment``): they hold the installed browser the
+    browser tests launch. Daemon state keys off the account home, which
+    ``daemon_descriptor._account_home`` reads from the account rather than the
+    environment; tests that need the real one take ``real_state_root``, which
+    opts out here, and the session guard above catches anything else.
+    """
+    if "real_state_root" in request.fixturenames:
+        return
+    monkeypatch.setenv("HOME", str(_stand_in_home))
+    monkeypatch.setenv("USERPROFILE", str(_stand_in_home))
+
+
 @pytest.fixture(autouse=True)
 def reset_singletons():
     """Reset global state for test isolation."""
