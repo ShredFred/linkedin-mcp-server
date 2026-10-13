@@ -178,7 +178,7 @@ if mode == "helper":
 
 def _driver(tmp_path: Path, mode: str, *, terminal: bool) -> TerminalCommand:
     script = tmp_path / "asks.py"
-    script.write_text(_ASKS)
+    script.write_text(_ASKS, encoding="utf-8")
     command = TerminalCommand(
         [sys.executable, str(script), mode],
         args=[mode],
@@ -1345,7 +1345,7 @@ def test_the_mapped_tests_count_as_model_coverage_and_nothing_else_does():
 
 async def test_a_host_the_script_quit_is_not_quit_again(tmp_path):
     server = tmp_path / "stand_in_server.py"
-    server.write_text(_STAND_IN_SERVER)
+    server.write_text(_STAND_IN_SERVER, encoding="utf-8")
     exits: list[int] = []
 
     async def after_exit() -> None:
@@ -1780,7 +1780,7 @@ class _DaemonContext:
         self.daemon = True
         self.directory = tmp_path / "candidate-cli"
         self.directory.mkdir()
-        (self.directory / "fake_cli.py").write_text(_CANDIDATE_CLI)
+        (self.directory / "fake_cli.py").write_text(_CANDIDATE_CLI, encoding="utf-8")
         self.owner_model = _ModelledOwner(self.directory)
         self.scene = scene
         self.session = harness.HostSession()
