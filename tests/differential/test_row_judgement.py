@@ -714,7 +714,9 @@ def row_state(tmp_path, monkeypatch):
         return published.get("descriptor")
 
     monkeypatch.setattr(harness.daemon_descriptor, "read", read)
-    account = SimpleNamespace(auth_root=Path("/auth"))
+    # A plain string: str(Path("/auth")) is "\auth" on Windows, which no
+    # identified owner's "/auth" matches.
+    account = SimpleNamespace(auth_root="/auth")
     return directory, published, account
 
 

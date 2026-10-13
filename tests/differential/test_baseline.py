@@ -342,7 +342,16 @@ def test_the_same_interpreter_under_another_spelling_of_its_directory_counts(
     real = tmp_path / "real"
     (real / "checkout" / ".venv" / "bin").mkdir(parents=True)
     alias = tmp_path / "alias"
-    alias.symlink_to(real, target_is_directory=True)
+    try:
+        alias.symlink_to(real, target_is_directory=True)
+    except OSError:
+        # Without SeCreateSymbolicLinkPrivilege, a junction is Windows'
+        # unprivileged other spelling of the same directory.
+        if sys.platform != "win32":
+            raise
+        import _winapi
+
+        _winapi.CreateJunction(str(real), str(alias))
     python = str(real / "checkout" / ".venv" / "bin" / "python")
     runtime = Runtime(python, real / "checkout", real / "ms-playwright", PIN)
     record = _start(

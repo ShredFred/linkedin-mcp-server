@@ -5643,7 +5643,9 @@ class TestRealOwner:
             ) -> tuple[str, str]:
                 assert input is None
                 assert timeout is not None
-                deadline = time.monotonic() + 30
+                # Eight interpreters start at once; on a loaded Windows host
+                # the elected owner can take well over 30s to publish.
+                deadline = time.monotonic() + 120
                 while time.monotonic() < deadline:
                     if (
                         daemon_descriptor_module.read(real_state_root.parent)

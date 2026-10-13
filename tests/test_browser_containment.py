@@ -525,12 +525,10 @@ async def test_a_browser_that_stopped_is_drained_and_started_again(
     from unittest.mock import AsyncMock
 
     import psutil
-    from fastmcp.exceptions import ToolError
 
     from linkedin_mcp_server import dependencies
     from linkedin_mcp_server.dependencies import get_ready_extractor
     from linkedin_mcp_server.drivers import browser as drv
-    from linkedin_mcp_server.exceptions import BrowserUnavailableError
     from linkedin_mcp_server.profile_lease import get_profile_lease
     from linkedin_mcp_server.sequential_tool_middleware import (
         SequentialToolExecutionMiddleware,
@@ -601,18 +599,13 @@ async def test_a_browser_that_stopped_is_drained_and_started_again(
         else:
             assert not _alive(root), "Chromium survived the kill"
 
-        with pytest.raises(ToolError) as raised:
-            await call()
-
-        assert isinstance(raised.value.__cause__, BrowserUnavailableError)
-        assert len(launched) == 1, "the rejecting call launched a browser"
-        assert not _alive(root)
-        assert not lease.browser_open
-        # The browser's reference and the call's both returned.
-        assert not lease.held
-        _assert_nothing_of_it_runs(first)
-
+        # Fork extension (get_or_create_browser): the getter drains the dead
+        # browser and starts a fresh one inside the same call, instead of
+        # rejecting it with BrowserUnavailableError and asking for a retry.
         await call()
+
+        assert not _alive(root)
+        _assert_nothing_of_it_runs(first)
 
         assert len(launched) == 2 and drv._browser is launched[1]
         second_root, _ = _the_chromium_root(profile)

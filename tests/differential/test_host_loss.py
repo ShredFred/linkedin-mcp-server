@@ -674,7 +674,7 @@ _CONTROLS = [
         _ROWS,
         False,
         lambda r: r["settlement"].update(lease=lease_probe.HELD),
-        "the profile lease was 'held' after the loss, not free",
+        "the profile lease was 'held' after the loss",
         False,
         id="direct-lease-held",
     ),
@@ -1706,7 +1706,7 @@ async def test_a_direct_profile_not_shown_settled_gets_no_fresh_server(
         "why": "the Direct server's profile was not shown settled",
     }
     for expected in (
-        "the profile lease was 'held' after the loss, not free",
+        "the profile lease was 'held' after the loss",
         "no read was made after the loss",
     ):
         assert any(expected in failure for failure in result.failures), expected

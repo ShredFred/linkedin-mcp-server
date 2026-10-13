@@ -2776,6 +2776,13 @@ async def test_an_incomplete_census_after_b_quit_fails_the_row(
     ), result.failures
 
 
+def _contender_answers(mp, scene, state):
+    """Plant *state* as the lock reading before A2, on a platform whose
+    contender answers: on Windows it is unobserved and never a finding."""
+    mp.setattr(harness.host_comparison, "capabilities", lambda platform: (True, False))
+    scene.lock_before_a2 = state
+
+
 def _direct_second(row, monkeypatch, tmp_path):  # noqa: F811 - the imported fixture
     return _SecondHostScene(row, monkeypatch, tmp_path, daemon=False)
 
@@ -2811,12 +2818,12 @@ def _direct_second(row, monkeypatch, tmp_path):  # noqa: F811 - the imported fix
             id="residual-browser",
         ),
         pytest.param(
-            lambda scene, mp: setattr(scene, "lock_before_a2", "held"),
+            lambda scene, mp: _contender_answers(mp, scene, "held"),
             "before A2: the lock was held, not free",
             id="lock-held-before-a2",
         ),
         pytest.param(
-            lambda scene, mp: setattr(scene, "lock_before_a2", "unknown"),
+            lambda scene, mp: _contender_answers(mp, scene, "unknown"),
             "before A2: the lock was unknown, not free",
             id="contender-failed-before-a2",
         ),

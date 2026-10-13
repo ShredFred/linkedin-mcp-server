@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 from collections.abc import Callable
 from importlib.metadata import version
 from pathlib import Path
@@ -123,7 +122,11 @@ def test_locked_browser_tree_remains_fenced_until_guardian_proves_zero(
     process = subprocess.Popen(
         process_tree.windows_gate_command(
             [
-                sys.executable,
+                # The windowless interpreter: the gate starts its target with
+                # CREATE_NO_WINDOW, and a console python.exe would get a
+                # conhost.exe of its own inside the outer Job, which the
+                # coordinator proof rightly counts as a retained process.
+                process_tree._background_interpreter(),
                 str(_PROBE),
                 "run",
                 "browser-launch-owner-loss",
