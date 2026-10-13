@@ -26,6 +26,14 @@ pytest_plugins = ("linkedin.support.navigation", "differential.accounting")
 
 
 @pytest.fixture(autouse=True)
+def _no_temp_pace_raises(monkeypatch):
+    """Tests measure against PACE_BUDGETS; a dated operator raise would shift them by calendar day."""
+    from linkedin_mcp_server import ext_outreach
+
+    monkeypatch.setattr(ext_outreach, "PACE_TEMP_RAISES", {})
+
+
+@pytest.fixture(autouse=True)
 def reset_singletons():
     """Reset global state for test isolation."""
     from linkedin_mcp_server.bootstrap import reset_bootstrap_for_testing
