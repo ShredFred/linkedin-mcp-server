@@ -66,6 +66,8 @@ from linkedin_mcp_server.daemon_lock import (
 from linkedin_mcp_server.private_state import harden_directory
 from linkedin_mcp_server.process_tree import ProcessTreeError
 
+from symlink_support import CAN_SYMLINK
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _RUNTIME = "test-runtime"
 _HANDSHAKE_NONCE = "0123456789abcdef" * 4
@@ -9643,6 +9645,11 @@ def _borrow_the_browser_cache(profile: Path) -> None:
     real = Path.home() / ".linkedin-mcp" / "patchright-browsers"
     if not real.is_dir():
         pytest.skip("no patchright browser cache to borrow")
+    if not CAN_SYMLINK:
+        pytest.skip(
+            "this process may not create the symbolic link that borrows the cache "
+            "(on Windows: SeCreateSymbolicLinkPrivilege)"
+        )
     (profile.parent / "patchright-browsers").symlink_to(real)
 
 

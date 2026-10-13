@@ -65,6 +65,8 @@ from linkedin_mcp_server.session_state import (
     write_source_state,
 )
 
+from symlink_support import requires_symlinks
+
 KEY = "/tmp/differential-row-profile"
 
 
@@ -1435,6 +1437,7 @@ def test_a_retained_root_may_parent_a_renderer(profile):
     )
 
 
+@requires_symlinks
 def test_a_retained_root_keeps_the_profile_it_was_read_on(profile, tmp_path):
     # Its arguments name a link, retargeted while they cannot be read: the
     # old arguments now resolve elsewhere, the reading does not.
