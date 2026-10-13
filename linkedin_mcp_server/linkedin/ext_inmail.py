@@ -42,6 +42,7 @@ import asyncio
 import logging
 import random
 import re
+import time
 import unicodedata
 from typing import Any
 
@@ -56,7 +57,13 @@ _CREDITS_USE_RE = re.compile(
 )
 _CREDITS_LEFT_RE = re.compile(
     r"InMail-Guthaben:\s*([\d.]+)\s*verbleibend|([\d.]+)\s+InMail-Guthaben-Einheiten"
-    r"|InMail credits:\s*([\d,]+)\s*(?:remaining|left)",
+    r"|InMail credits:\s*([\d,]+)\s*(?:remaining|left)"
+    # 2026-10-13: further wordings, so a relabelled header is still read.
+    r"|Verbleibende(?:s)?\s+InMail-Guthaben:?\s*([\d.]+)"
+    r"|([\d.]+)\s+InMail-Guthaben\s+(?:verbleibend|verfügbar|übrig)"
+    r"|InMail-Guthaben\s+verbleibend:?\s*([\d.]+)"
+    r"|([\d,]+)\s+InMail credits?\s+(?:remaining|left|available)"
+    r"|(?:Remaining\s+InMail credits|InMail credits remaining|InMail credits left):?\s*([\d,]+)",
     re.IGNORECASE,
 )
 _FREE_RE = re.compile(
@@ -168,6 +175,225 @@ def credit_refusal(
     if remaining is not None and remaining < cost:
         return "no_inmail_credits"
     return None
+
+
+_LOGIN_URL_RE = re.compile(r"/(?:login|checkpoint|uas/|authwall|signup)", re.IGNORECASE)
+_LOGIN_TEXT_RE = re.compile(
+    r"(?:Anmelden|Einloggen|Sign in)\b[\s\S]{0,400}(?:Passwort|Password)", re.IGNORECASE
+)
+_UPSELL_RE = re.compile(
+    r"Sales Navigator\s+(?:kostenlos\s+)?testen|Try Sales Navigator"
+    r"|Upgrade to Sales Navigator|kostenlosen Testzeitraum|free trial"
+    r"|(?:Abo|Abonnement|Vertrag)\s+ist\s+abgelaufen|subscription (?:has )?expired"
+    r"|Reaktivieren|Reactivate",
+    re.IGNORECASE,
+)
+_INMAIL_WORD_RE = re.compile(r"InMail", re.IGNORECASE)
+
+
+CREDITS_LINE_MAX = 80
+
+
+def credits_lines(text: str) -> list[str]:
+    """Short lines naming the remaining credits.
+
+    Only lines up to 80 characters: a message preview that happens to say
+    "50 InMail credits left" is longer than the header line (review 2026-10-13).
+    """
+    return [
+        ln.strip()
+        for ln in (text or "").split("\n")
+        if len(ln.strip()) <= CREDITS_LINE_MAX and _CREDITS_LEFT_RE.search(ln)
+    ]
+
+
+def credits_line(text: str) -> str | None:
+    """The one credits line of ``text``; None if none or if lines disagree."""
+    lines = credits_lines(text)
+    values = {parse_credits(ln)["remaining"] for ln in lines}
+    return lines[0] if lines and len(values) == 1 else None
+
+
+def diagnose_credits_page(url: str, title: str, text: str) -> str:
+    """Why a credits line is missing: one reason code, never a guessed number.
+
+    login_page (session lost), sales_nav_upsell (no or an expired Sales
+    Navigator seat), not_sales_inbox (redirected elsewhere),
+    inbox_not_rendered (almost no text after the wait), no_credits_line
+    (inbox there, header wording unknown -- see credit_mentions).
+    """
+    url, title, text = url or "", title or "", text or ""
+    if len({parse_credits(ln)["remaining"] for ln in credits_lines(text)}) > 1:
+        return "ambiguous_credits_line"
+    if _LOGIN_URL_RE.search(url) or _LOGIN_TEXT_RE.search(text[:3000]):
+        return "login_page"
+    if _UPSELL_RE.search(text[:5000]) or _UPSELL_RE.search(title):
+        return "sales_nav_upsell"
+    if "/sales/" not in url:
+        return "not_sales_inbox"
+    if len(text.strip()) < 200:
+        return "inbox_not_rendered"
+    return "no_credits_line"
+
+
+def credit_mentions(text: str, cap: int = 3) -> list[str]:
+    """Short lines mentioning InMail, to name a new header wording.
+
+    Only lines up to 80 characters: a message preview is longer and is not
+    what is looked for.
+    """
+    out: list[str] = []
+    for ln in (text or "").split("\n"):
+        ln = ln.strip()
+        if ln and len(ln) <= 80 and _INMAIL_WORD_RE.search(ln) and ln not in out:
+            out.append(ln)
+            if len(out) >= cap:
+                break
+    return out
+
+
+# -- sent view of the Sales Navigator inbox (read only) ----------------------
+
+_SENT_LABEL_RE = re.compile(
+    r"^\s*(Gesendet|Gesendete Nachrichten|Sent|Sent messages)\b", re.IGNORECASE
+)
+_OWN_PREFIX_RE = re.compile(r"^\s*(Sie|You)\s*:\s*", re.IGNORECASE)
+_TIME_RE = re.compile(
+    r"^\s*(?:\d{1,2}[:.]\d{2}(?:\s*(?:AM|PM|Uhr))?"
+    r"|\d{1,2}\.\s*\d{1,2}\.(?:\s*\d{2,4})?"
+    r"|\d{1,2}\.?\s+(?:Jan|Feb|Mär|Mar|Apr|Mai|May|Jun|Jul|Aug|Sep|Okt|Oct|Nov|Dez|Dec)"
+    r"[a-zä]*\.?(?:\s+\d{4})?"
+    r"|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:,\s*\d{4})?"
+    r"|\d{1,2}/\d{1,2}/\d{2,4}"
+    r"|Gestern|Heute|Yesterday|Today|Jetzt|Now"
+    r"|Mo|Di|Mi|Do|Fr|Sa|So|Mon|Tue|Wed|Thu|Fri|Sat|Sun"
+    r"|Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|Sonntag"
+    r"|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday"
+    r"|vor\s+\d+\s+\w+|\d+\s*(?:min|Min\.|h|Std\.|d|T\.|w|Wo\.)(?:\s+ago)?)\s*$",
+    re.IGNORECASE,
+)
+_NOISE_LINES = {
+    "inmail",
+    "neu",
+    "new",
+    "ungelesen",
+    "unread",
+    "markiert",
+    "starred",
+    "angenommen",
+    "accepted",
+    "abgelehnt",
+    "declined",
+    "ausstehend",
+    "pending",
+}
+SENT_SNIPPET_MAX = 200
+
+
+def parse_sent_item(item: Any) -> dict[str, Any] | None:
+    """One row of the sent view: recipient, time text, subject, text start.
+
+    ``item`` is {"href", "lines"} from the list DOM. Fields the row does not
+    show stay None. All time-like lines form ``when`` together ("Heute" plus
+    "12:30"), so a second one never becomes the subject; the recipient is the
+    first line that is not time-like. A subject comes from a line labelled as
+    one (``subject_source`` "labelled") or, failing that, the line right
+    before the ``Sie:``/``You:`` snippet ("line_before_snippet" -- a
+    position guess, to be checked against the thread). ``own_last`` is true
+    only when the snippet carries the own-message prefix.
+    """
+    if not isinstance(item, dict):
+        return None
+    lines = [canon(x) for x in item.get("lines") or [] if isinstance(x, str)]
+    lines = [x for x in lines if x and x.lower() not in _NOISE_LINES]
+    times = [x for x in lines if _TIME_RE.match(x)]
+    other = [x for x in lines if not _TIME_RE.match(x)]
+    if not other:
+        return None
+    name, body = other[0], other[1:]
+    when = " ".join(times) or None
+    snippet_idx = next((i for i, x in enumerate(body) if _OWN_PREFIX_RE.match(x)), None)
+    subject = subject_source = None
+    for x in body:
+        m = re.match(r"^\s*(?:Betreff|Subject)\s*:\s*(.+)$", x, re.IGNORECASE)
+        if m:
+            subject, subject_source = m.group(1).strip(), "labelled"
+            break
+    if subject is None and snippet_idx is not None and snippet_idx >= 1:
+        subject, subject_source = body[snippet_idx - 1], "line_before_snippet"
+    if snippet_idx is not None:
+        snippet: str | None = body[snippet_idx]
+    else:
+        snippet = body[-1] if body else None
+    own_last = bool(snippet and _OWN_PREFIX_RE.match(snippet))
+    if snippet:
+        snippet = _OWN_PREFIX_RE.sub("", snippet)[:SENT_SNIPPET_MAX]
+    href = item.get("href") if isinstance(item.get("href"), str) else None
+    if href and href.startswith("/"):
+        href = "https://www.linkedin.com" + href
+    return {
+        "recipient": name,
+        "when": when,
+        "subject": subject,
+        "subject_source": subject_source,
+        "text_start": snippet,
+        "own_last": own_last,
+        "thread_url": href or None,
+    }
+
+
+_SENT_ITEMS_JS = r"""() => {
+  const seen = new Set(); const out = [];
+  const rows = document.querySelectorAll('ul li a[href*="/sales/inbox/"]');
+  for (const a of rows) {
+    const li = a.closest('li') || a;
+    const href = a.getAttribute('href') || '';
+    const key = href || li.innerText;
+    if (seen.has(key)) continue; seen.add(key);
+    const lines = (li.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
+    if (lines.length) out.push({href, lines});
+  }
+  return out;
+}"""
+
+_SCROLL_LIST_JS = r"""() => {
+  const a = document.querySelector('ul li a[href*="/sales/inbox/"]');
+  let el = a ? a.closest('ul') : null;
+  while (el && el !== document.body) {
+    if (el.scrollHeight > el.clientHeight + 4) { el.scrollTop = el.scrollHeight; return true; }
+    el = el.parentElement;
+  }
+  window.scrollTo(0, document.body.scrollHeight); return false;
+}"""
+
+# The filter dropdown above the conversation list; its label names the view.
+_FILTER_TRIGGER: tuple[Any, ...] = (
+    (
+        "button[aria-haspopup], button[aria-expanded]",
+        r"^\s*(Posteingang|Inbox|Alle Nachrichten|All messages|Gesendet|Sent)\b",
+    ),
+    ("button", r"^\s*(Posteingang|Inbox|Gesendet|Sent)\s*$"),
+)
+_SENT_OPTION: tuple[Any, ...] = (
+    (
+        '[role="menuitem"], [role="option"], [role="menuitemradio"]',
+        r"^\s*(Gesendet|Sent)\s*$",
+    ),
+    (
+        ".artdeco-dropdown__content li, .artdeco-dropdown__content button",
+        r"^\s*(Gesendet|Sent)\s*$",
+    ),
+)
+
+
+def _row_keys(raw: Any) -> list[str]:
+    """Identity of a list snapshot: the first rows' links (or text)."""
+    keys = []
+    for r in (raw if isinstance(raw, list) else [])[:10]:
+        if isinstance(r, dict):
+            lines = [x for x in r.get("lines") or [] if isinstance(x, str)]
+            keys.append(f"{r.get('href') or ''}|{'|'.join(lines)}")
+    return keys
 
 
 def parse_degree(text: str) -> int | None:
@@ -567,7 +793,8 @@ class ExtInmail(ExtActions):
             balance_before = None
         if allow_open_profile and confirm and read_here:
             try:
-                balance_before = (await self.inmail_credits()).get("remaining")
+                # Inside the send deadline: a short poll, not the tool's 15 s.
+                balance_before = (await self._credits_in_send()).get("remaining")
             except Exception:
                 logger.warning("InMail balance before send unreadable", exc_info=True)
         await self._goto(target["sales_url"])
@@ -693,7 +920,7 @@ class ExtInmail(ExtActions):
                     "credits_after": {},
                     "url": sent_url,
                 }
-            credits_after = await self.inmail_credits()
+            credits_after = await self._credits_in_send()
         except Exception as exc:
             logger.warning("InMail read-back after send failed", exc_info=True)
             if base.get("open_profile"):
@@ -798,16 +1025,144 @@ class ExtInmail(ExtActions):
         except Exception:
             logger.warning("closing the Sales Navigator composer failed", exc_info=True)
 
-    async def inmail_credits(self) -> dict[str, Any]:
-        """Remaining InMail credits from the Sales Navigator inbox header."""
-        await self._goto(SN_INBOX_URL)
-        await self._wait(3.0, 5.0)
-        text = await self._page.evaluate("() => document.body.innerText")
-        line = next(
-            (ln.strip() for ln in text.split("\n") if _CREDITS_LEFT_RE.search(ln)), None
+    async def _page_text(self) -> str:
+        text = await self._page.evaluate(
+            "() => document.body ? document.body.innerText : ''"
         )
-        facts = parse_credits(line or "")
-        return {"remaining": facts["remaining"], "line": line}
+        return text if isinstance(text, str) else ""
+
+    async def _credits_in_send(self) -> dict[str, Any]:
+        """inmail_credits inside the send deadline: a 5 s poll, not 15 s."""
+        self._credits_poll_s = 5.0
+        try:
+            return await self.inmail_credits()
+        finally:
+            self._credits_poll_s = None
+
+    async def inmail_credits(self, timeout_s: float | None = None) -> dict[str, Any]:
+        """Remaining InMail credits from the Sales Navigator inbox header.
+
+        Polls up to ``timeout_s`` for the credits line instead of one look
+        after a fixed 3-5 s pause: from 2026-10-13 ~00:10 that look returned
+        null repeatedly. Without a line the answer carries ``reason`` (see
+        :func:`diagnose_credits_page`), the URL after navigation, the page
+        title and short InMail lines -- never a silent null.
+        """
+        await self._goto(SN_INBOX_URL)
+        if timeout_s is None:
+            timeout_s = getattr(self, "_credits_poll_s", None) or 15.0
+        deadline = time.monotonic() + max(timeout_s, 0.0)
+        text = await self._page_text()
+        line = credits_line(text)
+        while line is None and time.monotonic() < deadline:
+            await self._wait(0.8, 1.2)
+            text = await self._page_text()
+            line = credits_line(text)
+        if line is not None:
+            return {"remaining": parse_credits(line)["remaining"], "line": line}
+        url = getattr(self._page, "url", "") or ""
+        try:
+            title = await self._page.title()
+        except Exception:
+            title = ""
+        return {
+            "remaining": None,
+            "line": None,
+            "reason": diagnose_credits_page(url, title, text),
+            "url": url,
+            "title": title,
+            "credit_mentions": credit_mentions(text),
+        }
+
+    async def sent_inmails(self, limit: int = 30) -> dict[str, Any]:
+        """Rows of the Sales Navigator inbox's sent view. Read only.
+
+        Opens the inbox filter menu and picks "Gesendet"/"Sent" -- clicks that
+        only change the view; nothing is typed, nothing is sent. Rows are
+        returned only once the filter label reads the sent view; otherwise
+        received threads could pass for sent ones, and the answer is a status
+        without rows.
+        """
+        limit = max(1, min(int(limit), 200))
+        await self._goto(SN_INBOX_URL)
+        await self._wait(2.0, 3.0)
+        url = lambda: getattr(self._page, "url", "") or ""  # noqa: E731
+
+        def empty(status: str, **extra: Any) -> dict[str, Any]:
+            return {
+                "status": status,
+                "items": [],
+                "count": 0,
+                "complete": False,
+                "url": url(),
+                **extra,
+            }
+
+        trigger = await first_match(self._page, _FILTER_TRIGGER)
+        if trigger is None:
+            return empty("filter_not_found")
+        before = canon(await trigger.inner_text())
+        switched = not _SENT_LABEL_RE.match(before)
+        inbox_keys: list[str] = []
+        if switched:
+            # The inbox list must be loaded first, or the comparison below has
+            # nothing to tell the sent list from (review 2026-10-13, round 2).
+            for _ in range(6):
+                inbox_keys = _row_keys(await self._page.evaluate(_SENT_ITEMS_JS) or [])
+                if inbox_keys:
+                    break
+                await self._wait(1.0, 1.5)
+            if not inbox_keys:
+                return empty("inbox_list_not_loaded", filter_label=before)
+            await trigger.click()
+            await self._wait(0.8, 1.4)
+            option = await first_match(self._page, _SENT_OPTION)
+            if option is None:
+                try:
+                    await self._page.keyboard.press("Escape")
+                except Exception:
+                    logger.debug("closing the filter menu failed", exc_info=True)
+                return empty("sent_option_not_found", filter_label=before)
+            await option.click()
+            await self._wait(2.0, 3.0)
+        label_loc = await first_match(self._page, _FILTER_TRIGGER)
+        label = canon(await label_loc.inner_text()) if label_loc is not None else ""
+        if not _SENT_LABEL_RE.match(label):
+            return empty("view_not_confirmed", filter_label=label)
+        raw = await self._page.evaluate(_SENT_ITEMS_JS) or []
+        # The label can switch before the list does (review 2026-10-13): rows
+        # still identical to the inbox list are not taken as the sent view.
+        rounds = 0
+        while switched and inbox_keys and _row_keys(raw) == inbox_keys and rounds < 5:
+            await self._wait(1.0, 1.5)
+            raw = await self._page.evaluate(_SENT_ITEMS_JS) or []
+            rounds += 1
+        if switched and inbox_keys and _row_keys(raw) == inbox_keys:
+            return empty(
+                "view_not_confirmed", filter_label=label, reason="list_unchanged"
+            )
+        stalled = 0
+        while len(raw) <= limit and stalled < 2:
+            await self._page.evaluate(_SCROLL_LIST_JS)
+            await self._wait(1.2, 2.0)
+            more = await self._page.evaluate(_SENT_ITEMS_JS) or []
+            if len(more) > len(raw):
+                raw, stalled = more, 0
+            else:
+                stalled += 1
+        items = [p for p in (parse_sent_item(r) for r in raw[:limit]) if p]
+        hit_limit = len(raw) > limit
+        return {
+            "status": "ok",
+            "view": "sent",
+            "filter_label": label,
+            "url": url(),
+            "count": len(items),
+            "items": items,
+            # complete: the list stopped growing before the limit was reached.
+            "complete": not hit_limit,
+            "boundary": "limit" if hit_limit else "end_of_list",
+        }
 
     # -- edit -----------------------------------------------------------------
 

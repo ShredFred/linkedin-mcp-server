@@ -64,6 +64,7 @@
 > - `pace_status` — The pacer (Taktgeber): per action kind today's and the last seven days' use against its budget, and the daily total of visible actions.
 > - `react_to_post` — React to a post as the signed-in member, or as a company page (as_company = numeric page id, company_name required; only posts on the page's own admin list, only "like" -- the only reaction measured there).
 > - `repost_post` — Repost a post instantly to the signed-in member's own feed (never as a company page), or take that repost back with undo=true.
+> - `sales_nav_sent_inmails` — Rows of the Sales Navigator inbox's sent view (read only, one page read).
 > - `search_events` — One LinkedIn event search (/search/results/events/?keywords=...).
 > - `send_campaign_batch` — Send the same text to many recipients safely, one small batch per call.
 > - `send_inmail` — Send one InMail through Sales Navigator (spends one credit) to a 2nd/3rd-degree member.

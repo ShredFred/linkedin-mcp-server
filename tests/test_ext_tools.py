@@ -247,6 +247,7 @@ def test_fork_tools_are_registered_and_tagged():
         "get_page_followers",
         "send_inmail",
         "inmail_credits",
+        "sales_nav_sent_inmails",
         "edit_sent_message",
         "delete_own_post",
         "edit_own_post",

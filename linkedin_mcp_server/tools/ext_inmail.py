@@ -470,6 +470,13 @@ def register_ext_inmail_tools(
     async def inmail_credits(ctx: Context) -> dict[str, Any]:
         """Remaining Sales Navigator InMail credits (one page read).
 
+        Waits up to 15 s for the inbox header's credits line. Returns
+        remaining and line; without a line remaining is null and the answer
+        says why: reason (ambiguous_credits_line, login_page,
+        sales_nav_upsell, not_sales_inbox,
+        inbox_not_rendered, no_credits_line), url after navigation, title,
+        credit_mentions (short lines naming InMail, for a new wording).
+
         Refusals: pace_budget_spent (wait, see pace_status), pace_lock_busy
         (nothing booked, retry shortly).
         """
@@ -482,6 +489,43 @@ def register_ext_inmail_tools(
             if _pending_free_checks:
                 _resolve_free_checks(outreach.Ledger.default(), out["remaining"])
         return out
+
+    @mcp.tool(
+        timeout=max(tool_timeout, 120.0),
+        title="Sales Navigator Sent InMails",
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+        tags={TAG, "messaging"},
+    )
+    async def sales_nav_sent_inmails(ctx: Context, limit: int = 30) -> dict[str, Any]:
+        """Rows of the Sales Navigator inbox's sent view (read only, one page read).
+
+        Purpose: proof whether an InMail with status unknown actually went
+        out. Opens the inbox filter and picks "Gesendet"/"Sent"; nothing is
+        typed or sent. Per row: recipient, when (LinkedIn's time text),
+        subject plus subject_source (labelled, or line_before_snippet = a
+        position guess to check in the thread; null if none), text_start (snippet,
+        at most 200 characters), own_last (snippet starts with "Sie:"/"You:",
+        so the last message is ours), thread_url. complete is true when the
+        list ended before limit (1-200); boundary names limit or end_of_list.
+
+        Statuses: ok, filter_not_found, inbox_list_not_loaded, sent_option_not_found,
+        view_not_confirmed (filter label did not read the sent view, or
+        reason list_unchanged: the list still equals the inbox list; no rows,
+        so received threads are never passed off as sent).
+        Refusals: invalid_limit, pace_budget_spent, pace_lock_busy.
+        """
+        if (
+            not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or not 1 <= limit <= 200
+        ):
+            return {"status": "invalid_limit", "detail": "limit must be 1-200"}
+        spent = _pace("page_read", tool="sales_nav_sent_inmails")
+        if spent:
+            return spent
+        return await _run(
+            ctx, "sales_nav_sent_inmails", lambda ex: _reader(ex).sent_inmails(limit)
+        )
 
     @mcp.tool(
         timeout=max(tool_timeout, 120.0),
