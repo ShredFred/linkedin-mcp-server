@@ -710,6 +710,9 @@ class TestRefusals:
         # than for whatever wrote something this size.
         _planted_daemon_dir(tmp_path)
         descriptor_path(tmp_path).write_text(json.dumps({"pad": "x" * 200_000}))
+        # Hardened as production writes it; an inheriting file is refused for
+        # its permissions on Windows before its size is ever read.
+        harden_created_file(descriptor_path(tmp_path))
 
         with pytest.raises(DescriptorError, match="larger than anything"):
             read(tmp_path)
@@ -720,6 +723,7 @@ class TestRefusals:
         # of the two it is looking at.
         _planted_daemon_dir(tmp_path)
         descriptor_path(tmp_path).write_bytes(b"\xff\xfe")
+        harden_created_file(descriptor_path(tmp_path))
 
         with pytest.raises(DescriptorError, match="not text this daemon wrote"):
             read(tmp_path)
@@ -1303,7 +1307,11 @@ class TestStateLocation:
         # account's own state, so the ownership check can speak before the
         # permissions are read. The line below is the subject, that nothing was
         # repaired on the way out.
-        with pytest.raises(PrivateStateError, match="grants access|is owned by"):
+        # A namespace planted by hand also inherits its parent's permissions,
+        # which is a third refusal of the same foreign state.
+        with pytest.raises(
+            PrivateStateError, match="grants access|is owned by|still inherits"
+        ):
             prepare_daemon_state(tmp_path / "auth")
 
         assert "S-1-1-0" in {entry.sid for entry in describe_dacl(application).entries}
@@ -1620,7 +1628,17 @@ class TestAuthRootShape:
 class TestUnusablePaths:
     @pytest.mark.parametrize(
         "path",
-        [Path("~definitely-no-such-user-xyz/auth"), Path("/tmp/auth\x00x")],
+        [
+            pytest.param(
+                Path("~definitely-no-such-user-xyz/auth"),
+                marks=pytest.mark.skipif(
+                    os.name == "nt",
+                    reason="Windows expanduser names the user's folder without "
+                    "looking the user up; that path is refused later, as unpreparable",
+                ),
+            ),
+            Path("/tmp/auth\x00x"),
+        ],
     )
     def test_a_path_that_cannot_be_resolved_is_refused(self, path: Path):
         # expanduser and resolve run before anything else and have failure

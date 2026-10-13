@@ -310,6 +310,12 @@ def _canonical_path(path: Path, label: str) -> Path:
     type-correct configuration, so they are refusals rather than defects, and
     they belong in the error every caller of this module is written to expect.
     """
+    # Windows resolves a path with an embedded NUL without complaint (its
+    # resolve is not strict), so the NUL reached mkdir as a bare ValueError.
+    if "\0" in str(path):
+        raise DescriptorError(
+            f"The {label} {path!r} is not a usable path: embedded null character"
+        )
     try:
         return path.expanduser().resolve()
     except DescriptorError:
