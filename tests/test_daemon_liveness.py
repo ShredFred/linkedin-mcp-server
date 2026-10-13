@@ -912,8 +912,11 @@ class TestARealOwnerGoingAway:
         import psutil
         from test_daemon_election import _REPO_ROOT, _alive, _stop
 
+        from host_state import skip_if_the_real_daemon_root_is_refused
+
         from linkedin_mcp_server.daemon_descriptor import daemon_dir
 
+        skip_if_the_real_daemon_root_is_refused()
         profile = tmp_path / "state"
         profile.mkdir()
 

@@ -1561,7 +1561,9 @@ class TestSendMessageDeadline:
 
         async def late_snapshot():
             deadline = anyio.current_effective_deadline()
-            await anyio.sleep(max(0.0, deadline - anyio.current_time() - 0.02))
+            # 200 ms short of the deadline: disposal then waits half the rest, and
+            # with a ~15.6 ms Windows timer tick 20 ms let the wakeups overrun it.
+            await anyio.sleep(max(0.0, deadline - anyio.current_time() - 0.2))
             return {"path": path}
 
         handle = MagicMock()

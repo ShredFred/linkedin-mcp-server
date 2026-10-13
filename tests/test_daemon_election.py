@@ -1824,19 +1824,9 @@ def real_state_root(tmp_path: Path):
     here can collide with the user's own state or with a parallel test, and the
     same derivation gives cleanup an exact target.
     """
-    if os.name == "nt":
-        # The real root inherits this account's legacy pre-v2 directory, and
-        # production refuses every election while it is not the tombstone it
-        # writes itself. Only the account's owner may remove it, so a host
-        # that still has one cannot run these, and says why.
-        from linkedin_mcp_server.private_state import PrivateStateError
+    from host_state import skip_if_the_real_daemon_root_is_refused
 
-        try:
-            daemon_descriptor_module._legacy_windows_tombstone_exists(
-                daemon_descriptor_module._account_home()
-            )
-        except PrivateStateError as exc:
-            pytest.skip(f"the account's real daemon state root is refused: {exc}")
+    skip_if_the_real_daemon_root_is_refused()
     profile = tmp_path / "auth" / "profile"
     profile.mkdir(parents=True, exist_ok=True)
     yield profile
