@@ -1111,6 +1111,92 @@ def read_owner(path: Path) -> str:
             _kernel32.LocalFree(descriptor)
 
 
+# Codex sandbox read access, owner decision 2026-10-13. One extra allow entry is
+# tolerated: a local group named exactly CodexSandboxUsers holding read/execute
+# rights only. Its SID is resolved at runtime, never hard-coded.
+_CODEX_SANDBOX_GROUP = "CodexSandboxUsers"
+_SID_TYPE_ALIAS = 4
+_CODEX_READ_RIGHTS = (
+    0x00000001  # FILE_READ_DATA / FILE_LIST_DIRECTORY
+    | 0x00000008  # FILE_READ_EA
+    | 0x00000020  # FILE_EXECUTE / FILE_TRAVERSE
+    | 0x00000080  # FILE_READ_ATTRIBUTES
+    | 0x00020000  # READ_CONTROL
+    | 0x00100000  # SYNCHRONIZE
+    | 0x80000000  # GENERIC_READ
+    | 0x20000000  # GENERIC_EXECUTE
+)
+
+
+def _lookup_account_sid(sid_string: str) -> tuple[str, str, int] | None:
+    """Return (name, domain, sid type) for *sid_string*, or None if unresolvable."""
+    _advapi32, _kernel32 = _load()
+    convert = _advapi32.ConvertStringSidToSidW
+    convert.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
+    convert.restype = wintypes.BOOL
+    lookup = _advapi32.LookupAccountSidW
+    lookup.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.c_void_p,
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(ctypes.c_int),
+    ]
+    lookup.restype = wintypes.BOOL
+    raw = ctypes.c_void_p()
+    if not convert(sid_string, ctypes.byref(raw)):
+        return None
+    try:
+        name = ctypes.create_unicode_buffer(256)
+        domain = ctypes.create_unicode_buffer(256)
+        name_len = wintypes.DWORD(256)
+        domain_len = wintypes.DWORD(256)
+        sid_type = ctypes.c_int()
+        if not lookup(
+            None,
+            raw,
+            name,
+            ctypes.byref(name_len),
+            domain,
+            ctypes.byref(domain_len),
+            ctypes.byref(sid_type),
+        ):
+            return None
+        return name.value, domain.value, sid_type.value
+    finally:
+        _kernel32.LocalFree(ctypes.cast(raw, _HLOCAL))
+
+
+def _local_computer_name() -> str:
+    _advapi32, _kernel32 = _load()
+    buffer = ctypes.create_unicode_buffer(256)
+    size = wintypes.DWORD(256)
+    if not _kernel32.GetComputerNameW(buffer, ctypes.byref(size)):
+        return ""
+    return buffer.value
+
+
+def _is_codex_sandbox_read(entry: AccessEntry) -> bool:
+    """Whether *entry* is the tolerated read-only Codex sandbox group entry."""
+    if entry.type != ACCESS_ALLOWED_ACE_TYPE:
+        return False
+    if not entry.mask or entry.mask & ~_CODEX_READ_RIGHTS:
+        return False
+    account = _lookup_account_sid(entry.sid)
+    if account is None:
+        return False
+    name, domain, sid_type = account
+    computer = _local_computer_name()
+    return (
+        name == _CODEX_SANDBOX_GROUP
+        and sid_type == _SID_TYPE_ALIAS
+        and bool(computer)
+        and domain.casefold() == computer.casefold()
+    )
+
+
 def verify_owner_only(path: Path, *, directory: bool) -> None:
     """Raise unless *path*'s DACL grants this account and nothing else."""
     sid, sid_buffer = current_user_sid()
@@ -1136,13 +1222,16 @@ def verify_owner_only(path: Path, *, directory: bool) -> None:
             f"{path} still inherits permissions from its parent directory"
         )
 
-    if len(described.entries) != 1:
+    entries = [
+        entry for entry in described.entries if not _is_codex_sandbox_read(entry)
+    ]
+    if len(entries) != 1:
         granted = ", ".join(entry.sid for entry in described.entries) or "nobody"
         raise PrivateStateError(
             f"{path} grants access to more than this account ({granted})"
         )
 
-    entry = described.entries[0]
+    entry = entries[0]
     if entry.sid != expected_sid:
         raise PrivateStateError(
             f"{path} grants access to {entry.sid}, not to this account"
