@@ -1450,7 +1450,7 @@ class _CommandScene(_CalibrationScene):
         super().__init__(*args, **kwargs)
         self.cli = self.tmp_path / "cli" / "fake_cli.py"
         self.cli.parent.mkdir()
-        self.cli.write_text(_FAKE_CLI)
+        self.cli.write_text(_FAKE_CLI, encoding="utf-8")
         self.mode("clear")
         # The profile lease's lock file, as the row's server leaves it.
         (self.tmp_path / "auth" / LOCK_FILE).touch()

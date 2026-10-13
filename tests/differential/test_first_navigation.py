@@ -324,6 +324,13 @@ async def test_a_browser_killed_under_a_living_driver_is_an_unexpected_end(tmp_p
                     )
                     with pytest.raises(PlaywrightError):
                         await page.goto(origin.url("/"), timeout=10_000)
+                    # The sampler polls; stopping it before its next sample saw
+                    # the root gone left gone_ms unset (seen on Windows).
+                    await _until(
+                        lambda: (root() or {}).get("gone_ms") is not None,
+                        15,
+                        "the sampler never saw the browser root end",
+                    )
                     # Read while the driver still lives and nothing asked
                     # either of them to end.
                     lifetimes.stop(exc=None, requested=requested_ends(path))

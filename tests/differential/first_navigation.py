@@ -249,9 +249,25 @@ class _JsonFile:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             temporary.write_text(text, encoding="utf-8")
-            os.replace(temporary, self.path)
+            # Windows refuses to replace a file another handle has open (a
+            # reader of the previous snapshot, a scanner) with a sharing
+            # violation that clears within milliseconds. Retried briefly; a
+            # final failure still counts, as before.
+            for attempt in range(10):
+                try:
+                    os.replace(temporary, self.path)
+                    break
+                except PermissionError:
+                    if attempt == 9:
+                        raise
+                    time.sleep(0.02)
         except (OSError, TypeError, ValueError):
             self.failures += 1
+        finally:
+            # A failed replace left the staged copy beside the evidence, where
+            # it read as a second artefact (seen on Windows: 0 of 5 runs clean).
+            with contextlib.suppress(OSError):
+                temporary.unlink(missing_ok=True)
 
 
 def _loop_is_running() -> bool:
@@ -928,6 +944,11 @@ class LifetimeSampler:
                     return
             try:
                 key = (child.pid, child.create_time())
+            except psutil.NoSuchProcess:
+                # Listed, then gone before it could be read: that is an end,
+                # not an unreadable process. Left out of ``alive``, so a tracked
+                # one is recorded gone below (seen on Windows after a kill).
+                continue
             except Exception:  # noqa: BLE001 - unreadable, not shown gone
                 incomplete = True
                 with self._lock:
@@ -939,6 +960,8 @@ class LifetimeSampler:
             if key in self._tracked:
                 try:
                     zombie = child.status() == psutil.STATUS_ZOMBIE
+                except psutil.NoSuchProcess:
+                    continue
                 except Exception:  # noqa: BLE001 - unreadable, asked again
                     incomplete = True
                     with self._lock:
