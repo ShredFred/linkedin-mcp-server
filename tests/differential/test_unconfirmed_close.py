@@ -36,6 +36,7 @@ from typing import Any, cast
 
 import psutil
 import pytest
+from symlink_support import CAN_SYMLINK
 
 from differential import harness, lease_probe, r7_fault, unconfirmed_close
 from differential.baseline import BASELINE_SHA, git
@@ -236,6 +237,15 @@ def _proc(tmp_path: Path, pid: int, *targets: Path) -> Path:
     return tmp_path / "proc"
 
 
+#: These cases hand the association a Linux /proc: /proc/locks names a file by
+#: major:minor:inode and /proc/<pid>/fd holds links to it. Both need the
+#: host's os.major and the right to create a symbolic link.
+_linux_proc_model = pytest.mark.skipif(
+    not hasattr(os, "major") or not CAN_SYMLINK,
+    reason="models Linux /proc/locks and /proc/<pid>/fd (os.major, symlinks)",
+)
+
+
 def _locks(tmp_path: Path, identity, *, pid: int, kind="FLOCK", mode="WRITE"):
     device, inode = identity
     where = f"{os.major(device):02x}:{os.minor(device):02x}:{inode}"
@@ -244,6 +254,7 @@ def _locks(tmp_path: Path, identity, *, pid: int, kind="FLOCK", mode="WRITE"):
     return path
 
 
+@_linux_proc_model
 def test_the_listed_holder_with_an_open_descriptor_holds_it(tmp_path, lock):
     path, identity = lock
     association = lock_association(
@@ -255,6 +266,7 @@ def test_the_listed_holder_with_an_open_descriptor_holds_it(tmp_path, lock):
     assert association["state"] == HOLDER
 
 
+@_linux_proc_model
 @pytest.mark.parametrize(
     ("listed", "kind", "mode", "opened", "state"),
     [
@@ -281,6 +293,7 @@ def test_either_half_missing_is_no_holder(
     assert association["state"] == state
 
 
+@_linux_proc_model
 def test_unread_descriptors_are_unknown(tmp_path, lock):
     _, identity = lock
     association = lock_association(
@@ -2358,6 +2371,11 @@ class _Lifetime:
             raise psutil.NoSuchProcess(1)
         return psutil.STATUS_RUNNING
 
+    def wait(self, timeout=None):
+        # Windows has no zombies, so the harness waits on the handle there.
+        if not self.dead:
+            raise psutil.TimeoutExpired(timeout)
+
 
 def _no_such_process(pid: int):
     raise psutil.NoSuchProcess(pid)
@@ -2405,6 +2423,11 @@ class _Owner:
     def kill(self):
         self.killed += 1
         self.running = not self.dies
+
+    def wait(self, timeout=None):
+        # Windows has no zombies, so the harness waits on the handle there.
+        if self.running:
+            raise psutil.TimeoutExpired(timeout)
 
 
 def _identity(handle: _Owner) -> harness.OwnerIdentity:
