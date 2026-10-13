@@ -64,6 +64,8 @@ from linkedin_mcp_server.session_state import (
     source_state_path,
 )
 
+from symlink_support import requires_symlinks
+
 
 def _patch_inline_wait(monkeypatch, seconds: float, *, auto_import=False) -> None:
     """Point bootstrap.get_config() at a config with the given inline wait.
@@ -111,6 +113,24 @@ async def _wait_for_setup_signal(
             if not waiter.done():
                 waiter.cancel()
         await asyncio.gather(signal_wait, hang_wait, return_exceptions=True)
+
+
+@pytest.fixture
+def _supervisor_without_windows_job(monkeypatch):
+    """Let a fake asyncio child stand in for the installer on Windows too.
+
+    On Windows the launch assigns the child to a Job through the transport's
+    real ``Popen``; a ``_FakeProc`` has neither, so the containment step would
+    refuse it before the supervisor logic under test runs. The Job path itself
+    is exercised by the tests that install their own ``_Job`` stub, which
+    replaces this one.
+    """
+    if os.name == "nt":
+        from linkedin_mcp_server import bootstrap
+
+        monkeypatch.setattr(
+            bootstrap, "WindowsJob", SimpleNamespace(anonymous=lambda: None)
+        )
 
 
 class TestBootstrap:
@@ -765,6 +785,7 @@ class TestRetainedRevisionReport:
         assert "chromium_tip_of_tree" not in text
         assert "ffmpeg" not in text
 
+    @requires_symlinks
     def test_symlinked_revisions_are_neither_named_nor_measured(
         self, isolate_profile_dir, monkeypatch, tmp_path, caplog
     ):
@@ -1783,7 +1804,10 @@ class TestTwoStageInstall:
         monkeypatch.setattr(bootstrap, "_browser_setup_ready", lambda: False)
         monkeypatch.setattr(bootstrap, "_run_browser_setup", never_stops_moving)
         monkeypatch.setattr(bootstrap, "_BACKGROUND_BROWSER_SETUP_SECONDS", 30.0)
-        monkeypatch.setattr(bootstrap, "_BROWSER_SETUP_LIFETIME_SECONDS", 0.05)
+        # Long enough for several rounds where a timer tick is ~15 ms (Windows)
+        # and the readiness thread starts late under -n load; 50 ms let the
+        # ceiling land before the second round.
+        monkeypatch.setattr(bootstrap, "_BROWSER_SETUP_LIFETIME_SECONDS", 0.5)
 
         with pytest.raises(BrowserSetupFailedError, match="absolute lifetime"):
             await asyncio.wait_for(bootstrap._run_background_browser_setup(), 5)
@@ -1912,7 +1936,10 @@ class TestTwoStageInstall:
         config = SimpleNamespace(browser=SimpleNamespace(chrome_path=None))
         monkeypatch.setattr(bootstrap, "get_config", lambda: config)
         monkeypatch.setattr(bootstrap, "_run_browser_setup", never_finishes)
-        monkeypatch.setattr(bootstrap, "_BACKGROUND_BROWSER_SETUP_SECONDS", 0.01)
+        # The deadline also covers the readiness thread. At 10 ms it could expire
+        # before that thread reported, so the start call itself raised; the
+        # claim here is about the task, observed after start returns.
+        monkeypatch.setattr(bootstrap, "_BACKGROUND_BROWSER_SETUP_SECONDS", 0.5)
         monkeypatch.setattr(bootstrap, "browser_setup_ready", lambda: False)
         monkeypatch.setattr(bootstrap, "process_role", lambda: ServerRole.OWNER)
         monkeypatch.setattr(
@@ -2395,6 +2422,11 @@ class TestInstallerTemporaryRootRemoval:
 
         assert caplog.text == ""
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="pins the root with os.open on a directory, which Windows refuses; "
+        "the Windows pin is a directory handle from windows_acl",
+    )
     def test_a_cleared_root_says_nothing(self, tmp_path, caplog):
         from linkedin_mcp_server import bootstrap
 
@@ -2414,6 +2446,7 @@ class TestInstallerTemporaryRootRemoval:
         assert caplog.text == ""
 
 
+@pytest.mark.usefixtures("_supervisor_without_windows_job")
 class TestInstallerSupervisorLaunch:
     @pytest.fixture(autouse=True)
     def _stable_supervisor_nonce(self, monkeypatch):
@@ -3513,6 +3546,11 @@ class TestInstallerSupervisorLaunch:
         with pytest.raises(asyncio.CancelledError):
             await install
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="asserts the POSIX file form; the Windows module form is "
+        "test_windows_supervisor_keeps_the_module_form",
+    )
     async def test_launches_the_internal_supervisor_and_reads_its_target(
         self, tmp_path, monkeypatch
     ):
@@ -4151,6 +4189,7 @@ class TestInstallerSupervisorLaunch:
         assert job.closed
 
 
+@pytest.mark.usefixtures("_supervisor_without_windows_job")
 class TestPatchrightInstallStreaming:
     """The install streams its output as it arrives rather than after it ends."""
 
@@ -4241,6 +4280,11 @@ class TestPatchrightInstallStreaming:
             await installing
         assert cleanup_completed.is_set()
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="drives the POSIX mkdtemp branch; Windows creates the root through "
+        "create_owner_only_directory and would fall back to the real home",
+    )
     async def test_slow_temporary_root_creation_cannot_block_timeout(
         self, tmp_path, monkeypatch
     ):
@@ -4492,6 +4536,11 @@ class TestPatchrightInstallStreaming:
 
         assert closed == [pin]
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="drives the POSIX mkdtemp branch; Windows creates the root through "
+        "create_owner_only_directory and would fall back to the real home",
+    )
     def test_mac_extended_acl_on_temp_parent_is_refused(self, tmp_path, monkeypatch):
         from linkedin_mcp_server import bootstrap
         from linkedin_mcp_server.private_state import PrivateStateError
@@ -4519,6 +4568,11 @@ class TestPatchrightInstallStreaming:
 
         assert checked == [parent]
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="drives the POSIX mkdtemp branch; Windows creates the root through "
+        "create_owner_only_directory and would fall back to the real home",
+    )
     def test_installer_temporary_root_is_hardened_before_use(
         self, tmp_path, monkeypatch
     ):
@@ -4549,6 +4603,11 @@ class TestPatchrightInstallStreaming:
         )
         assert events == [("create", temporary_root), ("harden", temporary_root)]
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="drives the POSIX mkdtemp branch; Windows creates the root through "
+        "create_owner_only_directory and would fall back to the real home",
+    )
     def test_installer_temporary_root_is_removed_when_hardening_fails(
         self, tmp_path, monkeypatch
     ):
@@ -4665,6 +4724,11 @@ class TestPatchrightInstallStreaming:
         assert victim.read_text() == "unrelated"
         assert list(moved.iterdir()) == []
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="drives the POSIX mkdtemp branch; Windows creates the root through "
+        "create_owner_only_directory and would fall back to the real home",
+    )
     async def test_private_temp_environment_is_removed_after_tree_exit(
         self, tmp_path, monkeypatch
     ):
@@ -5067,6 +5131,11 @@ class TestPatchrightInstallStreaming:
             while temporary_root.exists():
                 await asyncio.sleep(0.001)
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="drives the POSIX mkdtemp branch; Windows creates the root through "
+        "create_owner_only_directory and would fall back to the real home",
+    )
     async def test_blocked_temp_cleanup_does_not_hold_cancellation(
         self, tmp_path, monkeypatch
     ):
@@ -7836,6 +7905,10 @@ class TestInstallerLinesAgainstARealPipe:
             script,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            # The reader decodes UTF-8, as Patchright writes it. A Python child
+            # on Windows would otherwise encode a pipe in the ANSI code page
+            # and fail on the first character outside it before writing a byte.
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
         assert proc.stdout is not None
         pieces = [line async for line in _installer_lines(proc.stdout)]
@@ -8441,10 +8514,22 @@ class TestPatchrightCommandTargetContract:
             str(revision) for revision in entry.get("revisionOverrides", {}).values()
         }
 
+    @staticmethod
+    def _without_windows_winldd(measured: list[str]) -> list[str]:
+        """Patchright adds winldd on a Windows host and nowhere else."""
+        winldd = [name for name in measured if name.startswith("winldd")]
+        if sys.platform == "win32":
+            assert len(winldd) == 1, measured
+            assert measured[-1] == winldd[0], measured
+            return measured[:-1]
+        assert not winldd, measured
+        return measured
+
     def test_no_shell_installs_chromium_and_ffmpeg(self, tmp_path):
         chromium = _registry_entry("chromium")
 
         measured = self._dry_run_locations(tmp_path, "--no-shell")
+        measured = self._without_windows_winldd(measured)
 
         # Two directories, in this order: the browser the flag names, at the
         # revision browsers.json gives it, and then ffmpeg, which no flag names
@@ -8460,6 +8545,7 @@ class TestPatchrightCommandTargetContract:
         shell = _registry_entry("chromium-headless-shell")
 
         measured = self._dry_run_locations(tmp_path, "--only-shell")
+        measured = self._without_windows_winldd(measured)
 
         assert len(measured) == 2, measured
         assert measured[0] == f"chromium_headless_shell-{shell['revision']}"
@@ -8578,6 +8664,8 @@ class TestInstallerAuxiliaryAccounting:
     ):
         self._stub_registry(monkeypatch, tmp_path, self._BROWSERS)
 
+        # winldd is a Windows-only target; this asserts the POSIX set.
+        monkeypatch.setattr(sys, "platform", "linux")
         names = self._paths(tmp_path / "cache")
 
         assert not any(name.startswith(("firefox", "webkit")) for name in names)
@@ -8586,6 +8674,7 @@ class TestInstallerAuxiliaryAccounting:
 
     def test_winldd_is_accounted_for_on_windows_only(self, monkeypatch, tmp_path):
         self._stub_registry(monkeypatch, tmp_path, self._BROWSERS)
+        monkeypatch.setattr(sys, "platform", "linux")
 
         assert "winldd-1007" not in self._paths(tmp_path / "posix")
 
@@ -8628,6 +8717,7 @@ class TestInstallerAuxiliaryAccounting:
         oversized.write_bytes(b"a" * 4096)
         environment = {"PLAYWRIGHT_BROWSERS_PATH": str(cache)}
 
+        monkeypatch.setattr(sys, "platform", "linux")
         on_posix = bootstrap._installer_download_snapshot(
             temporary_root,
             bootstrap._installer_extraction_paths("--no-shell", environment),
