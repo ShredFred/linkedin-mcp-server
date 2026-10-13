@@ -639,7 +639,8 @@ def _fake_gh(
     searches: dict[str, tuple[Any, ...]],
 ) -> None:
     """Put a `gh` on PATH that knows these pull requests and searches."""
-    assert shutil.which("jq"), "the fake gh evaluates the step's --jq with jq"
+    if not shutil.which("jq"):
+        pytest.skip("jq is not on PATH; the fake gh evaluates the step's --jq with jq")
     responses: dict[str, Any] = {
         f"repos/{_REPOSITORY}/pulls/{number}": {
             "number": number,
@@ -936,7 +937,8 @@ def _run_protection_steps(
     dict[str, subprocess.CompletedProcess[str]], list[dict[str, Any]], Any, Path
 ]:
     """Run the real protection/sync/tag scripts, in YAML order, against local fakes."""
-    assert shutil.which("jq"), "the fake gh evaluates the workflow's real --jq"
+    if not shutil.which("jq"):
+        pytest.skip("jq is not on PATH; the fake gh evaluates the workflow's real --jq")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "fake_gh.py").write_text(_PROTECTION_FAKE_GH, encoding="utf-8")

@@ -293,9 +293,34 @@ def _label_workflow_script() -> str:
     return "\n".join(script)
 
 
+def _probe_posix_bash() -> bool:
+    """Whether ``bash`` as this process resolves it runs a script.
+
+    On Windows the name can resolve to the WSL launcher in System32, which
+    fails with no distribution installed; that says nothing about the
+    workflow under test, which runs on a Linux runner.
+    """
+    try:
+        probe = subprocess.run(
+            ["bash", "-c", "printf ok"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return probe.returncode == 0 and probe.stdout == "ok"
+
+
+_POSIX_BASH = _probe_posix_bash()
+
+
 def _run_label_workflow(
     tmp_path: Path, title: str, attached: set[str]
 ) -> tuple[subprocess.CompletedProcess[str], set[str], list[list[str]]]:
+    if not _POSIX_BASH:
+        pytest.skip("no working bash on PATH to run the label workflow script")
     state_path = tmp_path / "labels.json"
     calls_path = tmp_path / "calls.jsonl"
     state_path.write_text(
