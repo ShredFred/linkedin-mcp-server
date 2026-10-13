@@ -9218,13 +9218,15 @@ class TestElectionSettlement:
             profile,
             config,
             deadline_seconds=0,
-            settlement_seconds=0.05,
+            # 2 s, not 50 ms: under a loaded parallel run the descriptor read
+            # alone can use 50 ms and leave the probe no budget at all.
+            settlement_seconds=2.0,
             connect=answer,
         )
 
         assert outcome.worth_connecting
         assert len(probe_budgets) == 1
-        assert 0 < probe_budgets[0] <= 0.05 + 1e-12
+        assert 0 < probe_budgets[0] <= 2.0 + 1e-12
 
     def test_zero_total_budget_starts_no_operation(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
