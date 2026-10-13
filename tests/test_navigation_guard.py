@@ -12,6 +12,7 @@ import pytest
 from linkedin_mcp_server import ext_outreach as outreach
 from linkedin_mcp_server.core.exceptions import (
     AuthenticationError,
+    OffLinkedInLandingError,
     OffSiteNavigationError,
     RateLimitError,
 )
@@ -93,8 +94,14 @@ def test_auth_paths_are_flagged_not_raised_by_host_check(url):
 
 @pytest.mark.parametrize(
     "url",
-    [REQ, "https://www.linkedin.com/login-help-page/", None, "", "about:blank",
-     "https://evil.example/login"],
+    [
+        REQ,
+        "https://www.linkedin.com/login-help-page/",
+        None,
+        "",
+        "about:blank",
+        "https://evil.example/login",
+    ],
 )
 def test_non_auth_urls_are_not_flagged(url):
     assert not nav.is_linkedin_auth_path(url)
@@ -151,7 +158,9 @@ async def _run(navigator, url=REQ):
 
 async def test_navigation_redirected_offsite_fails():
     navigator, _ = _navigator("https://linkedin.com.evil.example/in/x")
-    with pytest.raises(OffSiteNavigationError):
+    # Since upstream #1235 the landing check reads the page's own document
+    # first and names a host that is not LinkedIn's as a landing off LinkedIn.
+    with pytest.raises(OffLinkedInLandingError):
         await _run(navigator)
 
 

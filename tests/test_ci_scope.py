@@ -220,6 +220,21 @@ def test_deleting_a_test_needs_the_matrices_and_deleting_docs_does_not(
     assert ci_changes.matrices_decision(repo, deleted_test, deleted_doc) == "skip"
 
 
+def _filesystem_allows_newlines_in_names() -> bool:
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as directory:
+        try:
+            (Path(directory) / "a\nb").write_text("", encoding="utf-8")
+        except OSError:
+            return False
+        return True
+
+
+@pytest.mark.skipif(
+    not _filesystem_allows_newlines_in_names(),
+    reason="this filesystem refuses a newline in a file name (NTFS does)",
+)
 def test_paths_with_spaces_and_newlines_stay_one_path(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, "README.md")

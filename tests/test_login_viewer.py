@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
+import os
 import re
 import signal
 import stat
@@ -277,7 +278,10 @@ def test_exact_commands_token_mode_secrecy_and_teardown(
         ],
     ]
     assert token_file.read_text(encoding="utf-8") == (f"{token}: 127.0.0.1:5900\n")
-    assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
+    # The viewer runs in the Linux container. Windows reports only the
+    # read-only bit through st_mode, so the owner-only mode is checked on POSIX.
+    if os.name != "nt":
+        assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
     assert token not in " ".join(part for command in commands for part in command)
     assert url == viewer_url(token)
 
