@@ -781,6 +781,26 @@ class TestRefusals:
 class TestWindowsAcl:
     """Only meaningful on Windows, where a DACL rather than a mode decides."""
 
+    @pytest.fixture
+    def _trustworthy_ancestry(self, tmp_path: Path):
+        """These cases plant one grant and expect it to be the one refused.
+
+        A host whose own temporary ancestry already grants another SID the
+        right to replace it (an AppContainer grant on AppData, a writable
+        volume root) is refused first, for the right reason, and the planted
+        grant is never reached. Probed, so a clean host still runs them.
+        """
+        if os.name != "nt":
+            return
+        from linkedin_mcp_server.windows_acl import (
+            verify_ancestry_cannot_be_replaced,
+        )
+
+        try:
+            verify_ancestry_cannot_be_replaced(tmp_path)
+        except PrivateStateError as exc:
+            pytest.skip(f"this host's temporary ancestry is already refused: {exc}")
+
     @windows_only
     def test_a_directory_grants_only_this_account(self, tmp_path: Path):
         from linkedin_mcp_server.windows_acl import (
@@ -807,6 +827,7 @@ class TestWindowsAcl:
         # rather than from whenever it gets hardened.
         assert described.entries[0].flags == CONTAINER_INHERITANCE
 
+    @pytest.mark.usefixtures("_trustworthy_ancestry")
     @windows_only
     def test_a_directory_can_be_private_from_creation(self, tmp_path: Path):
         from linkedin_mcp_server.windows_acl import (
@@ -837,6 +858,7 @@ class TestWindowsAcl:
             close_directory_pin(pin)
             target.rmdir()
 
+    @pytest.mark.usefixtures("_trustworthy_ancestry")
     @windows_only
     def test_an_ordinary_inheriting_temp_layout_is_still_accepted(self, tmp_path: Path):
         """The layout every Windows machine has, end to end against the real one.
@@ -867,6 +889,7 @@ class TestWindowsAcl:
             close_directory_pin(pin)
             target.rmdir()
 
+    @pytest.mark.usefixtures("_trustworthy_ancestry")
     @windows_only
     @pytest.mark.parametrize("home_is_shared", [False, True])
     def test_installer_recovers_from_appcontainer_temp_ancestry(
@@ -917,6 +940,7 @@ class TestWindowsAcl:
         assert list(temporary.iterdir()) == []
         assert list(home.iterdir()) == [appdata]
 
+    @pytest.mark.usefixtures("_trustworthy_ancestry")
     @windows_only
     def test_owner_rights_in_the_chain_is_still_accepted(self, tmp_path: Path):
         """The entry CPython puts on every directory it creates for us.
@@ -968,6 +992,7 @@ class TestWindowsAcl:
             "DC",  # or delete the component below without touching this one
         ],
     )
+    @pytest.mark.usefixtures("_trustworthy_ancestry")
     def test_an_ancestor_another_sid_controls_is_refused(
         self, tmp_path: Path, rights: str
     ):
@@ -1003,6 +1028,7 @@ class TestWindowsAcl:
 
         assert list(parent.iterdir()) == [], "refused before CreateDirectoryW"
 
+    @pytest.mark.usefixtures("_trustworthy_ancestry")
     @windows_only
     def test_an_ancestor_that_propagates_full_control_is_refused(self, tmp_path: Path):
         """The mutation the pins and the walk exist for.
@@ -1033,6 +1059,7 @@ class TestWindowsAcl:
 
         assert list(parent.iterdir()) == []
 
+    @pytest.mark.usefixtures("_trustworthy_ancestry")
     @windows_only
     def test_an_ancestor_owner_outside_the_trusted_set_is_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
