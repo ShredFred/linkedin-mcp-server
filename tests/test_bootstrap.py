@@ -2481,8 +2481,10 @@ class TestInstallerSupervisorLaunch:
 
         command = bootstrap._installer_supervisor_command(["target", "arg"])
 
+        from linkedin_mcp_server.no_console import background_interpreter
+
         assert command == [
-            sys.executable,
+            background_interpreter(),  # pythonw on Windows: no console window
             "-P",
             "-m",
             "linkedin_mcp_server.installer_supervisor",
@@ -3642,7 +3644,9 @@ class TestInstallerSupervisorLaunch:
 
         async def fake_exec(*args: object, **kwargs: object) -> _FakeProc:
             events.append("start-gate")
-            assert args[:5] == ("gate", "nonce", "--", sys.executable, "-P")
+            from linkedin_mcp_server.no_console import background_interpreter
+
+            assert args[:5] == ("gate", "nonce", "--", background_interpreter(), "-P")
             return proc
 
         def gate(target: list[str], nonce: str) -> list[str]:

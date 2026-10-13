@@ -23,6 +23,9 @@ import os
 import queue
 import subprocess
 import sys
+from linkedin_mcp_server.no_console import (
+    background_interpreter as _background_interpreter,
+)
 import threading
 import time
 import weakref
@@ -1770,7 +1773,7 @@ def _spawn_command(*, lock_fd: int | None, job_name: str | None = None) -> list[
             interpreter_flags.append("-s")
 
     command = [
-        sys.executable,
+        _background_interpreter(),
         *interpreter_flags,
         "-P",
         "-m",

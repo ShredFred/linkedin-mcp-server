@@ -23,6 +23,9 @@ import shutil
 import stat
 import subprocess
 import sys
+from linkedin_mcp_server.no_console import (
+    background_interpreter as _background_interpreter,
+)
 import tempfile
 import threading
 import time
@@ -1675,7 +1678,7 @@ def _installer_supervisor_command(worker_target: list[str]) -> list[str]:
     """
     if os.name == "nt":
         return [
-            sys.executable,
+            _background_interpreter(),
             "-P",
             "-m",
             "linkedin_mcp_server.installer_supervisor",
@@ -1683,7 +1686,15 @@ def _installer_supervisor_command(worker_target: list[str]) -> list[str]:
             *worker_target,
         ]
     supervisor = Path(__file__).with_name("installer_supervisor.py").resolve()
-    return [sys.executable, "-I", "-S", "-u", str(supervisor), "--", *worker_target]
+    return [
+        _background_interpreter(),
+        "-I",
+        "-S",
+        "-u",
+        str(supervisor),
+        "--",
+        *worker_target,
+    ]
 
 
 def _installer_environment(temporary_root: Path) -> dict[str, str]:
@@ -1701,7 +1712,7 @@ async def _start_installer_supervisor(
 ) -> _InstallerProcess:
     target = _installer_supervisor_command(
         [
-            sys.executable,
+            _background_interpreter(),
             "-P",
             "-m",
             "patchright",
@@ -4579,9 +4590,7 @@ async def invalidate_auth_and_trigger_relogin(
         # profile. What must not happen is the login standing down there, which
         # is why the generation it was told about travels with it.
         try:
-            _state.retired_before_login = _force_move_auth_state_aside(
-                stale_generation
-            )
+            _state.retired_before_login = _force_move_auth_state_aside(stale_generation)
         except AuthenticationBootstrapFailedError as exc:
             logger.info(
                 "Could not retire the stale session yet (%s); the login will "

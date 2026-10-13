@@ -6,6 +6,9 @@ import contextlib
 import os
 import subprocess
 import sys
+from linkedin_mcp_server.no_console import (
+    background_interpreter as _background_interpreter,
+)
 import threading
 from typing import BinaryIO
 
@@ -166,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     worker_command = [
-        sys.executable,
+        _background_interpreter(),
         "-P",
         "-m",
         "linkedin_mcp_server.installer_worker",

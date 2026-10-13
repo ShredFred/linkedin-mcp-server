@@ -12,6 +12,9 @@ import select
 import signal
 import subprocess
 import sys
+from linkedin_mcp_server.no_console import (
+    background_interpreter as _background_interpreter,
+)
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -122,7 +125,7 @@ def start_browser_guardian(lease_fd: int) -> None:
     try:
         process = subprocess.Popen(
             [
-                sys.executable,
+                _background_interpreter(),
                 "-I",
                 "-S",
                 "-u",
@@ -955,7 +958,16 @@ def release_nonce() -> str:
 def windows_gate_command(target: list[str], nonce: str) -> list[str]:
     """Wrap *target* in the stdlib-only isolated release gate."""
     gate = Path(__file__).with_name("process_gate.py").resolve()
-    return [sys.executable, "-I", "-S", "-u", str(gate), nonce, "--", *target]
+    return [
+        _background_interpreter(),
+        "-I",
+        "-S",
+        "-u",
+        str(gate),
+        nonce,
+        "--",
+        *target,
+    ]
 
 
 def release_windows_gate(stream: Any, nonce: str) -> None:

@@ -49,3 +49,27 @@ def install() -> bool:
     setattr(__init__, _MARK, True)
     popen.__init__ = __init__  # type: ignore[method-assign]
     return True
+
+
+def background_interpreter() -> str:
+    """The interpreter for a background Python child on Windows: ``pythonw.exe``.
+
+    Live 2026-10-13: a venv's ``python.exe`` is only a launcher that starts the
+    real interpreter as its own child. Started without a console (detached, or
+    under ``CREATE_NO_WINDOW``), the launcher's child allocates a fresh console,
+    and Windows Terminal opens a visible window for it -- twice per daemon start
+    (gate and owner). ``pythonw.exe`` is a GUI-subsystem binary: neither it nor
+    the interpreter it launches ever gets a console. Pipes passed explicitly
+    still work. Elsewhere, or without a sibling ``pythonw.exe``, this is
+    ``sys.executable`` unchanged.
+    """
+    exe = sys.executable
+    if sys.platform != "win32" or not exe:
+        return exe
+    from pathlib import Path
+
+    p = Path(exe)
+    if p.name.lower() != "python.exe":
+        return exe
+    w = p.with_name("pythonw.exe")
+    return str(w) if w.is_file() else exe
