@@ -1,4 +1,6 @@
+import contextlib
 import os
+from pathlib import Path
 import sys
 
 # FastMCP 4 bridges camelCase reads on MCP SDK models (`result.isError`) with
@@ -109,10 +111,27 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 @pytest.fixture(scope="session")
-def _stand_in_homes(tmp_path_factory):
-    import itertools
+def _stand_in_homes():
+    """One directory per worker session for the stand-in homes, removed after.
 
-    return tmp_path_factory.mktemp("homes"), itertools.count()
+    Placed under the real home, in a namespace of its own, not under the run's
+    basetemp: on Windows the installer root needs an ancestry no other account
+    can re-permission, and %TEMP% and the checkout's drive both fail that here
+    (an AppContainer grant on AppData, a writable volume root). The account
+    home passes, which is why the installer used to fall back into it. The
+    guard's patterns do not match this name, and the directory goes at the end.
+    """
+    import itertools
+    import shutil
+
+    root = os.path.join(_REAL_HOME, ".linkedin-mcp-test-homes", str(os.getpid()))
+    os.makedirs(root)
+    try:
+        yield Path(root), itertools.count()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            os.rmdir(os.path.dirname(root))
 
 
 @pytest.fixture(autouse=True)
