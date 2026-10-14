@@ -407,12 +407,13 @@ PACE_BUDGETS: dict[str, dict[str, int]] = {
     "repost": {"day": 3, "week": 10},
     "repost_undo": {"day": 3, "week": 10},
 }
-# Dated temporary raises (operator, 2026-10-13: full event search). Each entry
-# applies through its "until" day (local date) inclusive and falls back to
-# PACE_BUDGETS by itself afterwards; nothing needs to be reverted by hand.
+# Dated temporary raises (operator, 2026-10-13: full event search; raised again
+# 2026-10-14 to finish sooner). Each entry applies through its "until" day
+# (local date) inclusive and falls back to PACE_BUDGETS by itself afterwards;
+# nothing needs to be reverted by hand.
 PACE_TEMP_RAISES: dict[str, dict[str, Any]] = {
-    "search": {"day": 130, "week": 750, "until": "2026-10-20",
-               "reason": "operator 2026-10-13: temporary for full event search"},
+    "search": {"day": 160, "week": 900, "until": "2026-10-20",
+               "reason": "operator 2026-10-14: temporary for full event search"},
 }
 
 
