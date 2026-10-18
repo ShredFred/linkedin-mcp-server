@@ -336,11 +336,18 @@ class ExtEventFinder:
         # Kept as an attribute so the list return type stays unchanged for the
         # existing callers; read it right after the call.
         self.last_has_more = False
+        # unconfirmed_empty: the first page held no event card AND no "no results"
+        # notice -- a page that did not render, a login wall or a changed layout,
+        # not an empty search. Measured 2026-10-18: 163 searches in a row came back
+        # as [] and were silently booked as "no hit".
+        self.last_unconfirmed_empty = False
         events: list[dict[str, Any]] = []
         seen: set[str] = set()
         for page in range(1, max_pages + 1):
             state = await self._read(keyword_url(keyword, page))
             if not state["items"]:
+                if page == 1 and not state.get("empty"):
+                    self.last_unconfirmed_empty = True
                 break
             for it in state["items"]:
                 # Result pages shift between reads; one event once.

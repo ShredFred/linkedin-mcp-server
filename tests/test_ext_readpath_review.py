@@ -115,6 +115,32 @@ def test_by_keyword_flags_has_more_after_full_last_page():
     assert finder.last_has_more is True
 
 
+def _finder_with(state):
+    finder = ExtEventFinder.__new__(ExtEventFinder)
+
+    async def read(_url):
+        return state
+
+    class _S:
+        delay = staticmethod(_noop)
+
+    finder._read = read
+    finder._session = _S()
+    return finder
+
+
+def test_by_keyword_empty_page_without_notice_is_unconfirmed():
+    finder = _finder_with({"items": [], "empty": False})
+    assert asyncio.run(finder.by_keyword("x")) == []
+    assert finder.last_unconfirmed_empty is True
+
+
+def test_by_keyword_no_results_notice_is_a_real_empty():
+    finder = _finder_with({"items": [], "empty": True})
+    assert asyncio.run(finder.by_keyword("x")) == []
+    assert finder.last_unconfirmed_empty is False
+
+
 def test_legacy_idless_comment_key_is_still_known_once(tmp_path):
     from linkedin_mcp_server.linkedin.ext_engagement import engager_key
 

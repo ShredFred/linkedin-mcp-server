@@ -12,6 +12,7 @@ import os
 import random
 import re
 import uuid
+from urllib.parse import urlparse
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
@@ -1485,7 +1486,22 @@ def register_ext_stage2_tools(
         async def body(ex: Any) -> dict[str, Any]:
             finder = ExtEventFinder(ex.ext_session, ex.ext_navigator)
             events = await finder.by_keyword(kw, max_pages=1 if limit <= 10 else 3)
-            out = [event_summary(e) for e in events][:limit]
+            if not events and getattr(finder, "last_unconfirmed_empty", False):
+                landed = urlparse(str(getattr(ex.ext_session.page, "url", ""))).path
+                # A redirect names the cause: /checkpoint/ = challenge, /authwall
+                # or /login = session lost. The path only, never the query.
+                wall = next(
+                    (w for w in ("checkpoint", "authwall", "login") if w in landed),
+                    None,
+                )
+                return {
+                    "error": "unconfirmed_empty: result page shows neither an event"
+                    " nor a no-results notice"
+                    + (f" (redirected: {wall})" if wall else ""),
+                    "keywords": kw,
+                    "landed": landed[:120],
+                }
+            out =[event_summary(e) for e in events][:limit]
             truncated = len(events) > limit
             return {
                 "keywords": kw,
