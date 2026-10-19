@@ -1485,7 +1485,9 @@ def register_ext_stage2_tools(
 
         async def body(ex: Any) -> dict[str, Any]:
             finder = ExtEventFinder(ex.ext_session, ex.ext_navigator)
-            events = await finder.by_keyword(kw, max_pages=1 if limit <= 10 else 3)
+            events = await finder.by_keyword(
+                kw, max_pages=1 if limit <= 10 else 3, raise_unconfirmed=False
+            )
             if not events and getattr(finder, "last_unconfirmed_empty", False):
                 landed = urlparse(str(getattr(ex.ext_session.page, "url", ""))).path
                 # A redirect names the cause: /checkpoint/ = challenge, /authwall

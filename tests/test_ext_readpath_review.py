@@ -131,8 +131,36 @@ def _finder_with(state):
 
 def test_by_keyword_empty_page_without_notice_is_unconfirmed():
     finder = _finder_with({"items": [], "empty": False})
-    assert asyncio.run(finder.by_keyword("x")) == []
+    assert asyncio.run(finder.by_keyword("x", raise_unconfirmed=False)) == []
     assert finder.last_unconfirmed_empty is True
+
+
+def test_by_keyword_unconfirmed_raises_by_default():
+    from linkedin_mcp_server.linkedin.ext_events import UnconfirmedEmpty
+
+    finder = _finder_with({"items": [], "empty": False})
+    try:
+        asyncio.run(finder.by_keyword("x"))
+    except UnconfirmedEmpty as exc:
+        assert "unconfirmed_empty" in str(exc)
+    else:
+        raise AssertionError("no UnconfirmedEmpty")
+
+
+def test_by_keyword_rereads_a_slow_page_once():
+    finder = ExtEventFinder.__new__(ExtEventFinder)
+    states = [{"items": [], "empty": False}, {"items": [{"id": "1", "lines": ["T"]}]}]
+
+    async def read(_url):
+        return states.pop(0)
+
+    class _S:
+        delay = staticmethod(_noop)
+
+    finder._read = read
+    finder._session = _S()
+    assert [e["event_id"] for e in asyncio.run(finder.by_keyword("x"))] == ["1"]
+    assert finder.last_unconfirmed_empty is False
 
 
 def test_by_keyword_no_results_notice_is_a_real_empty():

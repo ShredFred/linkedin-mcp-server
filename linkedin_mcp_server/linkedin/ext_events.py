@@ -310,6 +310,10 @@ def parse_current_position(found: dict[str, Any] | None) -> dict[str, Any] | Non
     return {"employer": company[:120], "role": role[:120]}
 
 
+class UnconfirmedEmpty(RuntimeError):
+    """A keyword page with no event card and no "no results" notice (twice)."""
+
+
 class ExtEventFinder:
     def __init__(self, session: PageSession, navigator: PageNavigator):
         self._session = session
@@ -329,7 +333,7 @@ class ExtEventFinder:
         return await self._session.page.evaluate(_EVENT_CARDS_JS)
 
     async def by_keyword(
-        self, keyword: str, max_pages: int = 1
+        self, keyword: str, max_pages: int = 1, *, raise_unconfirmed: bool = True
     ) -> list[dict[str, Any]]:
         # has_more: max_pages full pages were read and the loop stopped on the
         # page limit, not on a short or empty page -- there may be more events.
@@ -345,9 +349,17 @@ class ExtEventFinder:
         seen: set[str] = set()
         for page in range(1, max_pages + 1):
             state = await self._read(keyword_url(keyword, page))
+            if not state["items"] and page == 1 and not state.get("empty"):
+                # One re-read: a slow render must not stop a whole run.
+                state = await self._read(keyword_url(keyword, page))
             if not state["items"]:
                 if page == 1 and not state.get("empty"):
                     self.last_unconfirmed_empty = True
+                    if raise_unconfirmed:
+                        raise UnconfirmedEmpty(
+                            "unconfirmed_empty: result page shows neither an event"
+                            " nor a no-results notice"
+                        )
                 break
             for it in state["items"]:
                 # Result pages shift between reads; one event once.
