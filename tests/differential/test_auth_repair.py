@@ -54,6 +54,7 @@ from differential.auth_repair import (
     ROW_COLD,
     ROW_FAILED,
     ROW_LOGIN,
+    ROW_RESPONSE_LOSS,
     ROW_SECOND,
     START_FAILED_LINE,
     WAITING,
@@ -142,8 +143,8 @@ from linkedin_mcp_server.core.auth import (
     wait_for_manual_login,
 )
 from linkedin_mcp_server.core.exceptions import AuthenticationError
-from linkedin_mcp_server.daemon_auth import MARKER_KEY
-from linkedin_mcp_server.daemon_liveness import HEARTBEAT_PATH
+from linkedin_mcp_server.daemon.auth_repair import MARKER_KEY
+from linkedin_mcp_server.daemon.liveness import HEARTBEAT_PATH
 from linkedin_mcp_server.session_state import (
     QUARANTINE_PREFIX,
     portable_cookie_path,
@@ -1954,13 +1955,21 @@ def test_each_branch_left_to_the_models_names_tests_that_exist(branch):
         assert name in _functions(root / path), node
 
 
-def test_the_response_loss_lane_is_open_and_its_latch_models_never_count():
-    """The latch models stand beside the open lane as references; the
-    accounting never counts them as its coverage."""
+def test_the_response_loss_lane_is_open_and_only_its_model_counts():
+    """The native lane stays open; the one model that drops a marker counts
+    under its row, and the latch models stand beside it as references the
+    accounting never counts."""
     root = Path(__file__).resolve().parents[2]
+    assert "native response loss remains unobserved" in RESPONSE_LOSS_OPEN
+    assert "STOP 10" in RESPONSE_LOSS_OPEN
     assert "stays open" in RESPONSE_LOSS_OPEN
-    assert not any(name.startswith("response loss") for name in MODEL_COVERAGE)
+    (branch,) = [name for name in MODEL_COVERAGE if name.startswith("response loss")]
+    row, models = MODEL_COVERAGE[branch]
+    assert row == ROW_RESPONSE_LOSS
     rows = model_coverage.model_rows()
+    for node in models:
+        assert node.startswith("tests/test_daemon_auth.py::TestALostMarkerResponse")
+        assert rows[node] == [ROW_RESPONSE_LOSS]
     for node in RESPONSE_LOSS_REFERENCES:
         assert node.startswith("tests/test_bootstrap.py::TestTheOwnerStaysQuiescent")
         path, _, name = node.partition("::")
@@ -2702,7 +2711,7 @@ async def test_only_the_owner_s_wait_for_the_profile_shows_the_second_read_there
     from test_daemon_proxy import _attachment, _backend, _reach_owners_in_process
 
     from linkedin_mcp_server import sequential_tool_middleware as sequential
-    from linkedin_mcp_server.daemon_proxy import FrontendCallHeartbeatMiddleware
+    from linkedin_mcp_server.daemon.proxy import FrontendCallHeartbeatMiddleware
     from linkedin_mcp_server.server import create_mcp_server
     from linkedin_mcp_server.server_role import ServerRole
 

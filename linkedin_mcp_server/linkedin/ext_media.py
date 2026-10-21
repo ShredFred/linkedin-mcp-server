@@ -32,6 +32,7 @@ caller discards the composer, which was measured to leave no draft behind.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 from pathlib import Path
 from typing import Any
@@ -58,9 +59,13 @@ DOCUMENT_SUFFIXES = {".pdf", ".ppt", ".pptx", ".doc", ".docx"}
 UNMEASURED_SUFFIXES = {".avi", ".webm"}
 MAX_IMAGES = 20
 ALT_MAX = 1000
+IMAGE_MAX_BYTES = 32 * 1024 * 1024
+IMAGES_TOTAL_MAX_BYTES = 128 * 1024 * 1024
 
 
-def check_media(items: list[dict[str, Any]] | None) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+def check_media(
+    items: list[dict[str, Any]] | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """Normalise ``media``; (items, refusal). Pure, no browser."""
     if not items:
         return [], None
@@ -69,6 +74,7 @@ def check_media(items: list[dict[str, Any]] | None) -> tuple[list[dict[str, Any]
     if len(items) > MAX_IMAGES:
         return [], {"status": "media_too_many", "max": MAX_IMAGES}
     out: list[dict[str, Any]] = []
+    total_bytes = 0
     for i, raw in enumerate(items):
         if not isinstance(raw, dict) or not raw.get("path"):
             return [], {"status": "media_invalid", "index": i}
@@ -83,22 +89,55 @@ def check_media(items: list[dict[str, Any]] | None) -> tuple[list[dict[str, Any]
         if suffix in VIDEO_SUFFIXES | DOCUMENT_SUFFIXES:
             kind = "video" if suffix in VIDEO_SUFFIXES else "document"
             if len(items) != 1:
-                return [], {"status": "media_mix_unsupported", "index": i,
-                            "message": f"A {kind} is posted alone."}
+                return [], {
+                    "status": "media_mix_unsupported",
+                    "index": i,
+                    "message": f"A {kind} is posted alone.",
+                }
             if not path.is_file():
-                return [], {"status": "media_invalid_path", "index": i, "path": str(path)}
+                return [], {
+                    "status": "media_invalid_path",
+                    "index": i,
+                    "path": str(path),
+                }
             if raw.get("alt_text") or raw.get("tags"):
-                return [], {"status": "media_option_unsupported", "index": i,
-                            "message": f"A {kind} takes no alt text or tags."}
+                return [], {
+                    "status": "media_option_unsupported",
+                    "index": i,
+                    "message": f"A {kind} takes no alt text or tags.",
+                }
             title = str(raw.get("title") or "").strip()
             if kind == "document" and not (1 <= len(title) <= 100):
                 return [], {"status": "document_title_required", "index": i}
-            return [{"path": path, "alt_text": None, "tags": [], "kind": kind,
-                     "title": title or None}], None
+            return [
+                {
+                    "path": path,
+                    "alt_text": None,
+                    "tags": [],
+                    "kind": kind,
+                    "title": title or None,
+                }
+            ], None
         if suffix not in IMAGE_SUFFIXES:
-            return [], {"status": "media_unsupported_type", "index": i, "suffix": suffix}
+            return [], {
+                "status": "media_unsupported_type",
+                "index": i,
+                "suffix": suffix,
+            }
         if not path.is_file():
             return [], {"status": "media_invalid_path", "index": i, "path": str(path)}
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return [], {"status": "media_invalid_path", "index": i, "path": str(path)}
+        total_bytes += size
+        if size > IMAGE_MAX_BYTES or total_bytes > IMAGES_TOTAL_MAX_BYTES:
+            return [], {
+                "status": "media_too_large",
+                "index": i,
+                "max_image_bytes": IMAGE_MAX_BYTES,
+                "max_total_bytes": IMAGES_TOTAL_MAX_BYTES,
+            }
         alt = raw.get("alt_text")
         if alt is not None:
             alt = str(alt).strip()
@@ -106,8 +145,16 @@ def check_media(items: list[dict[str, Any]] | None) -> tuple[list[dict[str, Any]
                 return [], {"status": "alt_text_invalid", "index": i, "max": ALT_MAX}
         tags: list[Mention] = []
         for tag in raw.get("tags") or []:
-            name = str((tag or {}).get("name") or "").strip() if isinstance(tag, dict) else ""
-            target = str((tag or {}).get("target") or "").strip() if isinstance(tag, dict) else ""
+            name = (
+                str((tag or {}).get("name") or "").strip()
+                if isinstance(tag, dict)
+                else ""
+            )
+            target = (
+                str((tag or {}).get("target") or "").strip()
+                if isinstance(tag, dict)
+                else ""
+            )
             if not name or not target:
                 return [], {
                     "status": "media_tag_invalid",
@@ -117,12 +164,39 @@ def check_media(items: list[dict[str, Any]] | None) -> tuple[list[dict[str, Any]
             try:
                 tags.append(parse_target(name, target))
             except ValueError as exc:
-                return [], {"status": "media_tag_invalid", "index": i, "detail": str(exc)}
-        out.append({"path": path, "alt_text": alt or None, "tags": tags, "kind": "image"})
+                return [], {
+                    "status": "media_tag_invalid",
+                    "index": i,
+                    "detail": str(exc),
+                }
+        out.append(
+            {"path": path, "alt_text": alt or None, "tags": tags, "kind": "image"}
+        )
     keys = {os.path.normcase(str(m["path"].expanduser().resolve())) for m in out}
     if len(keys) != len(out):
         return [], {"status": "media_invalid", "message": "the same file twice"}
     return out, None
+
+
+def _local_image_hashes(items: list[dict[str, Any]]) -> list[str] | None:
+    """Bound actual reads too: files can grow after the pre-upload stat check."""
+    hashes: list[str] = []
+    total = 0
+    try:
+        for item in items:
+            size = 0
+            digest = hashlib.sha256()
+            with item["path"].open("rb") as stream:
+                while chunk := stream.read(64 * 1024):
+                    size += len(chunk)
+                    total += len(chunk)
+                    if size > IMAGE_MAX_BYTES or total > IMAGES_TOTAL_MAX_BYTES:
+                        return None
+                    digest.update(chunk)
+            hashes.append(digest.hexdigest())
+    except OSError:
+        return None
+    return hashes
 
 
 def describe(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -157,9 +231,51 @@ _EDITOR_JS = r"""(arg) => {
       .find(Boolean);
   const area = [...ed.querySelectorAll('textarea')].filter(vis);
   return {editor: true, thumbs: thumbs.map(i => i.alt || ''),
+          thumb_sources: thumbs.map(i => i.src || ''),
           preview: preview ? (preview.alt || '') : null,
           tag_label: tag || null,
           textarea: area.length === 1 ? area[0].value : (area.length ? '#many' : null)};
+}"""
+
+# Member thumbnail labels carry positions, not file identities. Only local
+# blob bytes exactly matching the requested files can establish this binding.
+_BLOB_IDENTITIES_JS = r"""async (sources) => {
+  if (!globalThis.crypto?.subtle || sources.length > 20 ||
+      sources.some(s => !s.startsWith('blob:' + location.origin + '/'))) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    let total = 0;
+    const out = [];
+    for (const source of sources) {
+      const response = await fetch(source, {signal: controller.signal});
+      if (!response.ok) return null;
+      if (!response.body) return null;
+      const reader = response.body.getReader();
+      const chunks = [];
+      let size = 0;
+      try {
+        while (true) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          total += value.byteLength;
+          if (size > 32 * 1024 * 1024 || total > 128 * 1024 * 1024) {
+            await reader.cancel();
+            return null;
+          }
+          chunks.push(value);
+        }
+      } finally { reader.releaseLock(); }
+      const bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+      const hash = await crypto.subtle.digest('SHA-256', bytes);
+      out.push(Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join(''));
+    }
+    return out;
+  } catch (_) { return null; }
+  finally { clearTimeout(timer); }
 }"""
 
 # Mark exactly one visible control in the image editor: by label/text, or the
@@ -259,6 +375,7 @@ class MediaAttacher:
         self._allow_tags = allow_tags
         self._poll = poll
         self._timeout = timeout
+        self._bound_hashes: list[str] | None = None
 
     def _arg(self, **extra: Any) -> dict[str, Any]:
         return {
@@ -271,13 +388,24 @@ class MediaAttacher:
     async def _state(self) -> dict[str, Any]:
         return await self._page.evaluate(_EDITOR_JS, self._arg()) or {}
 
-    async def _click(self, tag: str, *, words_: list[str] | None = None,
-                     thumb: int | None = None, prefix: bool = False,
-                     scope: str = "editor") -> dict[str, Any]:
-        found = await self._page.evaluate(
-            _MARK_JS,
-            self._arg(words=words_ or [], thumb=thumb, prefix=prefix, tag=tag, scope=scope),
-        ) or {}
+    async def _click(
+        self,
+        tag: str,
+        *,
+        words_: list[str] | None = None,
+        thumb: int | None = None,
+        prefix: bool = False,
+        scope: str = "editor",
+    ) -> dict[str, Any]:
+        found = (
+            await self._page.evaluate(
+                _MARK_JS,
+                self._arg(
+                    words=words_ or [], thumb=thumb, prefix=prefix, tag=tag, scope=scope
+                ),
+            )
+            or {}
+        )
         if found.get("count") == 1 and not found.get("disabled"):
             await self._page.click(f'[data-ext-media="{tag}"]')
             await asyncio.sleep(self._poll * 2)
@@ -292,8 +420,11 @@ class MediaAttacher:
                 return got
             await asyncio.sleep(self._poll)
 
-    async def attach(self, items: list[dict[str, Any]], *, navigate: Any) -> dict[str, Any]:
+    async def attach(
+        self, items: list[dict[str, Any]], *, navigate: Any
+    ) -> dict[str, Any]:
         """Run the whole media step; ``{"status": "attached", ...}`` or a stop."""
+        self._bound_hashes = None
         kind = items[0].get("kind", "image") if items else "image"
         if kind not in self._kinds:
             return {
@@ -318,15 +449,18 @@ class MediaAttacher:
             if bad:
                 return bad
         # 1. upload, in order
-        opener = await self._page.evaluate(
-            _MARK_JS,
-            self._arg(
-                words=self._media_words,
-                tag="media-open",
-                scope="composer",
-                composer=self._editor,
-            ),
-        ) or {}
+        opener = (
+            await self._page.evaluate(
+                _MARK_JS,
+                self._arg(
+                    words=self._media_words,
+                    tag="media-open",
+                    scope="composer",
+                    composer=self._editor,
+                ),
+            )
+            or {}
+        )
         if opener.get("count") != 1:
             return {"status": "media_button_unavailable", "found": opener.get("count")}
         async with self._page.expect_file_chooser(timeout=15_000) as info:
@@ -336,22 +470,34 @@ class MediaAttacher:
 
         async def loaded() -> dict[str, Any] | None:
             st = await self._state()
-            return st if st.get("editor") and len(st.get("thumbs") or []) >= len(items) else None
+            return (
+                st
+                if st.get("editor") and len(st.get("thumbs") or []) >= len(items)
+                else None
+            )
 
         state = await self._wait(loaded)
         if not state:
             got = await self._state()
-            return {"status": "media_upload_incomplete",
-                    "thumbnails": len(got.get("thumbs") or []), "wanted": len(items)}
+            return {
+                "status": "media_upload_incomplete",
+                "thumbnails": len(got.get("thumbs") or []),
+                "wanted": len(items),
+            }
         thumbs = state["thumbs"]
         if len(thumbs) != len(items):
-            return {"status": "media_count_mismatch", "thumbnails": len(thumbs), "wanted": len(items)}
+            return {
+                "status": "media_count_mismatch",
+                "thumbnails": len(thumbs),
+                "wanted": len(items),
+            }
         # Order: the page composer names thumbnails by file, the member
         # composer by position -- either must match the request.
         names = [m["path"].name for m in items]
         by_position = [f"image {i}" for i in range(len(items))]
         if thumbs != names and thumbs != by_position:
             return {"status": "media_order_mismatch", "shown": thumbs, "wanted": names}
+        expected = None
         if thumbs != names and len(items) > 1:
             # Position labels are assigned by LinkedIn itself, so their match
             # proves nothing about which file sits where (fixture 2026-10-09:
@@ -359,10 +505,19 @@ class MediaAttacher:
             # wrong image -- only metadata that is the same on every image is safe.
             per_image = {(m["alt_text"] or "", repr(m["tags"] or [])) for m in items}
             if len(per_image) > 1:
-                return {"status": "media_order_unverifiable",
-                        "message": "This composer labels images by position only; "
-                        "per-image alt text or tags cannot be bound to a file. "
-                        "Use the same alt text/tags on every image or one image per post."}
+                sources = state.get("thumb_sources") or []
+                hashes = (
+                    await self._page.evaluate(_BLOB_IDENTITIES_JS, sources)
+                    if len(sources) == len(items)
+                    else None
+                )
+                expected = _local_image_hashes(items) if hashes is not None else None
+                if expected is None or hashes != expected:
+                    return {
+                        "status": "media_order_unverifiable",
+                        "message": "Position labels have no file identity and local blob bytes do not match the requested files in order.",
+                    }
+                self._bound_hashes = expected
 
         done: list[dict[str, Any]] = []
         for i, item in enumerate(items):
@@ -379,21 +534,58 @@ class MediaAttacher:
                 rec["tags"] = got["tagged"]
             done.append(rec)
 
+        if expected is not None:
+            current = (await self._state()).get("thumb_sources") or []
+            hashes = (
+                await self._page.evaluate(_BLOB_IDENTITIES_JS, current)
+                if len(current) == len(items)
+                else None
+            )
+            if hashes != expected:
+                return {
+                    "status": "media_order_mismatch",
+                    "message": "Image identities changed after metadata assignment.",
+                    "expected_sha256": expected,
+                    "observed_sha256": hashes,
+                }
+
         nxt = await self._click("media-next", words_=words("next"))
         if nxt.get("count") != 1:
             return {"status": "image_editor_stuck", "media": done}
 
         async def previews() -> int | None:
-            n = await self._page.evaluate(_COMPOSER_PREVIEWS_JS, {"editor": self._editor})
+            n = await self._page.evaluate(
+                _COMPOSER_PREVIEWS_JS, {"editor": self._editor}
+            )
             return n if n == len(items) else None
 
         if not await self._wait(previews):
-            n = await self._page.evaluate(_COMPOSER_PREVIEWS_JS, {"editor": self._editor})
-            return {"status": "media_upload_incomplete", "previews": n,
-                    "wanted": len(items), "media": done}
+            n = await self._page.evaluate(
+                _COMPOSER_PREVIEWS_JS, {"editor": self._editor}
+            )
+            return {
+                "status": "media_upload_incomplete",
+                "previews": n,
+                "wanted": len(items),
+                "media": done,
+            }
         return {"status": "attached", "media": done}
 
     async def _select(self, index: int) -> dict[str, Any]:
+        # Recheck before every selection, including alt-text read-back and tags.
+        # New blob URLs are fine only when their bytes retain the exact order.
+        if self._bound_hashes is not None:
+            sources = (await self._state()).get("thumb_sources") or []
+            hashes = (
+                await self._page.evaluate(_BLOB_IDENTITIES_JS, sources)
+                if len(sources) == len(self._bound_hashes)
+                else None
+            )
+            if hashes != self._bound_hashes:
+                return {
+                    "status": "media_order_mismatch",
+                    "message": "Image identities changed before metadata selection.",
+                }
         got = await self._click(f"thumb-{index}", thumb=index)
         if got.get("count") != 1:
             return {"status": "media_thumbnail_unavailable"}
@@ -413,7 +605,10 @@ class MediaAttacher:
         area = await self._page.evaluate(_TEXTAREA_JS) or {}
         if area.get("value") != text:
             await self._click("alt-back", words_=words("back"))
-            return {"status": "alt_text_not_taken", "shown": (area.get("value") or "")[:80]}
+            return {
+                "status": "alt_text_not_taken",
+                "shown": (area.get("value") or "")[:80],
+            }
         ok = await self._click("alt-ok", words_=words("media_confirm"))
         if ok.get("count") != 1 or ok.get("disabled"):
             await self._click("alt-back", words_=words("back"))
@@ -426,7 +621,10 @@ class MediaAttacher:
         area = await self._page.evaluate(_TEXTAREA_JS) or {}
         back = await self._click("alt-back", words_=words("back"))
         if area.get("value") != text:
-            return {"status": "alt_text_not_saved", "shown": (area.get("value") or "")[:80]}
+            return {
+                "status": "alt_text_not_saved",
+                "shown": (area.get("value") or "")[:80],
+            }
         if back.get("count") != 1:
             return {"status": "image_editor_stuck"}
         return {"status": "ok"}
@@ -441,7 +639,10 @@ class MediaAttacher:
             return {"status": "media_tag_control_unavailable"}
         tagged: list[str] = []
         for tag in tags:
-            box = await self._page.evaluate(_TAG_INPUT_JS, {"words": words("tag_input")}) or {}
+            box = (
+                await self._page.evaluate(_TAG_INPUT_JS, {"words": words("tag_input")})
+                or {}
+            )
             if box.get("count") != 1:
                 await self._click("tag-back", words_=words("back"))
                 return {"status": "media_tag_control_unavailable"}
@@ -456,7 +657,11 @@ class MediaAttacher:
                 # No read-back of a tag's target exists: a blind namesake is
                 # refused here, unlike in the editor.
                 await self._click("tag-back", words_=words("back"))
-                status = choice["status"] if choice["status"] != "ok" else "media_tag_unverifiable"
+                status = (
+                    choice["status"]
+                    if choice["status"] != "ok"
+                    else "media_tag_unverifiable"
+                )
                 return {**choice, "status": status}
             if not await self._page.evaluate(_TAG_PICK_JS, choice["index"]):
                 await self._click("tag-back", words_=words("back"))
@@ -481,9 +686,14 @@ class MediaAttacher:
         same = 0
         while loop.time() < end:
             await asyncio.sleep(self._poll)
-            snap = await self._page.evaluate(
-                _TAG_OPTIONS_JS, {"company_words": words("company_hint")}, isolated_context=False
-            ) or {}
+            snap = (
+                await self._page.evaluate(
+                    _TAG_OPTIONS_JS,
+                    {"company_words": words("company_hint")},
+                    isolated_context=False,
+                )
+                or {}
+            )
             opts = snap.get("options") or []
             sig = [(o.get("title"), o.get("entity")) for o in opts]
             same = same + 1 if sig and sig == last else 0
@@ -540,11 +750,18 @@ _DOC_PREVIEW_JS = r"""(arg) => {
 
 
 async def _video(self: "MediaAttacher", item: dict[str, Any]) -> dict[str, Any]:
-    opener = await self._page.evaluate(
-        _MARK_JS,
-        self._arg(words=self._media_words, tag="media-open", scope="composer",
-                  composer=self._editor),
-    ) or {}
+    opener = (
+        await self._page.evaluate(
+            _MARK_JS,
+            self._arg(
+                words=self._media_words,
+                tag="media-open",
+                scope="composer",
+                composer=self._editor,
+            ),
+        )
+        or {}
+    )
     if opener.get("count") != 1:
         return {"status": "media_button_unavailable", "found": opener.get("count")}
     async with self._page.expect_file_chooser(timeout=15_000) as info:
@@ -553,7 +770,9 @@ async def _video(self: "MediaAttacher", item: dict[str, Any]) -> dict[str, Any]:
     await chooser.set_files([str(item["path"])])
 
     async def in_editor() -> bool:
-        got = await self._page.evaluate(_VIDEO_EDITOR_JS, {"editor": self._editor}) or {}
+        got = (
+            await self._page.evaluate(_VIDEO_EDITOR_JS, {"editor": self._editor}) or {}
+        )
         return bool(got.get("editor_videos"))
 
     if not await self._wait(in_editor):
@@ -573,28 +792,47 @@ async def _video(self: "MediaAttacher", item: dict[str, Any]) -> dict[str, Any]:
         return {"status": "image_editor_stuck", "kind": "video"}
 
     async def in_composer() -> bool:
-        got = await self._page.evaluate(_VIDEO_EDITOR_JS, {"editor": self._editor}) or {}
+        got = (
+            await self._page.evaluate(_VIDEO_EDITOR_JS, {"editor": self._editor}) or {}
+        )
         return got.get("composer_videos") == 1
 
     if not await self._wait(in_composer):
         return {"status": "media_upload_incomplete", "kind": "video"}
-    return {"status": "attached", "media": [{"file": item["path"].name, "kind": "video"}]}
+    return {
+        "status": "attached",
+        "media": [{"file": item["path"].name, "kind": "video"}],
+    }
 
 
 async def _document(self: "MediaAttacher", item: dict[str, Any]) -> dict[str, Any]:
-    more = await self._page.evaluate(
-        _MARK_JS,
-        self._arg(words=words("more_options"), tag="doc-more", scope="composer",
-                  composer=self._editor),
-    ) or {}
+    more = (
+        await self._page.evaluate(
+            _MARK_JS,
+            self._arg(
+                words=words("more_options"),
+                tag="doc-more",
+                scope="composer",
+                composer=self._editor,
+            ),
+        )
+        or {}
+    )
     if more.get("count") == 1:
         await self._page.click('[data-ext-media="doc-more"]')
         await asyncio.sleep(self._poll * 2)
-    opener = await self._page.evaluate(
-        _MARK_JS,
-        self._arg(words=words("document"), tag="doc-open", scope="composer",
-                  composer=self._editor),
-    ) or {}
+    opener = (
+        await self._page.evaluate(
+            _MARK_JS,
+            self._arg(
+                words=words("document"),
+                tag="doc-open",
+                scope="composer",
+                composer=self._editor,
+            ),
+        )
+        or {}
+    )
     if opener.get("count") != 1:
         return {"status": "document_control_unavailable", "found": opener.get("count")}
     await self._page.click('[data-ext-media="doc-open"]')
@@ -614,12 +852,17 @@ async def _document(self: "MediaAttacher", item: dict[str, Any]) -> dict[str, An
     got = await self._page.evaluate(_DOC_DIALOG_JS, {"editor": self._editor}) or {}
     if got.get("title") != item["title"]:
         return {"status": "document_title_not_taken", "shown": got.get("title")}
+
     # "Fertig" stays disabled while the upload is processed (it was enabled
     # after 6 s in the measurement): wait for it, never click it disabled.
     async def ready() -> dict[str, Any] | None:
-        got = await self._page.evaluate(
-            _MARK_JS, self._arg(words=words("next"), tag="doc-done", scope="document")
-        ) or {}
+        got = (
+            await self._page.evaluate(
+                _MARK_JS,
+                self._arg(words=words("next"), tag="doc-done", scope="document"),
+            )
+            or {}
+        )
         return got if got.get("count") == 1 and not got.get("disabled") else None
 
     done = await self._wait(ready) or {}
@@ -630,13 +873,17 @@ async def _document(self: "MediaAttacher", item: dict[str, Any]) -> dict[str, An
         return {"status": "document_confirm_unavailable"}
 
     async def previewed() -> bool:
-        titles = await self._page.evaluate(_DOC_PREVIEW_JS, {"editor": self._editor}) or []
+        titles = (
+            await self._page.evaluate(_DOC_PREVIEW_JS, {"editor": self._editor}) or []
+        )
         return any(str(t).endswith(": " + item["title"]) for t in titles)
 
     if not await self._wait(previewed):
         return {"status": "document_not_attached", "kind": "document"}
-    return {"status": "attached",
-            "media": [{"file": item["path"].name, "kind": "document", "title": "verified"}]}
+    return {
+        "status": "attached",
+        "media": [{"file": item["path"].name, "kind": "document", "title": "verified"}],
+    }
 
 
 MediaAttacher._video = _video  # type: ignore[attr-defined]

@@ -1,0 +1,11 @@
+# Personal composer: per-image metadata and long-post mentions
+
+The member composer labels thumbnails `image 0`, `image 1`, etc. These labels alone cannot bind a person's photo tag or alt text to an uploaded file.
+
+For differing per-image metadata, `MediaAttacher` now accepts that branch only when every visible thumbnail is a same-origin local blob and its SHA256 matches the corresponding requested local file in exact order. Reads are bounded to 32 MiB per image and 128 MiB total, with a 15-second abort; remote thumbnail URLs and transformed bytes cannot establish this binding. The identity is checked before every image selection (including alt-text read-back and tagging) and again before leaving the image editor. A new blob URL is acceptable only if its bytes still match. Reordered, missing, changed or unreadable images stop rather than applying metadata to an uncertain image.
+
+Long programmatically inserted post text now scrolls the last paragraph into view before opening a mention typeahead. Stable unrelated prefix suggestions are allowed time to update before the bounded search deadline. Exact target identifiers, display-name checks and final inserted-ID/text read-back remain required.
+
+Live dry run on 2026-10-21 through a fresh Personal HQ wrapper process verified three original event photos, distinct alt text, two photo tags and fourteen text mentions. `posted=false`, `status=dry_run`; the composer was discarded. Receipt is in Personal HQ `active/research/gtm-tech-week-2026-10-15/approved-package-dry-run.json`. No general support for transformed/remote thumbnail identities is claimed.
+
+The authorized publication then reached the old 180-second tool deadline after the final click. No second publication was attempted. A fresh-wrapper read-only `verify_post` found the new activity and reconciled the original unknown ledger attempt. The default personal-post timeout is now 360 seconds so rich media and many native mentions leave time for final read-back. Non-default configured timeouts and all other tool deadlines remain unchanged; timeout-after-click still returns unknown and blocks automatic retry. The timeout change is covered by registration and deadline regressions; no additional live publication was made to test it.

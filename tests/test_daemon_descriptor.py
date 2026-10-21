@@ -16,12 +16,13 @@ import unicodedata
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
-import linkedin_mcp_server.daemon_descriptor as daemon_descriptor_module
+import linkedin_mcp_server.daemon.descriptor as daemon_descriptor_module
 from linkedin_mcp_server.config.schema import AppConfig
-from linkedin_mcp_server.daemon_descriptor import (
+from linkedin_mcp_server.daemon.descriptor import (
     CONTROL_FLOOR_PROTOCOL,
     PROTOCOL_VERSION,
     SCHEMA_VERSION,
@@ -35,14 +36,12 @@ from linkedin_mcp_server.daemon_descriptor import (
     daemon_state_root,
     descriptor_path,
     discard_prepared,
-    mismatched_fields,
     new_instance_id,
     new_token,
     pending_descriptor_path,
     prepare,
     prepare_daemon_state,
     profile_identity,
-    publish,
     read,
     read_token,
     token_path,
@@ -132,11 +131,17 @@ def _descriptor(
     return replace(descriptor, **overrides) if overrides else descriptor
 
 
+def _publish(auth_root: Path, descriptor: DaemonDescriptor, token: str) -> None:
+    """Stage and commit one generation, the two steps an owner takes."""
+    prepare(auth_root, descriptor, token)
+    commit_prepared(auth_root, descriptor.instance_id)
+
+
 class TestRoundTrip:
     def test_a_published_descriptor_reads_back(self, tmp_path: Path):
         token = new_token()
 
-        publish(tmp_path, _descriptor(tmp_path, token), token)
+        _publish(tmp_path, _descriptor(tmp_path, token), token)
         loaded = read(tmp_path)
 
         assert loaded is not None
@@ -151,7 +156,7 @@ class TestRoundTrip:
     def test_the_token_is_written_owner_only(self, tmp_path: Path):
         token = new_token()
 
-        publish(tmp_path, _descriptor(tmp_path, token), token)
+        _publish(tmp_path, _descriptor(tmp_path, token), token)
 
         file = token_path(tmp_path, "11111111-2222-3333-4444-555555555555")
         assert stat.S_IMODE(file.stat().st_mode) == 0o600
@@ -163,7 +168,7 @@ class TestRoundTrip:
     ):
         token = new_token()
         descriptor = _descriptor(tmp_path, token)
-        publish(tmp_path, descriptor, token)
+        _publish(tmp_path, descriptor, token)
         descriptor_file = descriptor_path(tmp_path)
         token_file = token_path(tmp_path, descriptor.instance_id)
         descriptor_file.chmod(0o666)
@@ -184,7 +189,7 @@ class TestRoundTrip:
 
         token = new_token()
         descriptor = _descriptor(tmp_path, token)
-        publish(tmp_path, descriptor, token)
+        _publish(tmp_path, descriptor, token)
 
         for path in (
             descriptor_path(tmp_path),
@@ -199,7 +204,7 @@ class TestRoundTrip:
         # secret must not be in it. Only its digest is.
         token = new_token()
 
-        publish(tmp_path, _descriptor(tmp_path, token), token)
+        _publish(tmp_path, _descriptor(tmp_path, token), token)
 
         assert token not in descriptor_path(tmp_path).read_text()
 
@@ -400,70 +405,6 @@ class TestPreparedCommit:
         assert not published.is_symlink()
         assert read(tmp_path) == descriptor
 
-    def test_publish_keeps_token_when_interrupted_after_replacement(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        token = new_token()
-        descriptor = _descriptor(tmp_path, token)
-        replace = os.replace
-
-        def replace_then_interrupt(
-            source: str | os.PathLike[str], destination: str | os.PathLike[str]
-        ) -> None:
-            replace(source, destination)
-            if Path(destination) == descriptor_path(tmp_path):
-                raise KeyboardInterrupt
-
-        monkeypatch.setattr(
-            daemon_descriptor_module.os, "replace", replace_then_interrupt
-        )
-
-        with pytest.raises(KeyboardInterrupt):
-            publish(tmp_path, descriptor, token)
-
-        assert read(tmp_path) == descriptor
-        assert read_token(tmp_path, descriptor) == token
-
-    def test_publish_keeps_token_when_replace_reports_error_after_success(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        old_token = new_token()
-        old = _descriptor(tmp_path, old_token)
-        publish(tmp_path, old, old_token)
-
-        token = new_token()
-        descriptor = _descriptor(tmp_path, token)
-        replace = os.replace
-
-        def replace_then_error(
-            source: str | os.PathLike[str], destination: str | os.PathLike[str]
-        ) -> None:
-            replace(source, destination)
-            if Path(destination) == descriptor_path(tmp_path):
-                raise OSError("rename result was lost")
-
-        monkeypatch.setattr(daemon_descriptor_module.os, "replace", replace_then_error)
-
-        with pytest.raises(OSError, match="rename result was lost"):
-            publish(tmp_path, descriptor, token)
-
-        assert token_path(tmp_path, descriptor.instance_id).read_text() == token
-        assert descriptor.instance_id in descriptor_path(tmp_path).read_text()
-
-    def test_publish_discards_generation_after_structural_replace_error(
-        self, tmp_path: Path
-    ):
-        token = new_token()
-        descriptor = _descriptor(tmp_path, token)
-        _planted_daemon_dir(tmp_path)
-        descriptor_path(tmp_path).mkdir()
-
-        with pytest.raises(IsADirectoryError):
-            publish(tmp_path, descriptor, token)
-
-        assert not pending_descriptor_path(tmp_path, descriptor.instance_id).exists()
-        assert not token_path(tmp_path, descriptor.instance_id).exists()
-
     def test_validation_rejects_another_profile(self, tmp_path: Path):
         token = new_token()
         profile = tmp_path / "profile"
@@ -475,7 +416,7 @@ class TestPreparedCommit:
                 tmp_path,
                 descriptor.instance_id,
                 profile=tmp_path / "other-profile",
-                config=None,
+                config=_config(user_data_dir=str(profile)),
             )
 
     def test_validation_rejects_another_configuration(self, tmp_path: Path):
@@ -501,7 +442,7 @@ class TestPreparedCommit:
         profile = tmp_path / "profile"
         descriptor = replace(
             _descriptor(tmp_path, token, profile=profile),
-            protocol_version=PROTOCOL_VERSION - 1,
+            protocol_version=PROTOCOL_VERSION + 1,
         )
         prepare(tmp_path, descriptor, token)
 
@@ -510,7 +451,7 @@ class TestPreparedCommit:
                 tmp_path,
                 descriptor.instance_id,
                 profile=profile,
-                config=None,
+                config=_config(user_data_dir=str(profile)),
             )
 
     def test_validation_rejects_malformed_pending_json(self, tmp_path: Path):
@@ -529,7 +470,7 @@ class TestPreparedCommit:
                 tmp_path,
                 instance_id,
                 profile=tmp_path / "profile",
-                config=None,
+                config=_config(user_data_dir=str(tmp_path / "profile")),
             )
 
     def test_validation_rejects_a_descriptor_for_another_generation(
@@ -549,7 +490,7 @@ class TestPreparedCommit:
                 tmp_path,
                 second_id,
                 profile=Path(first.profile_path),
-                config=None,
+                config=_config(user_data_dir=first.profile_path),
             )
 
     def test_discard_removes_only_its_generation(self, tmp_path: Path):
@@ -594,7 +535,7 @@ class TestRefusals:
         # Refused, not treated as absent. A corrupt descriptor beside a held
         # lock means a live daemon this client cannot talk to, and treating it
         # as absent would elect a second owner against a running browser.
-        publish(tmp_path, _descriptor(tmp_path, new_token()), new_token())
+        _publish(tmp_path, _descriptor(tmp_path, new_token()), new_token())
         descriptor_path(tmp_path).write_text("{ not json")
 
         with pytest.raises(DescriptorError, match="not valid JSON"):
@@ -607,7 +548,7 @@ class TestRefusals:
         # thousand digits: it crossed the boundary before anything could call
         # it a bad descriptor.
         token = new_token()
-        publish(tmp_path, _descriptor(tmp_path, token), token)
+        _publish(tmp_path, _descriptor(tmp_path, token), token)
         descriptor_path(tmp_path).write_text('{"port": ' + "9" * 5000 + "}")
 
         with pytest.raises(DescriptorError, match="not valid JSON"):
@@ -615,7 +556,7 @@ class TestRefusals:
 
     def test_a_missing_field_is_refused(self, tmp_path: Path):
         token = new_token()
-        publish(tmp_path, _descriptor(tmp_path, token), token)
+        _publish(tmp_path, _descriptor(tmp_path, token), token)
         raw = json.loads(descriptor_path(tmp_path).read_text())
         del raw["config_fingerprint"]
         descriptor_path(tmp_path).write_text(json.dumps(raw))
@@ -627,7 +568,7 @@ class TestRefusals:
         # Read field by field rather than unpacked, so a wrong type fails here
         # with something that names the field instead of much later.
         token = new_token()
-        publish(tmp_path, _descriptor(tmp_path, token), token)
+        _publish(tmp_path, _descriptor(tmp_path, token), token)
         raw = json.loads(descriptor_path(tmp_path).read_text())
         raw["port"] = "49152"
         descriptor_path(tmp_path).write_text(json.dumps(raw))
@@ -637,7 +578,7 @@ class TestRefusals:
 
     def test_a_future_schema_is_refused(self, tmp_path: Path):
         token = new_token()
-        publish(tmp_path, _descriptor(tmp_path, token), token)
+        _publish(tmp_path, _descriptor(tmp_path, token), token)
         raw = json.loads(descriptor_path(tmp_path).read_text())
         raw["schema_version"] = SCHEMA_VERSION + 1
         descriptor_path(tmp_path).write_text(json.dumps(raw))
@@ -650,7 +591,7 @@ class TestRefusals:
         # belongs to a different daemon, and using it would authenticate against
         # something other than what the descriptor described.
         token = new_token()
-        publish(tmp_path, _descriptor(tmp_path, token), token)
+        _publish(tmp_path, _descriptor(tmp_path, token), token)
         loaded = read(tmp_path)
         assert loaded is not None
         token_path(tmp_path, loaded.instance_id).write_text(new_token())
@@ -730,7 +671,7 @@ class TestRefusals:
 
     def test_a_token_that_is_not_text_is_refused_as_such(self, tmp_path: Path):
         token = new_token()
-        publish(tmp_path, _descriptor(tmp_path, token), token)
+        _publish(tmp_path, _descriptor(tmp_path, token), token)
         loaded = read(tmp_path)
         assert loaded is not None
         token_path(tmp_path, loaded.instance_id).write_bytes(b"\xff\xfe")
@@ -743,10 +684,10 @@ class TestRefusals:
     ):
         # Refusing it here made an older owner unreadable, and an owner nobody
         # can read is one nobody can ask to stand down. The comparison moved to
-        # `daemon._inspect`, which turns it into a control-only pair; this pins
-        # that `read` still parses and returns the owner's real protocol.
+        # `daemon.discovery._inspect`, which turns it into a control-only pair; this
+        # pins that `read` still parses and returns the owner's real protocol.
         token = new_token()
-        publish(tmp_path, _descriptor(tmp_path, token), token)
+        _publish(tmp_path, _descriptor(tmp_path, token), token)
         raw = json.loads(descriptor_path(tmp_path).read_text())
         raw["protocol_version"] = PROTOCOL_VERSION + 1
         descriptor_path(tmp_path).write_text(json.dumps(raw))
@@ -760,7 +701,7 @@ class TestRefusals:
         # Below the floor there is no stand-down route this build can use, so
         # there is nothing it could safely do with the owner at all.
         token = new_token()
-        publish(tmp_path, _descriptor(tmp_path, token), token)
+        _publish(tmp_path, _descriptor(tmp_path, token), token)
         raw = json.loads(descriptor_path(tmp_path).read_text())
         raw["protocol_version"] = CONTROL_FLOOR_PROTOCOL - 1
         descriptor_path(tmp_path).write_text(json.dumps(raw))
@@ -777,7 +718,7 @@ class TestRefusals:
         # a planted one whose target matched the digest would have been read
         # and sent to the endpoint as this client's credential.
         token = new_token()
-        publish(tmp_path, _descriptor(tmp_path, token), token)
+        _publish(tmp_path, _descriptor(tmp_path, token), token)
         loaded = read(tmp_path)
         assert loaded is not None
         elsewhere = tmp_path / "planted"
@@ -797,7 +738,7 @@ class TestRefusals:
         # open(), before any check could run, so the read is opened
         # non-blocking and the file type is confirmed first.
         token = new_token()
-        publish(tmp_path, _descriptor(tmp_path, token), token)
+        _publish(tmp_path, _descriptor(tmp_path, token), token)
         loaded = read(tmp_path)
         assert loaded is not None
         path = token_path(tmp_path, loaded.instance_id)
@@ -809,7 +750,7 @@ class TestRefusals:
 
     def test_a_descriptor_with_no_token_beside_it_is_refused(self, tmp_path: Path):
         token = new_token()
-        publish(tmp_path, _descriptor(tmp_path, token), token)
+        _publish(tmp_path, _descriptor(tmp_path, token), token)
         loaded = read(tmp_path)
         assert loaded is not None
         token_path(tmp_path, loaded.instance_id).unlink()
@@ -823,10 +764,7 @@ class TestEndpointUrl:
         "host,expected",
         [
             ("127.0.0.1", "http://127.0.0.1:49152/mcp"),
-            ("localhost", "http://localhost:49152/mcp"),
             ("::1", "http://[::1]:49152/mcp"),
-            ("::ffff:127.0.0.1", "http://[::ffff:127.0.0.1]:49152/mcp"),
-            ("[::1]", "http://[::1]:49152/mcp"),
         ],
     )
     def test_every_accepted_host_produces_a_usable_url(
@@ -845,15 +783,52 @@ class TestEndpointUrl:
 
 
 class TestStateLocation:
-    def test_windows_uses_a_fresh_state_namespace(self):
-        assert (
-            daemon_descriptor_module._application_state_dir("nt")
-            == ".mcp-server-linkedin-v2"
+    #: Where earlier releases kept daemon state: every platform, and Windows.
+    _EARLIER_NAMESPACES = (".mcp-server-linkedin", ".mcp-server-linkedin-v2")
+
+    def test_state_lives_in_a_namespace_no_release_used(self, tmp_path: Path):
+        root = daemon_descriptor_module.daemon_state_root()
+
+        assert root.relative_to(tmp_path.resolve()).parts == (
+            ".linkedin-mcp-daemon",
+            "daemon",
         )
-        assert (
-            daemon_descriptor_module._application_state_dir("posix")
-            == ".mcp-server-linkedin"
-        )
+        assert root.parent.name not in self._EARLIER_NAMESPACES
+
+    @pytest.mark.parametrize("windows", [False, True], ids=["native", "windows"])
+    def test_earlier_namespaces_are_neither_created_nor_touched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, windows: bool
+    ):
+        # An owner from an earlier release may still be running out of either
+        # one. This build shares no coordination state with it, so it must not
+        # read, create, replace or remove anything there.
+        if windows:
+            from linkedin_mcp_server import windows_acl
+
+            monkeypatch.setattr(daemon_descriptor_module, "_WINDOWS", True)
+            monkeypatch.setattr(
+                windows_acl, "verify_children_cannot_be_replaced", lambda _path: None
+            )
+            _stub_windows_hardening(monkeypatch)
+        earlier = tmp_path / self._EARLIER_NAMESPACES[0]
+        (earlier / "daemon").mkdir(parents=True)
+        marker = earlier / "daemon" / "daemon.json"
+        marker.write_text("an earlier owner's descriptor")
+        before = marker.stat()
+        auth_root = tmp_path / "auth"
+        profile = auth_root / "profile"
+
+        prepare_daemon_state(auth_root)
+        token = new_token()
+        _publish(auth_root, _descriptor(tmp_path, token, profile=profile), token)
+        assert read(auth_root) is not None
+
+        assert marker.read_text() == "an earlier owner's descriptor"
+        after = marker.stat()
+        assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+        assert sorted(entry.name for entry in earlier.iterdir()) == ["daemon"]
+        assert not (tmp_path / self._EARLIER_NAMESPACES[1]).exists()
+        assert (tmp_path / ".linkedin-mcp-daemon" / "daemon").is_dir()
 
     def test_windows_account_home_pin_retains_every_replaceable_component(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -947,11 +922,6 @@ class TestStateLocation:
         from linkedin_mcp_server import windows_acl
 
         monkeypatch.setattr(daemon_descriptor_module, "_WINDOWS", True)
-        monkeypatch.setattr(
-            daemon_descriptor_module,
-            "_APPLICATION_STATE_DIR",
-            ".mcp-server-linkedin-v2",
-        )
 
         def refuse(_path: Path) -> None:
             raise PrivateStateError("unsafe home")
@@ -961,308 +931,7 @@ class TestStateLocation:
         with pytest.raises(PrivateStateError, match="unsafe home"):
             prepare_daemon_state(tmp_path / "auth")
 
-        assert not (tmp_path / ".mcp-server-linkedin").exists()
-        assert not (tmp_path / ".mcp-server-linkedin-v2").exists()
-
-    def test_windows_refuses_legacy_state_before_creating_the_new_namespace(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        legacy = tmp_path / ".mcp-server-linkedin"
-        legacy.mkdir()
-        marker = legacy / "legacy-marker"
-        marker.write_text("untouched")
-        from linkedin_mcp_server import windows_acl
-
-        monkeypatch.setattr(daemon_descriptor_module, "_WINDOWS", True)
-        monkeypatch.setattr(
-            daemon_descriptor_module,
-            "_APPLICATION_STATE_DIR",
-            ".mcp-server-linkedin-v2",
-        )
-        monkeypatch.setattr(
-            windows_acl, "verify_children_cannot_be_replaced", lambda _path: None
-        )
-
-        with pytest.raises(PrivateStateError, match="Stop every mcp-server-linkedin"):
-            prepare_daemon_state(tmp_path / "auth")
-
-        assert not (tmp_path / ".mcp-server-linkedin-v2").exists()
-        assert marker.read_text() == "untouched"
-
-    @windows_only
-    def test_windows_does_not_reuse_legacy_state(self, tmp_path: Path):
-        legacy = tmp_path / ".mcp-server-linkedin"
-        legacy.mkdir()
-
-        with pytest.raises(PrivateStateError, match="Legacy Windows daemon state"):
-            prepare_daemon_state(tmp_path / "auth")
-
-        assert not (tmp_path / ".mcp-server-linkedin-v2").exists()
-
-    def test_windows_tombstone_blocks_an_old_namespace_from_reappearing(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        from linkedin_mcp_server import windows_acl
-        from linkedin_mcp_server.common_utils import secure_mkdir
-
-        monkeypatch.setattr(daemon_descriptor_module, "_WINDOWS", True)
-        monkeypatch.setattr(
-            daemon_descriptor_module,
-            "_APPLICATION_STATE_DIR",
-            ".mcp-server-linkedin-v2",
-        )
-        monkeypatch.setattr(
-            windows_acl, "verify_children_cannot_be_replaced", lambda _path: None
-        )
-        _stub_windows_hardening(monkeypatch)
-
-        first = prepare_daemon_state(tmp_path / "auth")
-        second = prepare_daemon_state(tmp_path / "auth")
-        legacy = tmp_path / ".mcp-server-linkedin"
-
-        assert first == second
-        assert legacy.read_bytes() == daemon_descriptor_module._LEGACY_WINDOWS_TOMBSTONE
-        # Windows reports a path whose parent is a file as ERROR_PATH_NOT_FOUND
-        # rather than as a directory error, so the exception differs while the
-        # refusal this asserts is the same on both.
-        refusals = (
-            (NotADirectoryError, FileNotFoundError)
-            if os.name == "nt"
-            else NotADirectoryError
-        )
-        with pytest.raises(refusals):
-            secure_mkdir(legacy / "daemon")
-
-    def test_windows_records_the_exclusion_only_once_it_exists(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        # The question the election asks before it may start a child, so the
-        # answer has to follow the file rather than the intention to write it.
-        # Yes before the tombstone lands puts the whole guard back where it was.
-        from linkedin_mcp_server import windows_acl
-
-        monkeypatch.setattr(daemon_descriptor_module, "_WINDOWS", True)
-        monkeypatch.setattr(
-            daemon_descriptor_module,
-            "_APPLICATION_STATE_DIR",
-            ".mcp-server-linkedin-v2",
-        )
-        monkeypatch.setattr(
-            windows_acl, "verify_children_cannot_be_replaced", lambda _path: None
-        )
-        _stub_windows_hardening(monkeypatch)
-        observed: list[bool] = []
-        real_ensure = daemon_descriptor_module._ensure_legacy_windows_tombstone
-
-        def ensure(home: Path, staging_root: Path) -> None:
-            observed.append(daemon_descriptor_module.windows_exclusion_established())
-            real_ensure(home, staging_root)
-
-        monkeypatch.setattr(
-            daemon_descriptor_module, "_ensure_legacy_windows_tombstone", ensure
-        )
-
-        assert not daemon_descriptor_module.windows_exclusion_established()
-
-        prepare_daemon_state(tmp_path / "auth")
-
-        assert observed == [False], "and not while the file was still being written"
-        assert daemon_descriptor_module.windows_exclusion_established()
-        assert (tmp_path / ".mcp-server-linkedin").is_file()
-
-    def test_windows_claims_no_exclusion_while_legacy_state_stands(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        # The permanent migration error. Nothing was excluded, and saying so is
-        # what lets a caller tell this apart from a namespace it may build on.
-        from linkedin_mcp_server import windows_acl
-
-        (tmp_path / ".mcp-server-linkedin").mkdir()
-        monkeypatch.setattr(daemon_descriptor_module, "_WINDOWS", True)
-        monkeypatch.setattr(
-            daemon_descriptor_module,
-            "_APPLICATION_STATE_DIR",
-            ".mcp-server-linkedin-v2",
-        )
-        monkeypatch.setattr(
-            windows_acl, "verify_children_cannot_be_replaced", lambda _path: None
-        )
-
-        with pytest.raises(PrivateStateError, match="Stop every mcp-server-linkedin"):
-            prepare_daemon_state(tmp_path / "auth")
-
-        assert not daemon_descriptor_module.windows_exclusion_established()
-
-    @posix_only
-    def test_no_exclusion_is_claimed_off_windows(self, tmp_path: Path):
-        # There is no second namespace to exclude anywhere else, so the answer
-        # stays no and the election's wait for it never applies.
-        prepare_daemon_state(tmp_path / "auth")
-
-        assert not daemon_descriptor_module.windows_exclusion_established()
-
-    def test_windows_tombstone_is_hardened_before_publication(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        from linkedin_mcp_server import windows_acl
-
-        legacy = tmp_path / ".mcp-server-linkedin"
-        application = tmp_path / ".mcp-server-linkedin-v2"
-        hardened: list[Path] = []
-        real_harden = daemon_descriptor_module.harden_created_file
-
-        def harden(staged: Path) -> None:
-            assert staged.parent == application
-            assert staged != legacy
-            assert not legacy.exists()
-            hardened.append(staged)
-            real_harden(staged)
-
-        monkeypatch.setattr(daemon_descriptor_module, "_WINDOWS", True)
-        monkeypatch.setattr(
-            daemon_descriptor_module,
-            "_APPLICATION_STATE_DIR",
-            application.name,
-        )
-        monkeypatch.setattr(
-            windows_acl, "verify_children_cannot_be_replaced", lambda _path: None
-        )
-        _stub_windows_hardening(monkeypatch)
-        monkeypatch.setattr(daemon_descriptor_module, "harden_created_file", harden)
-
-        prepare_daemon_state(tmp_path / "auth")
-
-        assert len(hardened) == 1
-        assert not hardened[0].exists()
-        assert legacy.read_bytes() == daemon_descriptor_module._LEGACY_WINDOWS_TOMBSTONE
-
-    def test_windows_removes_a_fresh_tombstone_when_hardening_fails(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        from linkedin_mcp_server import windows_acl
-
-        monkeypatch.setattr(daemon_descriptor_module, "_WINDOWS", True)
-        monkeypatch.setattr(
-            daemon_descriptor_module,
-            "_APPLICATION_STATE_DIR",
-            ".mcp-server-linkedin-v2",
-        )
-        monkeypatch.setattr(
-            daemon_descriptor_module, "_pin_windows_account_home", lambda _path: None
-        )
-        monkeypatch.setattr(
-            windows_acl, "verify_children_cannot_be_replaced", lambda _path: None
-        )
-        monkeypatch.setattr(
-            daemon_descriptor_module,
-            "harden_created_file",
-            lambda _path: (_ for _ in ()).throw(PrivateStateError("ACL failure")),
-        )
-
-        with pytest.raises(PrivateStateError, match="ACL failure"):
-            prepare_daemon_state(tmp_path / "auth")
-
-        assert not (tmp_path / ".mcp-server-linkedin").exists()
-
-    def test_a_tombstone_from_this_release_is_accepted_by_the_next(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        """The bytes on disk outlive the constant that wrote them.
-
-        Written literally rather than through the constant, because a test that
-        writes what it reads passes whatever the marker is changed to, while a
-        machine upgrading over one from this release does not.
-        """
-        from linkedin_mcp_server import windows_acl
-
-        monkeypatch.setattr(daemon_descriptor_module, "_WINDOWS", True)
-        monkeypatch.setattr(
-            daemon_descriptor_module,
-            "_APPLICATION_STATE_DIR",
-            ".mcp-server-linkedin-v2",
-        )
-        monkeypatch.setattr(
-            daemon_descriptor_module, "_pin_windows_account_home", lambda _path: None
-        )
-        monkeypatch.setattr(
-            windows_acl, "verify_children_cannot_be_replaced", lambda _path: None
-        )
-        _stub_windows_hardening(monkeypatch)
-        legacy = tmp_path / ".mcp-server-linkedin"
-        legacy.write_bytes(b"mcp-server-linkedin-v2\n")
-        legacy.chmod(0o600)
-        before = legacy.stat().st_ino
-
-        prepare_daemon_state(tmp_path / "auth")
-
-        assert legacy.stat().st_ino == before, "it was accepted, not replaced"
-        assert daemon_descriptor_module.windows_exclusion_established()
-
-    def test_windows_keeps_a_tombstone_it_could_not_verify(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        """Publication hands the marker over, so this start stops owning it.
-
-        Another start can already have read this inode and recorded that the
-        exclusion exists. Withdrawing it leaves that process trusting a file
-        this one removed, while the marker itself is something every later
-        start verifies for itself anyway.
-        """
-        from linkedin_mcp_server import windows_acl
-
-        monkeypatch.setattr(daemon_descriptor_module, "_WINDOWS", True)
-        monkeypatch.setattr(
-            daemon_descriptor_module,
-            "_APPLICATION_STATE_DIR",
-            ".mcp-server-linkedin-v2",
-        )
-        monkeypatch.setattr(
-            daemon_descriptor_module, "_pin_windows_account_home", lambda _path: None
-        )
-        monkeypatch.setattr(
-            windows_acl, "verify_children_cannot_be_replaced", lambda _path: None
-        )
-        legacy = tmp_path / ".mcp-server-linkedin"
-
-        def refuse(path: Path) -> None:
-            assert path == legacy, "only the published marker is verified here"
-            raise PrivateStateError("unreadable marker")
-
-        monkeypatch.setattr(
-            daemon_descriptor_module, "_verify_legacy_tombstone", refuse
-        )
-
-        with pytest.raises(PrivateStateError, match="unreadable marker"):
-            prepare_daemon_state(tmp_path / "auth")
-
-        assert legacy.read_bytes() == (
-            daemon_descriptor_module._LEGACY_WINDOWS_TOMBSTONE
-        )
-        assert not list(
-            (tmp_path / ".mcp-server-linkedin-v2").glob(".legacy-exclusion-*")
-        ), "and only the staged marker was withdrawn"
-
-    def test_windows_refuses_an_invalid_legacy_tombstone(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        from linkedin_mcp_server import windows_acl
-
-        legacy = tmp_path / ".mcp-server-linkedin"
-        legacy.write_text("foreign marker")
-        monkeypatch.setattr(daemon_descriptor_module, "_WINDOWS", True)
-        monkeypatch.setattr(
-            daemon_descriptor_module,
-            "_APPLICATION_STATE_DIR",
-            ".mcp-server-linkedin-v2",
-        )
-        monkeypatch.setattr(
-            windows_acl, "verify_children_cannot_be_replaced", lambda _path: None
-        )
-
-        with pytest.raises(PrivateStateError, match="Legacy Windows daemon state"):
-            prepare_daemon_state(tmp_path / "auth")
-
-        assert not (tmp_path / ".mcp-server-linkedin-v2").exists()
+        assert not (tmp_path / daemon_descriptor_module._APPLICATION_STATE_DIR).exists()
 
     @pytest.mark.skipif(os.name == "nt", reason="portable symbolic-link contract")
     def test_windows_refuses_a_link_at_the_application_namespace(
@@ -1272,14 +941,9 @@ class TestStateLocation:
 
         target = tmp_path / "redirected"
         target.mkdir()
-        application = tmp_path / ".mcp-server-linkedin-v2"
+        application = tmp_path / daemon_descriptor_module._APPLICATION_STATE_DIR
         application.symlink_to(target, target_is_directory=True)
         monkeypatch.setattr(daemon_descriptor_module, "_WINDOWS", True)
-        monkeypatch.setattr(
-            daemon_descriptor_module,
-            "_APPLICATION_STATE_DIR",
-            ".mcp-server-linkedin-v2",
-        )
         monkeypatch.setattr(
             windows_acl, "verify_children_cannot_be_replaced", lambda _path: None
         )
@@ -1294,7 +958,7 @@ class TestStateLocation:
     def test_windows_refuses_a_permissive_application_namespace(self, tmp_path: Path):
         from linkedin_mcp_server.windows_acl import describe_dacl
 
-        application = tmp_path / ".mcp-server-linkedin-v2"
+        application = tmp_path / daemon_descriptor_module._APPLICATION_STATE_DIR
         application.mkdir()
         subprocess.run(
             ["icacls", str(application), "/grant", "*S-1-1-0:(OI)(CI)F"],
@@ -1322,7 +986,7 @@ class TestStateLocation:
     ):
         target = tmp_path / "redirected"
         target.mkdir()
-        application = tmp_path / ".mcp-server-linkedin-v2"
+        application = tmp_path / daemon_descriptor_module._APPLICATION_STATE_DIR
         subprocess.run(
             ["cmd.exe", "/d", "/c", "mklink", "/J", str(application), str(target)],
             check=True,
@@ -1413,6 +1077,7 @@ class TestStateLocation:
         monkeypatch.setattr(
             daemon_descriptor_module, "_account_home", _REAL_ACCOUNT_HOME
         )
+        monkeypatch.delenv(daemon_descriptor_module.TEST_ACCOUNT_HOME_ENV)
         auth_root = tmp_path / "shared-parent"
         auth_root.mkdir()
         before = daemon_dir(auth_root)
@@ -1451,7 +1116,7 @@ class TestStateLocation:
             home.symlink_to(real, target_is_directory=True)
         else:
             home.mkdir()
-            application = home / ".mcp-server-linkedin"
+            application = home / daemon_descriptor_module._APPLICATION_STATE_DIR
             if depth == "application":
                 application.symlink_to(real, target_is_directory=True)
             else:
@@ -1476,6 +1141,7 @@ class TestStateLocation:
         monkeypatch.setattr(
             daemon_descriptor_module, "_account_home", _REAL_ACCOUNT_HOME
         )
+        monkeypatch.delenv(daemon_descriptor_module.TEST_ACCOUNT_HOME_ENV)
         monkeypatch.setattr(os, "getuid", lambda: 424242, raising=False)
 
         import pwd
@@ -1499,6 +1165,7 @@ class TestStateLocation:
         monkeypatch.setattr(
             daemon_descriptor_module, "_account_home", _REAL_ACCOUNT_HOME
         )
+        monkeypatch.delenv(daemon_descriptor_module.TEST_ACCOUNT_HOME_ENV)
         monkeypatch.setattr(os, "getuid", lambda: 424242, raising=False)
 
         import pwd
@@ -1566,50 +1233,83 @@ class TestEndpointSpelling:
             descriptor.check_endpoint_is_local()
 
     @pytest.mark.parametrize(
-        "answers",
+        "host",
         [
-            [("203.0.113.9", 49152)],
-            [("127.0.0.1", 49152), ("10.0.0.5", 49152)],
+            "localhost",
+            "LOCALHOST",
+            "[::1]",
+            "0:0:0:0:0:0:0:1",
+            "::ffff:127.0.0.1",
+            "127.0.0.2",
         ],
     )
-    def test_a_name_resolving_off_this_machine_is_refused(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answers: list
+    def test_a_loopback_name_or_other_spelling_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str
     ):
-        # is_loopback_host accepts "localhost" by name, which says nothing
-        # about where the resolver on this machine sends it. Measured with the
-        # resolver answering 203.0.113.9: the descriptor was accepted, and the
-        # bearer token would have been posted off this machine. Every answer is
-        # checked, since one of several being loopback says nothing about the
-        # one a client picks.
+        # Each of these is loopback, and none is what an owner writes. A name
+        # needs the resolver, which takes no deadline and was measured sending
+        # "localhost" to 203.0.113.9; a second spelling of an address is one
+        # more thing to normalise for nothing. The resolver here answers
+        # loopback, so refusing says the name is never asked about.
         import socket
 
-        descriptor = _descriptor(tmp_path, new_token(), host="localhost")
         monkeypatch.setattr(
             socket,
             "getaddrinfo",
             lambda *args, **kwargs: [
-                (socket.AF_INET, socket.SOCK_STREAM, 6, "", answer)
-                for answer in answers
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 49152))
             ],
         )
+        token = new_token()
+        _publish(tmp_path, _descriptor(tmp_path, token, host=host), token)
 
-        with pytest.raises(DescriptorError, match="other than this machine"):
-            descriptor.check_endpoint_is_local()
+        with pytest.raises(DescriptorError, match="not this machine"):
+            read(tmp_path)
 
-    @pytest.mark.parametrize(
-        "host", ["127.0.0.1", "::1", "[::1]", "localhost", "::ffff:127.0.0.1"]
-    )
-    def test_every_spelling_a_daemon_publishes_is_accepted(
-        self, tmp_path: Path, host: str
+    @pytest.mark.parametrize("family", ["IPv6", "IPv4"])
+    def test_the_address_an_owner_binds_is_published_and_reaches_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, family: str
     ):
         # The other half: tightening this must not refuse an endpoint the
-        # daemon itself would write, which is easy to do by accident.
+        # owner itself writes. Bound and named the way the owner does it, read
+        # back the way a client does, and connected to through the URL.
+        import errno
+        import socket
+
         import httpx2
 
-        descriptor = _descriptor(tmp_path, new_token(), host=host)
+        from linkedin_mcp_server.daemon import owner
 
-        descriptor.check_endpoint_is_local()
-        httpx2.URL(descriptor.url)
+        if family == "IPv4":
+            # A host with IPv6 disabled, which the owner falls back from.
+            real_socket = socket.socket
+
+            def without_ipv6(af: int = -1, *args: Any, **kwargs: Any):
+                if af == socket.AF_INET6:
+                    raise OSError(errno.EAFNOSUPPORT, "IPv6 disabled")
+                return real_socket(af, *args, **kwargs)
+
+            monkeypatch.setattr(socket, "socket", without_ipv6)
+
+        sock = owner._bind_loopback()
+        try:
+            if family == "IPv6" and sock.family != socket.AF_INET6:
+                pytest.skip("This machine has no IPv6 loopback")
+            host, port = owner._endpoint_host(sock), sock.getsockname()[1]
+            token = new_token()
+            _publish(
+                tmp_path, _descriptor(tmp_path, token, host=host, port=port), token
+            )
+
+            published = read(tmp_path)
+
+            assert published is not None
+            url = httpx2.URL(published.url)
+            sock.settimeout(5)
+            with socket.create_connection((url.host, url.port), timeout=5):
+                sock.accept()[0].close()
+        finally:
+            sock.close()
 
 
 class TestAuthRootShape:
@@ -1663,7 +1363,7 @@ class TestDigestFields:
         # descriptor was accepted and the comparison failed later, outside the
         # DescriptorError every caller of this module expects.
         token = new_token()
-        publish(tmp_path, _descriptor(tmp_path, token), token)
+        _publish(tmp_path, _descriptor(tmp_path, token), token)
         raw = json.loads(descriptor_path(tmp_path).read_text())
         raw[field] = value
         descriptor_path(tmp_path).write_text(json.dumps(raw))
@@ -1764,7 +1464,7 @@ class TestInstanceIdentity:
 
     def test_a_descriptor_with_a_forged_instance_id_is_refused(self, tmp_path: Path):
         token = new_token()
-        publish(tmp_path, _descriptor(tmp_path, token), token)
+        _publish(tmp_path, _descriptor(tmp_path, token), token)
         raw = json.loads(descriptor_path(tmp_path).read_text())
         raw["instance_id"] = "../../secrets"
         descriptor_path(tmp_path).write_text(json.dumps(raw))
@@ -1823,14 +1523,6 @@ class TestProfileIdentity:
         assert not descriptor.serves(absent)
         assert not absent.exists()
 
-    def test_reporting_a_mismatch_creates_nothing(self, tmp_path: Path):
-        absent = tmp_path / "also-never-created"
-
-        assert mismatched_fields(_config(), _config(user_data_dir=str(absent))) == (
-            "user_data_dir",
-        )
-        assert not absent.exists()
-
     def test_a_case_alias_of_the_same_profile_is_served(self, tmp_path: Path):
         profile = tmp_path / "MixedRoot" / "Profile"
         profile.mkdir(parents=True)
@@ -1868,7 +1560,6 @@ class TestConfigFingerprint:
         "field,value",
         [
             ("headless", False),
-            ("user_agent", "custom-agent"),
             ("viewport_width", 1920),
             ("proxy_server", "http://proxy.example:8080"),
             ("proxy_password", "hunter2"),
@@ -1967,42 +1658,3 @@ class TestConfigFingerprint:
         assert config_fingerprint(one, key=token) == config_fingerprint(
             other, key=token
         )
-
-    def test_default_auto_import_matches_explicit_enabled(self):
-        # None is the enabled default, so spelling that default as True must not
-        # stop an otherwise compatible client from attaching.
-        token = new_token()
-        default = _config()
-        enabled = _config(auto_import_from_browser=True)
-
-        assert config_fingerprint(default, key=token) == config_fingerprint(
-            enabled, key=token
-        )
-        assert mismatched_fields(default, enabled) == ()
-
-    def test_disabled_auto_import_remains_a_difference(self):
-        token = new_token()
-        default = _config()
-        disabled = _config(auto_import_from_browser=False)
-
-        assert config_fingerprint(default, key=token) != config_fingerprint(
-            disabled, key=token
-        )
-        assert mismatched_fields(default, disabled) == ("auto_import_from_browser",)
-
-
-class TestMismatchReporting:
-    def test_mismatches_name_fields(self):
-        differing = mismatched_fields(_config(), _config(headless=False))
-
-        assert differing == ("headless",)
-
-    def test_a_mismatch_report_carries_no_values(self):
-        # What gets shown to a user. The values include a proxy password and the
-        # path to someone's browser profile, so the report names fields only.
-        differing = mismatched_fields(
-            _config(proxy_password="hunter2"), _config(proxy_password="letmein")
-        )
-
-        assert differing == ("proxy_password",)
-        assert "hunter2" not in str(differing)

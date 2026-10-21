@@ -44,6 +44,7 @@ RUNTIME = r"""
   const cfg = window.FAKE;
   const root = document.getElementById('root');
   const files = [];
+  const sources = {};
   const alts = {};
   const tags = {};
   let sel = 0;
@@ -56,7 +57,7 @@ RUNTIME = r"""
   document.body.appendChild(input);
   document.getElementById('media').addEventListener('click', () => input.click());
   input.addEventListener('change', () => {
-    [...input.files].forEach(f => files.push(f.name));
+    [...input.files].forEach(f => { files.push(f.name); sources[f.name] = URL.createObjectURL(f); });
     if (cfg.reverse) files.reverse();
     setTimeout(main, 400);   // the editor mounts after a moment
   });
@@ -73,7 +74,7 @@ RUNTIME = r"""
     const alt = button(d, cfg.t.alt, '', altView);
     alt.setAttribute('aria-pressed', 'false');
     files.forEach((f, i) => {
-      const img = h('img', {src: png, alt: cfg.engine === 'page' ? f : 'image ' + i, width: '154', height: '192'});
+      const img = h('img', {src: cfg.real_blobs ? sources[f] : png, alt: cfg.engine === 'page' ? f : 'image ' + i, width: '154', height: '192'});
       img.style.width = '154px'; img.style.height = '192px';
       if (cfg.engine === 'page') {
         const b = button(d, cfg.t.select + ' ' + f, '', () => { sel = i; main(); });
@@ -97,6 +98,7 @@ RUNTIME = r"""
     d.appendChild(area);
     const ok = button(d, '', alts[sel] ? cfg.t.update : cfg.t.add, () => {
       if (!cfg.drop_alt) alts[sel] = area.value;
+      if (cfg.swap_after_alt) files.reverse();
       main();
     }, !area.value);
     area.addEventListener('input', () => { ok.disabled = !area.value; });
@@ -130,14 +132,34 @@ RUNTIME = r"""
 </script>
 """
 
-DE = {"discard": "Verwerfen", "edit": "Bearbeiten", "tag": "Tag", "tagged": "Tag, {n} Person getaggt",
-      "alt": "Alternativer Text", "select": "Auswählen", "back": "Zurück", "next": "Weiter",
-      "add": "Hinzufügen", "update": "Aktualisieren",
-      "placeholder": "Wie würden Sie dieses Bild beschreiben?", "name_input": "Namen eingeben"}
-EN = {"discard": "Discard", "edit": "Edit", "tag": "Tag", "tagged": "Tag, {n} person tagged",
-      "alt": "Alternative text", "select": "Select", "back": "Back", "next": "Next",
-      "add": "Add", "update": "Update",
-      "placeholder": "How would you describe this image?", "name_input": "Enter a name"}
+DE = {
+    "discard": "Verwerfen",
+    "edit": "Bearbeiten",
+    "tag": "Tag",
+    "tagged": "Tag, {n} Person getaggt",
+    "alt": "Alternativer Text",
+    "select": "Auswählen",
+    "back": "Zurück",
+    "next": "Weiter",
+    "add": "Hinzufügen",
+    "update": "Aktualisieren",
+    "placeholder": "Wie würden Sie dieses Bild beschreiben?",
+    "name_input": "Namen eingeben",
+}
+EN = {
+    "discard": "Discard",
+    "edit": "Edit",
+    "tag": "Tag",
+    "tagged": "Tag, {n} person tagged",
+    "alt": "Alternative text",
+    "select": "Select",
+    "back": "Back",
+    "next": "Next",
+    "add": "Add",
+    "update": "Update",
+    "placeholder": "How would you describe this image?",
+    "name_input": "Enter a name",
+}
 LOCALES = [pytest.param(DE, id="de"), pytest.param(EN, id="en")]
 
 PEOPLE = [
@@ -154,7 +176,9 @@ def _html(engine: str, t: dict, **extra) -> str:
         '<div id="ed" role="textbox" contenteditable="true"></div>'
         f'<button id="media" aria-label="{media_label}"></button><button>Posten</button></div>'
         '<div id="root"></div>'
-        f"<script>window.FAKE = {json.dumps(cfg)};</script>" + RUNTIME + "</body></html>"
+        f"<script>window.FAKE = {json.dumps(cfg)};</script>"
+        + RUNTIME
+        + "</body></html>"
     )
 
 
@@ -183,22 +207,32 @@ def images(tmp_path):
 
 
 def _items(images, **per):
-    raw = [{"path": str(images[0]), "alt_text": "Graue Fläche"},
-           {"path": str(images[1]), "alt_text": "Blaue Fläche", **per}]
+    raw = [
+        {"path": str(images[0]), "alt_text": "Graue Fläche"},
+        {"path": str(images[1]), "alt_text": "Blaue Fläche", **per},
+    ]
     items, bad = check_media(raw)
     assert bad is None, bad
     return items
 
 
 def _one(images, **per):
-    items, bad = check_media([{"path": str(images[0]), "alt_text": "Graue Fläche", **per}])
+    items, bad = check_media(
+        [{"path": str(images[0]), "alt_text": "Graue Fläche", **per}]
+    )
     assert bad is None, bad
     return items
 
 
 def _attacher(pg, *, tags: bool) -> MediaAttacher:
-    return MediaAttacher(pg, editor_selector="#ed", media_words=words("media"),
-                         allow_tags=tags, poll=0.2, timeout=5.0)
+    return MediaAttacher(
+        pg,
+        editor_selector="#ed",
+        media_words=words("media"),
+        allow_tags=tags,
+        poll=0.2,
+        timeout=5.0,
+    )
 
 
 async def _no_nav(url):
@@ -216,16 +250,63 @@ async def test_member_alt_text_and_tag_by_identifier(page, images, t) -> None:
     items = _one(images, tags=[{"name": "Max Platzhalter", "target": MAX_B}])
     got = await _attacher(page, tags=True).attach(items, navigate=_no_nav)
     assert got["status"] == "attached", got
-    assert got["media"][0] == {"file": "grau.png", "alt_text": "verified", "tags": [MAX_B]}
+    assert got["media"][0] == {
+        "file": "grau.png",
+        "alt_text": "verified",
+        "tags": [MAX_B],
+    }
 
 
 @pytest.mark.parametrize("t", LOCALES)
-async def test_member_distinct_metadata_on_several_images_is_refused(page, images, t) -> None:
+async def test_member_distinct_metadata_on_several_images_is_refused(
+    page, images, t
+) -> None:
     # Member thumbnails are labelled by position only: the file behind each
     # one cannot be read, so differing alt texts could be swapped silently.
     await page.set_content(_html("member", t))
     got = await _attacher(page, tags=True).attach(_items(images), navigate=_no_nav)
     assert got["status"] == "media_order_unverifiable", got
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_member_distinct_metadata_requires_exact_blob_file_order(
+    page, images, reverse
+) -> None:
+    # Distinct file bytes establish identity independently of positional labels.
+    images[1].write_bytes(images[1].read_bytes() + b"different")
+    await page.route(
+        "https://media-fixture.test/",
+        lambda route: route.fulfill(
+            content_type="text/html",
+            body=_html("member", EN, real_blobs=True, reverse=reverse),
+        ),
+    )
+    await page.goto("https://media-fixture.test/")
+    got = await _attacher(page, tags=True).attach(
+        _items(images, tags=[{"name": "Max Platzhalter", "target": MAX_B}]),
+        navigate=_no_nav,
+    )
+    if reverse:
+        assert got["status"] == "media_order_unverifiable", got
+    else:
+        assert got["status"] == "attached", got
+        assert got["media"][1]["tags"] == [MAX_B]
+
+
+async def test_member_blob_reorder_during_alt_edit_stops_before_tagging(
+    page, images
+) -> None:
+    images[1].write_bytes(images[1].read_bytes() + b"different")
+    await page.route(
+        "https://media-fixture.test/",
+        lambda route: route.fulfill(
+            content_type="text/html",
+            body=_html("member", EN, real_blobs=True, swap_after_alt=True),
+        ),
+    )
+    await page.goto("https://media-fixture.test/")
+    got = await _attacher(page, tags=True).attach(_items(images), navigate=_no_nav)
+    assert got["status"] == "media_order_mismatch", got
 
 
 @pytest.mark.parametrize("t", LOCALES)
@@ -238,7 +319,9 @@ async def test_member_same_metadata_on_several_images_is_kept(page, images, t) -
 
 
 @pytest.mark.parametrize("t", LOCALES)
-async def test_member_alt_text_that_is_not_kept_is_caught_on_reopen(page, images, t) -> None:
+async def test_member_alt_text_that_is_not_kept_is_caught_on_reopen(
+    page, images, t
+) -> None:
     await page.set_content(_html("member", t, drop_alt=True))
     got = await _attacher(page, tags=True).attach(_one(images), navigate=_no_nav)
     assert got["status"] == "alt_text_not_saved", got
@@ -281,3 +364,31 @@ async def test_blind_tag_namesake_is_refused_even_alone(page, images) -> None:
     items = _items(images, tags=[{"name": "Max Platzhalter", "target": MAX_B}])
     got = await _attacher(page, tags=True).attach(items, navigate=_no_nav)
     assert got["status"] == "media_tag_unverifiable", got
+
+
+@pytest.mark.parametrize("aggregate", [False, True])
+async def test_blob_hashing_cancels_before_retaining_oversized_stream(page, aggregate):
+    from linkedin_mcp_server.linkedin.ext_media import _BLOB_IDENTITIES_JS
+
+    await page.route(
+        "https://media-fixture.test/", lambda route: route.fulfill(body="<html></html>")
+    )
+    await page.goto("https://media-fixture.test/")
+    await page.evaluate("""() => {
+      window.cancelled = false;
+      window.reads = 0;
+      window.fetch = async () => ({ok: true, body: {getReader: () => ({
+        read: async () => { window.reads++; return {done: false, value: new Uint8Array(1024 * 1024)}; },
+        cancel: async () => { window.cancelled = true; },
+        releaseLock: () => {}
+      })}});
+    }""")
+    # Lower only the per-image cap for aggregate mode so the cumulative guard
+    # is reached while each individual synthetic stream remains below its cap.
+    script = _BLOB_IDENTITIES_JS
+    if aggregate:
+        script = script.replace("size > 32 * 1024 * 1024", "size > 256 * 1024 * 1024")
+    result = await page.evaluate(script, ["blob:https://media-fixture.test/fake"])
+    assert result is None
+    state = await page.evaluate("({cancelled: window.cancelled, reads: window.reads})")
+    assert state == {"cancelled": True, "reads": 129 if aggregate else 33}

@@ -19,6 +19,7 @@ No browser, no network. The deadline is applied the way FastMCP applies it
 from __future__ import annotations
 
 import asyncio
+from typing import cast
 
 import anyio
 import pytest
@@ -60,6 +61,36 @@ class _Capture:
 
     def __getattr__(self, name):
         return lambda *a, **k: lambda fn: fn
+
+
+@pytest.mark.parametrize(
+    "configured,post_expected", [(None, 360.0), (0.6, 0.6), (420.0, 420.0)]
+)
+def test_rich_post_budget_preserves_explicit_custom_deadline(configured, post_expected):
+    from linkedin_mcp_server.tools.ext import register_ext_tools
+    from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
+
+    class CaptureTimeouts(_Capture):
+        def __init__(self):
+            super().__init__()
+            self.timeouts = {}
+
+        def tool(self, *args, **kwargs):
+            def register(fn):
+                self.timeouts[fn.__name__] = kwargs.get("timeout")
+                return fn
+
+            return register
+
+    cap = CaptureTimeouts()
+    register_ext_tools(
+        cast(FastMCP, cap),
+        **({} if configured is None else {"tool_timeout": configured}),
+    )
+    assert cap.timeouts["create_post"] == post_expected
+    assert cap.timeouts["send_message"] == (
+        DEFAULT_TOOL_TIMEOUT_SECONDS if configured is None else configured
+    )
 
 
 def _tools():

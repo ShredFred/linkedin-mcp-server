@@ -9,7 +9,10 @@ tests/test_ext_tools.py); without it the block is rewritten in place.
 from __future__ import annotations
 
 import asyncio
+import html
+import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from fastmcp import FastMCP
@@ -41,17 +44,29 @@ BEHAVIOUR_CHANGES = [
     "`connect_with_person` reads the 2026 More menu: `pending` when the "
     "invitation is only shown there, Connect from the menu (`connect_via: "
     "more_menu`), and a distinct `follow_only` next to `connect_unavailable`.",
-    "`create_post` keeps refusing `as_company` and points at "
-    "`create_company_post`, which opens the composer from the page's own "
-    "admin view (`/company/<id>/admin/page-posts/published/`). That makes the "
-    "page the author by construction, so the fork verifies an author instead "
-    "of switching one -- the member composer at `/feed/?shareActive=true` "
-    "carries no author control at all (measured 2026-10-09).",
+    "`create_post(as_company=..., company_name=...)` routes to the guarded "
+    "company-page composer. `create_company_post` also supports its measured "
+    "draft and scheduling workflows. Page authorship is verified against the "
+    "requested page; a personal composer is never assumed to switch authors.",
+    "Native mentions use verified person or company identifiers and exact "
+    "current display names. Decorated person names may search their core "
+    "name, while the full label and inserted entity ID still have to match. "
+    "Long posts scroll the current paragraph into view and wait for delayed "
+    "exact-target suggestions instead of accepting a stale prefix list.",
+    "Personal image posts support distinct alt text and person tags per "
+    "image. Positional thumbnail labels alone are insufficient: local blob "
+    "SHA256 hashes must match the files in order before each selection and "
+    "before leaving the editor. Unreadable, reordered or transformed images "
+    "stop the action. Photo tags require an exact identifier match.",
+    "The default personal-post deadline is 360 seconds, allowing rich media, "
+    "mentions and publication read-back. Custom non-default deadlines remain "
+    "unchanged. An uncertain publish still blocks retries; `verify_post` "
+    "reconciles an existing post without posting again.",
     "A dialog is identified by what it contains, never by its position: the "
     "composer is the dialog holding an editor *and* a commit button, the "
     "schedule dialog the one holding a date field. LinkedIn's messaging "
-    "overlay is a `role=\"dialog\"` with its own `role=\"textbox\"`, so "
-    "\"first\" and \"last\" both pick the wrong window.",
+    'overlay is a `role="dialog"` with its own `role="textbox"`, so '
+    '"first" and "last" both pick the wrong window.',
     "Scheduling picks the time from the quarter-hour list rather than typing "
     "it: the combobox reads a written value back and discards it on confirm "
     "(a 15:00 request became 14:45). A minute off the 15-minute grid is "
@@ -71,26 +86,50 @@ BEHAVIOUR_CHANGES = [
 # Configuration the fork reads from the environment. Deployment identity
 # (canary profile, booking account) is configured, never built in.
 CONFIGURATION = [
-    ("LINKEDIN_MCP_CANARY", "unset",
-     "Profile slug of an own or colleague account that receives every campaign "
-     "text first (`send_campaign_batch`) and that `outreach_selftest` loads. "
-     "Unset: campaigns and the self-test refuse (`canary_not_configured`)."),
-    ("LINKEDIN_MCP_CALENDLY_ACCOUNT", "unset",
-     "The only Calendly account a message may link to (`acme_jane-doe` or "
-     "`calendly.com/acme_jane-doe`). Unset: every Calendly link is refused."),
-    ("LINKEDIN_MCP_INVITE_NOTE_MAX", "200",
-     "Longest invitation note `connect_with_person` accepts (at most 300)."),
-    ("LINKEDIN_MCP_ALLOW_UPSTREAM_WRITES", "unset",
-     "`1` also registers the unguarded upstream write tools as "
-     "`send_message_unguarded` / `connect_with_person_unguarded`. Leave unset."),
-    ("LINKEDIN_MCP_LEDGER", "~/.linkedin-mcp/outreach-ledger.jsonl",
-     "Outreach ledger: every write attempt, its outcome and the pacer bookings."),
-    ("LINKEDIN_MCP_NOTES", "~/.linkedin-mcp/contact-notes.json",
-     "Local contact keywords and notes (`set_contact_note`)."),
-    ("LINKEDIN_MCP_ENGAGERS_SEEN", "~/.linkedin-mcp/engagers-seen.json",
-     "Which post engagers were already reported (`only_new`)."),
-    ("LINKEDIN_MCP_JOB_WATCH", "~/.linkedin-mcp/job-watch.json",
-     "Saved searches and companies for `job_watch`."),
+    (
+        "LINKEDIN_MCP_CANARY",
+        "unset",
+        "Profile slug of an own or colleague account that receives every campaign "
+        "text first (`send_campaign_batch`) and that `outreach_selftest` loads. "
+        "Unset: campaigns and the self-test refuse (`canary_not_configured`).",
+    ),
+    (
+        "LINKEDIN_MCP_CALENDLY_ACCOUNT",
+        "unset",
+        "The only Calendly account a message may link to (`acme_jane-doe` or "
+        "`calendly.com/acme_jane-doe`). Unset: every Calendly link is refused.",
+    ),
+    (
+        "LINKEDIN_MCP_INVITE_NOTE_MAX",
+        "200",
+        "Longest invitation note `connect_with_person` accepts (at most 300).",
+    ),
+    (
+        "LINKEDIN_MCP_ALLOW_UPSTREAM_WRITES",
+        "unset",
+        "`1` also registers the unguarded upstream write tools as "
+        "`send_message_unguarded` / `connect_with_person_unguarded`. Leave unset.",
+    ),
+    (
+        "LINKEDIN_MCP_LEDGER",
+        "~/.linkedin-mcp/outreach-ledger.jsonl",
+        "Outreach ledger: every write attempt, its outcome and the pacer bookings.",
+    ),
+    (
+        "LINKEDIN_MCP_NOTES",
+        "~/.linkedin-mcp/contact-notes.json",
+        "Local contact keywords and notes (`set_contact_note`).",
+    ),
+    (
+        "LINKEDIN_MCP_ENGAGERS_SEEN",
+        "~/.linkedin-mcp/engagers-seen.json",
+        "Which post engagers were already reported (`only_new`).",
+    ),
+    (
+        "LINKEDIN_MCP_JOB_WATCH",
+        "~/.linkedin-mcp/job-watch.json",
+        "Saved searches and companies for `job_watch`.",
+    ),
 ]
 
 SAFETY_MODEL = [
@@ -190,8 +229,9 @@ def render() -> str:
         BEGIN,
         "",
         "> **Hardened fork** of [stickerdaniel/linkedin-mcp-server]"
-        "(https://github.com/stickerdaniel/linkedin-mcp-server). Upstream is merged in "
-        "weekly; everything below is added on top of the base version and kept.",
+        "(https://github.com/stickerdaniel/linkedin-mcp-server). The fork keeps "
+        "its guarded tools on top of upstream. Sync instructions are in "
+        "[docs/upstream-sync.md](docs/upstream-sync.md).",
         ">",
         *INSTALL,
         ">",
@@ -211,7 +251,9 @@ def render() -> str:
         "> | Variable | Default | Meaning |",
         "> | --- | --- | --- |",
     ]
-    lines += [f"> | `{name}` | {default} | {text} |" for name, default, text in CONFIGURATION]
+    lines += [
+        f"> | `{name}` | {default} | {text} |" for name, default, text in CONFIGURATION
+    ]
     lines += [
         ">",
         "> A state file from before the rename to these plain names "
@@ -225,7 +267,68 @@ def render() -> str:
     return "\n".join(lines)
 
 
+@dataclass
+class _Panel:
+    start: int
+    summary_start: int | None = None
+    label: str = ""
+
+
+def without_promotions(text: str) -> str:
+    """Drop complete upstream sponsor panels, retaining technical details.
+
+    A balanced scan prevents a nested setup/help panel from being cut at its
+    first closing tag. Incomplete sponsor markup is an error, not a guess.
+    """
+    stack: list[_Panel] = []
+    remove: list[tuple[int, int]] = []
+    sponsor = re.compile(
+        r"\b(?:LinkedIn MCP Sponsor|Sponsored proxy providers)\b", re.I
+    )
+
+    def label(value: str) -> str:
+        return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", value)).split())
+
+    for token in re.finditer(r"</?(?:details|summary)\b[^>]*>", text, re.I):
+        tag = token.group().lower()
+        if tag.startswith("<summary"):
+            if stack:
+                stack[-1].summary_start = token.end()
+        elif tag.startswith("</summary"):
+            if stack:
+                frame = stack[-1]
+                if frame.summary_start is not None:
+                    frame.label = label(text[frame.summary_start : token.start()])
+        elif tag.startswith("</details"):
+            if not stack:
+                continue
+            frame = stack.pop()
+            if sponsor.search(frame.label):
+                remove.append((frame.start, token.end()))
+        else:
+            stack.append(_Panel(start=token.start()))
+    for frame in stack:
+        if sponsor.search(label(text[frame.start :])):
+            raise ValueError("Unclosed upstream sponsor panel; review README markup")
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(remove):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    for start, end in reversed(merged):
+        text = text[:start] + text[end:]
+    if sponsor.search(label(text)) or re.search(
+        r"cadenza\.page|golink\.onl/unipile|FOUNDING20", text, re.I
+    ):
+        raise ValueError(
+            "Upstream promotion outside a known panel; review README markup"
+        )
+    return text
+
+
 def updated(text: str) -> str:
+    text = without_promotions(text)
     block = render()
     if BEGIN in text and END in text:
         head, rest = text.split(BEGIN, 1)
@@ -242,9 +345,7 @@ def main() -> int:
     new = updated(text)
     if "--check" in sys.argv:
         if new != text:
-            sys.stderr.write(
-                "README fork block is stale; run scripts/fork_readme.py\n"
-            )
+            sys.stderr.write("README fork block is stale; run scripts/fork_readme.py\n")
             return 1
         return 0
     if new != text:

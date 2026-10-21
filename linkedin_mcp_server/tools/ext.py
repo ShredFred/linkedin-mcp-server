@@ -64,6 +64,7 @@ TAG = "ext"
 SEND_GAP = (25.0, 70.0)
 BATCH_MAX = 3
 BATCH_TIMEOUT_SECONDS = 600.0
+POST_TOOL_TIMEOUT_SECONDS = 360.0
 _THREAD_RE = re.compile(r"/messaging/thread/([A-Za-z0-9_=-]+)/")
 
 
@@ -984,7 +985,7 @@ def register_ext_tools(
         return found
 
     @mcp.tool(
-        timeout=tool_timeout,
+        timeout=POST_TOOL_TIMEOUT_SECONDS if tool_timeout == DEFAULT_TOOL_TIMEOUT_SECONDS else tool_timeout,
         title="Create Post",
         annotations={"destructiveHint": True, "openWorldHint": True},
         tags={TAG, "post", "actions"},
@@ -1035,10 +1036,10 @@ def register_ext_tools(
                 tags; measured 2026-10-09); documents only through the page
                 composer. Stops: media_invalid, media_invalid_path,
                 media_unsupported_type, media_kind_unmeasured,
-                media_mix_unsupported, media_option_unsupported, media_too_many, alt_text_invalid,
+                media_mix_unsupported, media_option_unsupported, media_too_many, media_too_large, alt_text_invalid,
                 media_tag_invalid, media_button_unavailable,
                 media_upload_incomplete, media_count_mismatch,
-                media_order_mismatch, media_order_unverifiable (person composer, several images with differing alt text or tags: thumbnails carry only a position), media_thumbnail_unavailable,
+                media_order_mismatch, media_order_unverifiable (person composer, differing per-image metadata requires thumbnail local-blob SHA256 hashes to match the files in exact order), media_thumbnail_unavailable,
                 alt_text_control_unavailable, alt_text_not_taken,
                 alt_text_confirm_unavailable, alt_text_not_saved,
                 media_tag_control_unavailable, media_tag_confirm_unavailable,
@@ -1084,6 +1085,9 @@ def register_ext_tools(
         posted=false: not_posted (retry_safe=true, deadline before the
         publish click) or unknown (retry_safe=false, may be live: check
         recent activity, do not repost).
+        The default personal-post deadline is 360 seconds to leave time for
+        rich media, native mentions and post-publication read-back. A custom
+        non-default tool_timeout is retained. Other tool deadlines are unchanged.
         """
         segments, mention_info, bad = prepare_text(text, mentions, mention_check)
         if bad:

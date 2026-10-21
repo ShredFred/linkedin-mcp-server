@@ -16,27 +16,28 @@ from pathlib import Path
 
 import pytest
 
-import linkedin_mcp_server.daemon as daemon_module
-import linkedin_mcp_server.daemon_descriptor as daemon_descriptor_module
+import linkedin_mcp_server.daemon.discovery as daemon_module
+import linkedin_mcp_server.daemon.descriptor as daemon_descriptor_module
 import linkedin_mcp_server.storage_class as storage_class_module
 from linkedin_mcp_server.config.schema import AppConfig
-from linkedin_mcp_server.daemon import (
+from linkedin_mcp_server.daemon.discovery import (
     Mismatch,
     OwnerState,
     daemon_would_be_used,
     look_up_owner,
 )
-from linkedin_mcp_server.daemon_descriptor import (
+from linkedin_mcp_server.daemon.descriptor import (
     DescriptorError,
     build,
+    commit_prepared,
     descriptor_path,
     new_instance_id,
     new_token,
-    publish,
+    prepare,
     read,
     token_path,
 )
-from linkedin_mcp_server.daemon_lock import DaemonLock
+from linkedin_mcp_server.daemon.lock import DaemonLock
 from linkedin_mcp_server.session_state import canonical
 from linkedin_mcp_server.storage_class import Classification, StorageClass
 
@@ -69,22 +70,20 @@ def _publish_owner(
     """Publish a descriptor as a live owner would, and return its token."""
     profile.mkdir(parents=True, exist_ok=True)
     token = new_token()
-    publish(
-        auth_root,
-        build(
-            instance_id=new_instance_id(),
-            package_version="4.20.0",
-            runtime_id=runtime_id,
-            profile=profile,
-            host=host,
-            port=49152,
-            path="/mcp",
-            token=token,
-            config=config or _config(profile),
-            log_path=auth_root / "daemon.log",
-        ),
-        token,
+    descriptor = build(
+        instance_id=new_instance_id(),
+        package_version="4.20.0",
+        runtime_id=runtime_id,
+        profile=profile,
+        host=host,
+        port=49152,
+        path="/mcp",
+        token=token,
+        config=config or _config(profile),
+        log_path=auth_root / "daemon.log",
     )
+    prepare(auth_root, descriptor, token)
+    commit_prepared(auth_root, descriptor.instance_id)
     return token
 
 
@@ -98,6 +97,31 @@ class TestAttaching:
         assert attachment is not None
         assert attachment.token == token
         assert attachment.descriptor.url == "http://127.0.0.1:49152/mcp"
+
+    @pytest.mark.parametrize(
+        ("field", "theirs", "ours"),
+        [
+            ("login_timeout_seconds", 1800.0, 600.0),
+            ("login_inline_wait_seconds", 25.0, 0.0),
+            ("auto_import_from_browser", None, False),
+        ],
+    )
+    def test_a_client_with_other_login_settings_shares_the_owner(
+        self, tmp_path: Path, field: str, theirs: object, ours: object
+    ):
+        # The owner never signs in, so how a client would sign in says nothing
+        # about the browser it is served. Refusing over it would give that
+        # client a second browser on the same account for no reason.
+        profile = tmp_path / "profile"
+        token = _publish_owner(
+            tmp_path, profile, config=_config(profile, **{field: theirs})
+        )
+
+        lookup = look_up_owner(tmp_path, profile, _config(profile, **{field: ours}))
+
+        assert lookup.attachment is not None
+        assert lookup.attachment.token == token
+        assert not lookup.attachment.control_only
 
     def test_no_daemon_is_not_an_error(self, tmp_path: Path):
         # The ordinary first-start case. Nothing published, nobody to talk to.
@@ -148,21 +172,22 @@ class TestRefusing:
 
         assert look_up_owner(tmp_path, ours, _config(ours)).attachment is None
 
-    def test_a_daemon_with_a_different_configuration_is_refused(self, tmp_path: Path):
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("proxy_server", "http://proxy.example:8080"), ("headless", False)],
+    )
+    def test_a_daemon_with_a_different_configuration_is_refused(
+        self, tmp_path: Path, field: str, value: object
+    ):
         # Attaching anyway would silently give the client a browser configured
-        # differently from the one it asked for — a different proxy, in this
-        # case, which is the difference between traffic leaving the machine one
-        # way or another.
+        # differently from the one it asked for: traffic leaving the machine
+        # through another address, or a window where none was expected.
         #
         # The pair still comes back, proved but control-only, so the election
         # can ask whether that owner is alive before leaving it alone. Nothing
         # that dispatches a call accepts it.
         profile = tmp_path / "profile"
-        _publish_owner(
-            tmp_path,
-            profile,
-            config=_config(profile, proxy_server="http://proxy.example:8080"),
-        )
+        _publish_owner(tmp_path, profile, config=_config(profile, **{field: value}))
 
         lookup = look_up_owner(tmp_path, profile, _config(profile))
 
@@ -233,7 +258,7 @@ class TestLookingForAnOwnerToRetire:
         _publish_owner(tmp_path, profile)
         _rewrite_published(
             tmp_path,
-            protocol_version=daemon_descriptor_module.PROTOCOL_VERSION - 1,
+            protocol_version=daemon_descriptor_module.PROTOCOL_VERSION + 1,
         )
 
         lookup = look_up_owner(tmp_path, profile, _config(profile), for_retirement=True)
@@ -272,15 +297,12 @@ class TestAnOwnerOfAnotherProtocol:
     to leave, and every check that makes a pair trustworthy still runs on it.
     """
 
-    @pytest.mark.parametrize("offset", [-1, 1], ids=["older", "newer"])
-    def test_it_comes_back_proved_but_for_control_only(
-        self, tmp_path: Path, offset: int
-    ):
+    def test_it_comes_back_proved_but_for_control_only(self, tmp_path: Path):
         profile = tmp_path / "profile"
         token = _publish_owner(tmp_path, profile)
         _rewrite_published(
             tmp_path,
-            protocol_version=daemon_descriptor_module.PROTOCOL_VERSION + offset,
+            protocol_version=daemon_descriptor_module.PROTOCOL_VERSION + 1,
         )
 
         lookup = look_up_owner(tmp_path, profile, _config(profile))
@@ -299,7 +321,7 @@ class TestAnOwnerOfAnotherProtocol:
         _publish_owner(tmp_path, profile)
         _rewrite_published(
             tmp_path,
-            protocol_version=daemon_descriptor_module.PROTOCOL_VERSION - 1,
+            protocol_version=daemon_descriptor_module.PROTOCOL_VERSION + 1,
         )
         published = read(tmp_path)
         assert published is not None
@@ -319,7 +341,7 @@ class TestAnOwnerOfAnotherProtocol:
         _publish_owner(tmp_path, theirs, config=_config(ours))
         _rewrite_published(
             tmp_path,
-            protocol_version=daemon_descriptor_module.PROTOCOL_VERSION - 1,
+            protocol_version=daemon_descriptor_module.PROTOCOL_VERSION + 1,
         )
 
         lookup = look_up_owner(tmp_path, ours, _config(ours))
@@ -352,7 +374,7 @@ class TestAnOwnerOfAnotherProtocol:
         assert descriptor_path(tmp_path).exists()
 
     def test_an_off_machine_endpoint_is_refused_before_the_token_is_sent(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+        self, tmp_path: Path
     ):
         # The descriptor is a file, so its host is whatever was last written
         # there. Posting a bearer token to it unchecked would turn a corrupted
@@ -365,16 +387,16 @@ class TestAnOwnerOfAnotherProtocol:
         profile = tmp_path / "profile"
         token = _publish_owner(tmp_path, profile, host="198.51.100.7")
 
-        with caplog.at_level("DEBUG", logger="linkedin_mcp_server.daemon"):
-            assert look_up_owner(tmp_path, profile, _config(profile)).attachment is None
+        lookup = look_up_owner(tmp_path, profile, _config(profile))
 
+        assert lookup.attachment is None
         # Refused for the right reason, and it says so: a silent None here
         # reads like an ordinary first start rather than a descriptor pointing
-        # off the machine. The address is DEBUG-grade, because a reason can
-        # quote a path or host out of the descriptor.
-        assert "198.51.100.7" in caplog.text
-        # And the token itself never appears in what we log about the refusal.
-        assert token not in caplog.text
+        # off the machine. The reason is DEBUG-grade wherever it is logged,
+        # because it can quote a path or host out of the descriptor.
+        assert "198.51.100.7" in lookup.reason
+        # And the token itself never appears in the refusal.
+        assert token not in lookup.reason
 
     def test_a_descriptor_with_no_token_beside_it_is_untrusted(self, tmp_path: Path):
         # The pair can come apart: a half-finished publish, or a token file
@@ -411,37 +433,8 @@ class TestAnOwnerOfAnotherProtocol:
         assert descriptor_path(tmp_path).exists()
 
 
-class TestWaitingForAStartingOwner:
-    """The window between a lock being taken and a descriptor being published.
-
-    An owner binds and starts serving before it publishes, so a client that
-    arrives in between sees no descriptor and also cannot take the lock. That is
-    the normal two-client startup, and treating it as "no daemon" would leave
-    this process driving its own browser against the same profile for its whole
-    life — the per-call handoff the daemon exists to remove.
-    """
-
-    def test_an_owner_that_publishes_late_is_still_found(self, tmp_path: Path):
-        profile = tmp_path / "profile"
-        profile.mkdir()
-        published = threading.Event()
-
-        def publish_after_a_moment() -> None:
-            time.sleep(0.3)
-            _publish_owner(tmp_path, profile)
-            published.set()
-
-        starter = threading.Thread(target=publish_after_a_moment)
-        starter.start()
-        try:
-            lookup = look_up_owner(
-                tmp_path, profile, _config(profile), wait_seconds=5.0
-            )
-        finally:
-            starter.join()
-
-        assert published.is_set()
-        assert lookup.attachment is not None
+class TestOneBoundedRead:
+    """A profile command reads what is recorded now, and never hangs on it."""
 
     def test_a_blocked_descriptor_read_is_bounded(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -466,85 +459,6 @@ class TestWaitingForAStartingOwner:
         assert blocked.is_set()
         assert lookup.state is OwnerState.UNTRUSTED
         assert time.monotonic() - started < 0.1
-
-    def test_waiting_gives_up_rather_than_hanging(self, tmp_path: Path):
-        # Nothing ever publishes. The caller has to get an answer, because a
-        # client blocked here is a client whose first tool call never returns.
-        profile = tmp_path / "profile"
-        profile.mkdir()
-
-        started = time.monotonic()
-        lookup = look_up_owner(tmp_path, profile, _config(profile), wait_seconds=0.3)
-
-        assert lookup.attachment is None
-        assert time.monotonic() - started >= 0.3
-
-    @pytest.mark.parametrize("budget", [float("nan"), float("inf")])
-    def test_a_wait_that_never_ends_is_refused(self, tmp_path: Path, budget: float):
-        # `monotonic() >= nan` is false forever and so is `>= inf`, so either
-        # one turns the poll into a process that never finishes starting.
-        # Refused rather than clamped: an unbounded wait is a plausible thing
-        # to mean and a ruinous thing to grant.
-        profile = tmp_path / "profile"
-        profile.mkdir()
-
-        with pytest.raises(ValueError):
-            look_up_owner(tmp_path, profile, _config(profile), wait_seconds=budget)
-
-    @pytest.mark.parametrize("budget", [0.001, 0.01])
-    def test_a_small_budget_is_not_rounded_up_to_a_poll(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, budget: float
-    ):
-        # A flat poll interval turned a 1 ms budget into 101 ms: a caller who
-        # asked to stay near fail-fast paid a hundredfold.
-        #
-        # Asserts what the code *asks for*, not what the clock shows. An upper
-        # bound on elapsed time fails on a descheduled runner even when the
-        # request was correct — reproduced: a 0.8 ms sleep request measured
-        # 66 ms of wall time. That is a test failing at the machine rather than
-        # at the code, and in CI it would be indistinguishable from a real bug.
-        profile = tmp_path / "profile"
-        profile.mkdir()
-
-        requested: list[float] = []
-        real_sleep = time.sleep
-
-        def record(duration: float) -> None:
-            requested.append(duration)
-            real_sleep(duration)
-
-        monkeypatch.setattr(daemon_module.time, "sleep", record)
-
-        look_up_owner(tmp_path, profile, _config(profile), wait_seconds=budget)
-
-        # No lower bound on elapsed time and no requirement that a sleep
-        # happened at all: on a loaded machine the deadline can pass during the
-        # first read, and returning immediately is then correct. Asserting
-        # otherwise made this fail for the machine's reasons rather than the
-        # code's, which is the same trap the upper bound fell into.
-        assert all(duration <= budget for duration in requested)
-
-    def test_a_negative_wait_is_simply_no_wait(self, tmp_path: Path):
-        # Unlike a non-finite budget, this one has an obvious reading.
-        profile = tmp_path / "profile"
-        profile.mkdir()
-
-        started = time.monotonic()
-        lookup = look_up_owner(tmp_path, profile, _config(profile), wait_seconds=-5.0)
-
-        assert lookup.state is OwnerState.ABSENT
-        assert time.monotonic() - started < 0.2
-
-    def test_not_waiting_is_the_default(self, tmp_path: Path):
-        # Callers that only want to know the current state must not pay for a
-        # wait they did not ask for.
-        profile = tmp_path / "profile"
-        profile.mkdir()
-
-        started = time.monotonic()
-        look_up_owner(tmp_path, profile, _config(profile)).attachment
-
-        assert time.monotonic() - started < 0.2
 
 
 class TestTellingTheRefusalsApart:
@@ -634,49 +548,6 @@ class TestTellingTheRefusalsApart:
             contender.release()
         assert after_a_crash.state is OwnerState.UNTRUSTED
 
-    def test_a_replacement_owner_is_seen_through_a_dead_descriptor(
-        self, tmp_path: Path
-    ):
-        # The tempting rule is that only ABSENT can become ATTACHABLE, because
-        # a starting owner publishes late. It is wrong: a descriptor outlives
-        # the owner that wrote it, so a fresh owner starting right now is read
-        # through the dead one's file. Returning that at once answers a
-        # question about a process that no longer exists.
-        theirs = tmp_path / "their-profile"
-        ours = tmp_path / "our-profile"
-        ours.mkdir()
-        _publish_owner(tmp_path, theirs, config=_config(ours))
-        replaced = threading.Event()
-
-        def replace_after_a_moment() -> None:
-            time.sleep(0.3)
-            _publish_owner(tmp_path, ours)
-            replaced.set()
-
-        starter = threading.Thread(target=replace_after_a_moment)
-        starter.start()
-        try:
-            lookup = look_up_owner(tmp_path, ours, _config(ours), wait_seconds=5.0)
-        finally:
-            starter.join()
-
-        assert replaced.is_set()
-        assert lookup.state is OwnerState.ATTACHABLE
-
-    def test_an_incompatible_descriptor_still_bounds_the_wait(self, tmp_path: Path):
-        # Nothing replaces it, so the caller has to get its answer. A client
-        # blocked here is a client whose first tool call never returns.
-        theirs = tmp_path / "their-profile"
-        ours = tmp_path / "our-profile"
-        ours.mkdir()
-        _publish_owner(tmp_path, theirs, config=_config(ours))
-
-        started = time.monotonic()
-        lookup = look_up_owner(tmp_path, ours, _config(ours), wait_seconds=0.3)
-
-        assert lookup.state is OwnerState.INCOMPATIBLE
-        assert time.monotonic() - started >= 0.3
-
     def test_a_matching_descriptor_from_a_dead_owner_is_still_only_a_file(
         self, tmp_path: Path
     ):
@@ -722,23 +593,6 @@ class TestTellingTheRefusalsApart:
         assert "hunter2-not-in-logs" not in lookup.reason
         assert "proxy.example" not in lookup.reason
 
-    def test_a_path_in_a_reason_stays_out_of_the_info_log(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ):
-        # A reason can quote a path out of the descriptor, because an unusable
-        # profile path is only actionable if you can see which one. INFO is
-        # what users paste into issue reports, so the detail belongs a level
-        # down and only the state stays up.
-        profile = tmp_path / "profile"
-        _publish_owner(tmp_path, profile)
-        descriptor_path(tmp_path).write_text("{not json", encoding="utf-8")
-
-        with caplog.at_level("INFO", logger="linkedin_mcp_server.daemon"):
-            look_up_owner(tmp_path, profile, _config(profile)).attachment
-
-        assert "untrusted" in caplog.text
-        assert "not valid JSON" not in caplog.text
-
 
 class TestWhetherTheDaemonAppliesAtAll:
     def test_the_daemon_is_off_by_default(self):
@@ -759,7 +613,7 @@ class TestWhetherTheDaemonAppliesAtAll:
         config = AppConfig()
         config.server.daemon_enabled = True
         monkeypatch.setattr(
-            "linkedin_mcp_server.daemon.get_runtime_id",
+            "linkedin_mcp_server.daemon.discovery.get_runtime_id",
             lambda: "linux-amd64-host",
         )
         _storage_is(monkeypatch, lambda _path: StorageClass.LOCAL)
@@ -772,11 +626,11 @@ class TestWhetherTheDaemonAppliesAtAll:
         config = AppConfig()
         config.server.daemon_enabled = True
         monkeypatch.setattr(
-            "linkedin_mcp_server.daemon.get_runtime_id",
+            "linkedin_mcp_server.daemon.discovery.get_runtime_id",
             lambda: "docker-amd64-container",
         )
 
-        with caplog.at_level("WARNING", logger="linkedin_mcp_server.daemon"):
+        with caplog.at_level("WARNING", logger="linkedin_mcp_server.daemon.discovery"):
             applies = daemon_would_be_used(config)
 
         assert applies is False
@@ -789,11 +643,11 @@ class TestWhetherTheDaemonAppliesAtAll:
         config.server.daemon_enabled = True
         config.server.transport = "streamable-http"
         monkeypatch.setattr(
-            "linkedin_mcp_server.daemon.get_runtime_id",
+            "linkedin_mcp_server.daemon.discovery.get_runtime_id",
             lambda: "docker-arm64-container",
         )
 
-        with caplog.at_level("WARNING", logger="linkedin_mcp_server.daemon"):
+        with caplog.at_level("WARNING", logger="linkedin_mcp_server.daemon.discovery"):
             applies = daemon_would_be_used(config)
 
         assert applies is False
@@ -817,8 +671,9 @@ def _storage_is(
 @pytest.fixture
 def coordination(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Every daemon coordination effect, recorded and refused if it runs."""
-    import linkedin_mcp_server.daemon_election as daemon_election_module
-    import linkedin_mcp_server.daemon_lock as daemon_lock_module
+    import linkedin_mcp_server.daemon.election as daemon_election_module
+    import linkedin_mcp_server.daemon.lock as daemon_lock_module
+    import linkedin_mcp_server.daemon.spawn as daemon_spawn_module
 
     touched: list[str] = []
 
@@ -832,8 +687,8 @@ def coordination(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     for name in ("prepare_daemon_state", "read", "read_token"):
         monkeypatch.setattr(daemon_descriptor_module, name, forbid(name))
     monkeypatch.setattr(daemon_lock_module.DaemonLock, "__init__", forbid("lock"))
-    for name in ("obtain_owner", "_spawn"):
-        monkeypatch.setattr(daemon_election_module, name, forbid(name))
+    monkeypatch.setattr(daemon_election_module, "obtain_owner", forbid("obtain_owner"))
+    monkeypatch.setattr(daemon_spawn_module, "_spawn", forbid("_spawn"))
     return touched
 
 

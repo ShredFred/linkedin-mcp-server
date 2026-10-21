@@ -207,8 +207,10 @@ async def test_a_black_hole_origin_is_a_navigation_stalled_before_its_response(
     assert navigation["timeout_ms"] is None, "the default bound, not one of ours"
     assert navigation["ended_ms"] - navigation["started_ms"] >= 29_000
     assert navigation["phases"]["request"] is not None
-    assert navigation["phases"]["response"] is None
     assert record["first_failed_navigation"] == 0
+    # Read when the goto gave up. The phases themselves are not: the recorder
+    # listens until the page closes, so a stall that delays the close records
+    # the answer at 35 s as well.
     assert record["stalled_phase"] == "response"
 
 
@@ -348,6 +350,71 @@ async def test_a_browser_killed_under_a_living_driver_is_an_unexpected_end(tmp_p
     assert processes["browser-root"]["ended"] == "unexpected"
     assert processes["browser-root"]["exit_code"] is None
     assert processes["driver"]["ended"] == "alive-at-stop"
+
+
+# --- A relaunch inside one observation --------------------------------------------
+
+
+@_browser_case
+async def test_a_relaunch_keeps_the_first_launch_and_reads_its_own_ends(tmp_path):
+    """Staging's relaunch after a stall: two browsers on one profile, observed
+    by the harness's own ``observing``. The first launch keeps the top level
+    and its stalled navigation; the second is appended, and its browser lost
+    before its own close reads as unexpected, not as ended by the first's."""
+    evidence = tmp_path / "evidence"
+    profile = tmp_path / "profile"
+
+    def roots() -> list[dict[str, Any]]:
+        document = read_document(evidence / BROWSER_LIFETIMES_FILE) or {}
+        found = [
+            p for p in document.get("processes", []) if p["role"] == "browser-root"
+        ]
+        return sorted(found, key=lambda p: p["identified_ms"])
+
+    with _Origin() as origin:
+        with observing(evidence, profile=profile, label="relaunch") as path:
+            async with _browser(profile) as context:
+                with pytest.raises(PlaywrightTimeoutError):
+                    await context.pages[0].goto(
+                        origin.url("/black-hole"), timeout=1_000
+                    )
+                await _until(roots, 15, "the first browser root was not identified")
+            async with _browser(profile) as context:
+                page = context.pages[0]
+                await page.goto(origin.url("/"))
+                second = await _until(
+                    lambda: len(roots()) == 2 and roots()[1],
+                    15,
+                    "the second browser root was not identified",
+                )
+                root = psutil.Process(second["pid"])
+                # The driver reaps its browser. Held stopped across the kill,
+                # the sampler can only find the root as a zombie, which is the
+                # read the CI runs raced into.
+                reaper = root.parent()
+                reaper.suspend()
+                try:
+                    root.kill()
+                    await _until(
+                        lambda: roots()[1]["gone_ms"] is not None,
+                        15,
+                        "the second browser root was not seen gone",
+                    )
+                finally:
+                    reaper.resume()
+    record = _record(path)
+    assert [n["launch"] for n in record["navigations"]] == [1, 2]
+    assert (record["first_failed_navigation"], record["stalled_phase"]) == (
+        0,
+        "response",
+    )
+    (relaunch,) = record["relaunches"]
+    assert record["close_requested_ms"] < relaunch["launch"]["started_ms"]
+    assert relaunch["close_requested_ms"] > relaunch["launch"]["started_ms"]
+    assert record["driver"]["pid"] != relaunch["driver"]["pid"]
+    first, second = (root["ended"] for root in roots())
+    assert first in ("after-close-request", "ambiguous")
+    assert second == "unexpected"
 
 
 # --- Observers that leave ---------------------------------------------------------
@@ -760,6 +827,8 @@ def test_a_cut_short_sample_marks_nothing_gone(tmp_path):
     (record,) = lifetimes.document["processes"]
     assert record["gone_ms"] is None
     assert lifetimes.document["truncated_samples"] == 1
+    lifetimes.stop(exc=None, requested={})
+    assert record["ended"] == "unknown"
 
 
 def test_the_closing_sample_still_reads_after_a_stop_request(tmp_path, monkeypatch):
@@ -781,6 +850,77 @@ def test_the_closing_sample_still_reads_after_a_stop_request(tmp_path, monkeypat
     lifetimes._run()
     (record,) = lifetimes.document["processes"]
     assert (record["role"], record["pid"]) == ("browser-root", 4343)
+
+
+def _listed(pid: int, status: Any) -> SimpleNamespace:
+    """A descendant as ``children`` lists it, with its create time cached."""
+    return SimpleNamespace(pid=pid, create_time=lambda: 1.0, status=status)
+
+
+def _reaped(pid: int) -> Any:
+    def status() -> str:
+        raise psutil.NoSuchProcess(pid)
+
+    return status
+
+
+def test_a_root_reaped_after_the_listing_is_gone_not_unreadable(tmp_path):
+    lifetimes = LifetimeSampler(
+        tmp_path / BROWSER_LIFETIMES_FILE, profile=tmp_path / "profile", label="reaped"
+    )
+    lifetimes._track((4242, 1.0), "browser-root", 0.0)
+    lifetimes._track((4141, 1.0), "driver", 0.0)
+    # The driver reaped the killed root between the listing and the read.
+    listed = [_listed(4242, _reaped(4242)), _listed(4141, lambda: "running")]
+    me = SimpleNamespace(children=lambda recursive: listed)
+    lifetimes._sample(psutil, me)
+    lifetimes.stop(exc=None, requested={})
+    ends = {
+        p["role"]: p["ended"]
+        for p in _record(tmp_path / BROWSER_LIFETIMES_FILE)["processes"]
+    }
+    assert ends == {"browser-root": "unexpected", "driver": "alive-at-stop"}
+
+
+def _unreadable(pid: int) -> Any:
+    def status() -> str:
+        raise psutil.AccessDenied(pid)
+
+    return status
+
+
+_RUNNING = SimpleNamespace(
+    children=lambda recursive: [_listed(4141, lambda: "running")]
+)
+_UNREADABLE = SimpleNamespace(
+    children=lambda recursive: [_listed(4141, _unreadable(4141))]
+)
+
+
+@pytest.mark.parametrize(
+    ("first", "last", "ended"),
+    [
+        # A routine sample the stop request cut short, then the closing one.
+        ((_RUNNING, time.monotonic() - 1), (_RUNNING, None), "alive-at-stop"),
+        # An earlier sample that could not read the driver, then one that did.
+        ((_UNREADABLE, None), (_RUNNING, None), "alive-at-stop"),
+        # The driver seen alive, then a closing sample that could not read it.
+        ((_RUNNING, None), (_UNREADABLE, None), "unknown"),
+    ],
+    ids=["cut-short-then-read", "unreadable-then-read", "read-then-unreadable"],
+)
+def test_only_the_closing_sample_says_whether_a_process_is_alive(
+    tmp_path, first, last, ended
+):
+    lifetimes = LifetimeSampler(
+        tmp_path / BROWSER_LIFETIMES_FILE, profile=tmp_path / "profile", label="last"
+    )
+    lifetimes._track((4141, 1.0), "driver", 0.0)
+    for me, deadline in (first, last):
+        lifetimes._sample(psutil, me, deadline=deadline)
+    lifetimes.stop(exc=None, requested={})
+    (driver,) = _record(tmp_path / BROWSER_LIFETIMES_FILE)["processes"]
+    assert driver["ended"] == ended
 
 
 def test_the_origin_record_drops_the_query(tmp_path):
@@ -826,7 +966,13 @@ def test_a_stop_does_not_wait_out_a_read_past_its_bound(tmp_path, monkeypatch):
     )
     lifetimes = LifetimeSampler(
         tmp_path / BROWSER_LIFETIMES_FILE, profile=tmp_path / "profile", label="held"
-    ).start()
+    )
+    # A driver the last finished sample saw alive, which may die while the
+    # next one is blocked.
+    lifetimes._track((8, 1.0), "driver", 0.0)
+    driver = SimpleNamespace(children=lambda recursive: [_listed(8, lambda: "running")])
+    lifetimes._sample(psutil, driver)
+    lifetimes.start()
     assert holding.wait(5), "the sampler never reached the blocking read"
     stopper = threading.Thread(target=lambda: lifetimes.stop(exc=None, requested=None))
     stopper.start()
@@ -835,6 +981,8 @@ def test_a_stop_does_not_wait_out_a_read_past_its_bound(tmp_path, monkeypatch):
     release.set()
     stopper.join(5)
     assert lifetimes.document["stopped_within_bound"] is False
+    (record,) = lifetimes.document["processes"]
+    assert record["ended"] == "unknown"
 
 
 def test_an_unreadable_process_is_not_recorded_as_gone(tmp_path):
@@ -861,33 +1009,93 @@ def test_an_unreadable_process_is_not_recorded_as_gone(tmp_path):
     assert record["gone_ms"] is None
 
 
-def test_a_death_read_during_a_sample_is_not_ordered_before_a_close(tmp_path):
+def test_a_close_after_the_machine_slept_is_not_unexpected(tmp_path, monkeypatch):
+    """The monotonic clock stops while the machine sleeps; the wall clock, which
+    the close request is stamped with, does not."""
+    lifetimes = LifetimeSampler(
+        tmp_path / BROWSER_LIFETIMES_FILE, profile=tmp_path / "profile", label="slept"
+    )
+    lifetimes._track((4242, 1.0), "browser-root", 0.0)
+    alive = SimpleNamespace(
+        children=lambda recursive: [_listed(4242, lambda: "running")]
+    )
+    gone = SimpleNamespace(children=lambda recursive: [])
+    lifetimes._sample(psutil, alive)
+    awake = time.time
+    monkeypatch.setattr(time, "time", lambda: awake() + 370)
+    asked = time.time()
+    lifetimes._sample(psutil, alive)
+    lifetimes._sample(psutil, gone)
+    lifetimes.stop(exc=None, requested={"browser-root": asked})
+    (root,) = _record(tmp_path / BROWSER_LIFETIMES_FILE)["processes"]
+    assert root["ended"] == "after-close-request"
+
+
+def test_a_wall_clock_set_back_leaves_the_order_open(tmp_path, monkeypatch):
+    lifetimes = LifetimeSampler(
+        tmp_path / BROWSER_LIFETIMES_FILE, profile=tmp_path / "profile", label="back"
+    )
+    lifetimes._track((4242, 1.0), "browser-root", 0.0)
+    alive = SimpleNamespace(
+        children=lambda recursive: [_listed(4242, lambda: "running")]
+    )
+    gone = SimpleNamespace(children=lambda recursive: [])
+    asked = time.time()
+    # Seen alive after the close was asked for, then gone once the clock is set
+    # back past the request.
+    lifetimes._sample(psutil, alive)
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() - 60)
+    lifetimes._sample(psutil, gone)
+    lifetimes.stop(exc=None, requested={"browser-root": asked})
+    (root,) = _record(tmp_path / BROWSER_LIFETIMES_FILE)["processes"]
+    assert root["ended"] == "ambiguous"
+
+
+@pytest.mark.parametrize(
+    ("while_reading", "ended"),
+    [
+        # Nothing happened between the sample's start and the read.
+        (None, "unexpected"),
+        # The close was asked for after the sample began, before the zombie
+        # was read: the death may have followed it.
+        ("close", "ambiguous"),
+        # The clock was set back after the close, before the zombie was read.
+        ("clock-back", "ambiguous"),
+    ],
+)
+def test_a_zombie_is_ordered_by_when_it_was_read(
+    tmp_path, monkeypatch, while_reading, ended
+):
+    """A root its driver has not reaped yet is gone. Its end is ordered by when
+    the sampler read it, never by when that sample began."""
     lifetimes = LifetimeSampler(
         tmp_path / BROWSER_LIFETIMES_FILE, profile=tmp_path / "profile", label="order"
     )
     lifetimes._track((6161, 1.0), "browser-root", 0.0)
+    asked: dict[str, float] = {}
+    real = time.time
 
-    class DiedWhileReading:
-        pid = 6161
-
-        def create_time(self) -> float:
-            return 1.0
-
-        def status(self) -> str:
-            return psutil.STATUS_ZOMBIE
+    def zombie() -> str:
+        if while_reading is not None and not asked:
+            asked["browser-root"] = real()
+            time.sleep(0.02)
+        if while_reading == "clock-back":
+            monkeypatch.setattr(time, "time", lambda: real() - 60)
+        return psutil.STATUS_ZOMBIE
 
     lifetimes._sample(
-        psutil, SimpleNamespace(children=lambda recursive: [DiedWhileReading()])
+        psutil, SimpleNamespace(children=lambda recursive: [_listed(6161, zombie)])
     )
     (record,) = lifetimes.document["processes"]
-    assert record["order_uncertain"] is True
     first_gone = record["gone_ms"]
     lifetimes._sample(
-        psutil, SimpleNamespace(children=lambda recursive: [DiedWhileReading()])
+        psutil, SimpleNamespace(children=lambda recursive: [_listed(6161, zombie)])
     )
-    assert record["gone_ms"] == first_gone
-    asked = {"browser-root": first_gone / 1000 + lifetimes._began_wall + 5}
-    assert lifetimes._ended(record, asked) == "ambiguous"
+    assert record["gone_ms"] == first_gone, "only the first read is its end"
+    asked.setdefault("browser-root", real() + 5)
+    lifetimes.stop(exc=None, requested=asked)
+    assert record["ended"] == ended
 
 
 def test_a_sampler_that_cannot_start_does_not_stop_the_launch(tmp_path, monkeypatch):

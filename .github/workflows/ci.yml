@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
 
@@ -107,7 +107,9 @@ jobs:
         run: python3 scripts/ci_changes.py
 
   windows-daemon:
-    name: Windows daemon (Python ${{ matrix.python-version }})
+    # No matrix expression in the name: a skipped job shows it unexpanded, and
+    # GitHub appends the matrix values to a running one by itself.
+    name: Windows daemon
     # Pull requests only, and only when the diff can affect these tests. Main
     # does not repeat the matrix. `test` rejects a skip when this was required.
     needs: changes
@@ -138,7 +140,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
@@ -178,9 +180,15 @@ jobs:
           tests/test_daemon_election.py::TestRealOwner::test_launch_barrier_failure_collects_started_frontends
           tests/test_daemon_election.py::TestAForwardedCallThroughTheRealOwner
           tests/test_daemon_proxy.py::TestAnOwnerProcessKilledMidCall
+          tests/test_daemon_silence.py::TestABlockedOwnerLoop
           tests/test_bootstrap.py::TestInstallerSupervisorLaunch::test_real_cpython_wait_unregister_contract
           tests/test_daemon_descriptor.py::TestPreparedCommit
           tests/test_daemon_descriptor.py::TestStateLocation
+          tests/test_daemon_config.py::TestDaemonLogState::test_log_file_uses_the_private_file_acl
+          tests/test_daemon_config.py::TestDaemonLogState::test_windows_log_is_hardened_before_publication
+          tests/test_daemon_config.py::TestDaemonLogState::test_a_published_windows_log_survives_a_failed_verification
+          tests/test_daemon_config.py::TestDaemonLogState::test_a_windows_log_planted_before_publication_fails_startup
+          tests/test_daemon_startup.py
           tests/test_daemon_lock.py
           tests/test_installer_supervisor.py
           tests/test_installer_worker.py
@@ -189,13 +197,15 @@ jobs:
           tests/test_windows_guardian_probe.py
           tests/test_private_state.py
           tests/test_storage_class.py
+          tests/test_daemon_pilot.py::test_the_status_survives_a_console_without_the_check_mark
+          tests/test_daemon_pilot.py::test_a_status_timeout_ends_everything_the_candidate_started
 
       # Only on failure, and tolerant of an empty folder: a Python exception
       # fails this job without ever reaching Windows Error Reporting, and that
       # is the ordinary red run.
       - name: Upload the crash dump
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: crash-dumps-${{ matrix.python-version }}
           path: ${{ runner.temp }}/crash-dumps
@@ -217,7 +227,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
 
@@ -281,7 +291,7 @@ jobs:
       # Actions. Always, so a red run keeps them.
       - name: Keep the differential evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: differential-evidence-ubuntu-latest
           path: ${{ runner.temp }}/differential-evidence
@@ -298,7 +308,9 @@ jobs:
   # tests spawn their own competing processes, and xdist would only add
   # scheduling noise on top of that.
   platform-behaviour:
-    name: Platform behaviour (${{ matrix.os }})
+    # No matrix expression in the name, as at `windows-daemon`. GitHub appends
+    # every matrix value, so the matrix holds only `os`.
+    name: Platform behaviour
     # Same gate as `windows-daemon`: relevant pull requests only, not main.
     needs: changes
     if: >-
@@ -316,23 +328,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-latest
-            browsers: ~/Library/Caches/ms-playwright
-          - os: windows-latest
-            browsers: ~\AppData\Local\ms-playwright
+        os:
+          - macos-latest
+          - windows-latest
           # Here for the browser rather than for the operating system. The
           # release publishes an arm64 image, and its browser is a separate
           # build from every other leg's: Chrome for Testing for linux-arm64
           # at the lock, Playwright's own Chromium through patchright 1.61.2.
           # Without this leg an identity regression in that build reaches the
           # container with both other jobs green.
-          - os: ubuntu-24.04-arm
-            browsers: ~/.cache/ms-playwright
+          - ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
 
@@ -361,6 +370,7 @@ jobs:
           tests/differential/test_baseline.py
           tests/differential/test_signals.py
           tests/differential/test_failed_job_query.py
+          tests/differential/test_crash_overlap.py
 
       # The identity gate runs on every leg, because every leg's browser is a
       # different one from the Ubuntu job's. macOS is the only platform with a
@@ -390,7 +400,8 @@ jobs:
       - name: Restore the browser
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ matrix.browsers }}
+          # Playwright's default browser directory on each runner.
+          path: ${{ runner.os == 'macOS' && '~/Library/Caches/ms-playwright' || runner.os == 'Windows' && '~\AppData\Local\ms-playwright' || '~/.cache/ms-playwright' }}
           key: ms-playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.patchright.outputs.version }}
 
       # `--with-deps` on Linux only. It is the platform where a missing
@@ -441,7 +452,7 @@ jobs:
       # Actions. Always, so a red run keeps them.
       - name: Keep the differential evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: differential-evidence-${{ matrix.os }}
           path: ${{ runner.temp }}/differential-evidence

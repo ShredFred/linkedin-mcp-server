@@ -1108,9 +1108,7 @@ class TestRetainedRevisionReportCallSites:
 
     async def test_a_finished_install_reports(self, isolate_profile_dir, monkeypatch):
         _patch_targets_and_version(monkeypatch)
-        config = SimpleNamespace(
-            browser=SimpleNamespace(headless=True, eager_full_chromium=False)
-        )
+        config = SimpleNamespace(browser=SimpleNamespace(headless=True))
         monkeypatch.setattr("linkedin_mcp_server.bootstrap.get_config", lambda: config)
 
         async def fake_install(extra_arg: str, **_kwargs: object) -> None:
@@ -1285,8 +1283,10 @@ class TestSetupGate:
         exits between the two calls, and the retry then reaches a fresh owner
         that starts setup over instead of reporting what went wrong.
         """
-        from linkedin_mcp_server import bootstrap, daemon_liveness, daemon_owner
-        from linkedin_mcp_server.daemon_owner import _serve_until_stopped
+        from linkedin_mcp_server import bootstrap
+        from linkedin_mcp_server.daemon import liveness as daemon_liveness
+        from linkedin_mcp_server.daemon.core import owner as lifecycle
+        from linkedin_mcp_server.daemon.owner import _serve_until_stopped
         from linkedin_mcp_server.exceptions import BrowserSetupFailedError
         from linkedin_mcp_server.server_role import ServerRole
 
@@ -1304,7 +1304,7 @@ class TestSetupGate:
         monkeypatch.setattr(bootstrap, "_browser_setup_ready", lambda: False)
         monkeypatch.setattr(bootstrap, "_run_browser_setup", setup)
         monkeypatch.setattr(bootstrap, "process_role", lambda: ServerRole.OWNER)
-        monkeypatch.setattr(daemon_owner, "_SETUP_FAILURE_RETRY_GRACE_SECONDS", 5.0)
+        monkeypatch.setattr(lifecycle, "SETUP_FAILURE_RETRY_GRACE_SECONDS", 5.0)
         initialize_bootstrap("managed")
 
         liveness = daemon_liveness.get_liveness()
@@ -1327,7 +1327,7 @@ class TestSetupGate:
             await asyncio.sleep(0.2)
 
         serving = asyncio.create_task(serves())
-        await _serve_until_stopped(server, serving, [], 0.05, lock=None)
+        await _serve_until_stopped(server, serving, 0.05, lock=None)
         assert server.should_exit is False, "the owner exited before the retry"
 
         with pytest.raises(BrowserSetupFailedError, match="the mirror refused"):
@@ -1426,22 +1426,15 @@ class TestTwoStageInstall:
         return calls
 
     @pytest.mark.parametrize("headless", [True, False])
-    @pytest.mark.parametrize("eager", [True, False])
-    async def test_one_stage_regardless_of_mode_or_eager_knob(
-        self, isolate_profile_dir, monkeypatch, headless, eager
+    async def test_one_stage_regardless_of_mode(
+        self, isolate_profile_dir, monkeypatch, headless
     ):
-        """Exactly one install, and neither setting moves it.
+        """Exactly one install, and the headless setting does not move it.
 
-        The shell stage is gone because nothing launches the shell. The eager
-        knob is inert for the same reason: with one browser, "up front" and
-        "lazily" name the same install. It stays accepted in configuration so an
-        existing command line keeps working, and it stays in the daemon
-        fingerprint, but it must not reach the installer.
+        The shell stage is gone because nothing launches the shell.
         """
         _patch_targets_and_version(monkeypatch)
-        config = SimpleNamespace(
-            browser=SimpleNamespace(headless=headless, eager_full_chromium=eager)
-        )
+        config = SimpleNamespace(browser=SimpleNamespace(headless=headless))
         monkeypatch.setattr("linkedin_mcp_server.bootstrap.get_config", lambda: config)
         calls = self._stub_install(monkeypatch)
 
@@ -1464,9 +1457,7 @@ class TestTwoStageInstall:
         from linkedin_mcp_server.exceptions import BrowserSetupFailedError
 
         _patch_targets_and_version(monkeypatch)
-        config = SimpleNamespace(
-            browser=SimpleNamespace(headless=True, eager_full_chromium=False)
-        )
+        config = SimpleNamespace(browser=SimpleNamespace(headless=True))
         monkeypatch.setattr("linkedin_mcp_server.bootstrap.get_config", lambda: config)
 
         async def fake_install(extra_arg: str, **_kwargs: object) -> None:
@@ -1489,9 +1480,7 @@ class TestTwoStageInstall:
         """The install runs inside the one background setup task."""
         _patch_targets_and_version(monkeypatch)
         config = SimpleNamespace(
-            browser=SimpleNamespace(
-                headless=False, eager_full_chromium=False, chrome_path=None
-            )
+            browser=SimpleNamespace(headless=False, chrome_path=None)
         )
         monkeypatch.setattr("linkedin_mcp_server.bootstrap.get_config", lambda: config)
         monkeypatch.setattr(
@@ -1818,7 +1807,8 @@ class TestTwoStageInstall:
     async def test_owner_idle_hold_ends_after_the_lifetime_failure(
         self, isolate_profile_dir, monkeypatch
     ):
-        from linkedin_mcp_server import bootstrap, daemon_liveness
+        from linkedin_mcp_server import bootstrap
+        from linkedin_mcp_server.daemon import liveness as daemon_liveness
         from linkedin_mcp_server.exceptions import BrowserSetupFailedError
         from linkedin_mcp_server.server_role import ServerRole
 
@@ -1870,7 +1860,8 @@ class TestTwoStageInstall:
     async def test_owner_setup_completion_resets_the_idle_clock(
         self, isolate_profile_dir, monkeypatch
     ):
-        from linkedin_mcp_server import bootstrap, daemon_liveness
+        from linkedin_mcp_server import bootstrap
+        from linkedin_mcp_server.daemon import liveness as daemon_liveness
         from linkedin_mcp_server.server_role import ServerRole
 
         async def setup(**_kwargs: object) -> None:
@@ -1889,7 +1880,8 @@ class TestTwoStageInstall:
     async def test_ready_owner_setup_resets_the_idle_clock(
         self, isolate_profile_dir, monkeypatch
     ):
-        from linkedin_mcp_server import bootstrap, daemon_liveness
+        from linkedin_mcp_server import bootstrap
+        from linkedin_mcp_server.daemon import liveness as daemon_liveness
         from linkedin_mcp_server.server_role import ServerRole
 
         liveness = MagicMock()
@@ -1904,7 +1896,8 @@ class TestTwoStageInstall:
     async def test_failed_owner_setup_resets_the_idle_clock(
         self, isolate_profile_dir, monkeypatch
     ):
-        from linkedin_mcp_server import bootstrap, daemon_liveness
+        from linkedin_mcp_server import bootstrap
+        from linkedin_mcp_server.daemon import liveness as daemon_liveness
         from linkedin_mcp_server.server_role import ServerRole
 
         async def setup(**_kwargs: object) -> None:
@@ -1930,16 +1923,19 @@ class TestTwoStageInstall:
 
         stood_down: list[str] = []
 
-        async def never_finishes(**_kwargs: object) -> None:
+        async def never_finishes(
+            *, activity_callback: Callable[[], None], **_kwargs: object
+        ) -> None:
+            # Shortened from inside setup, through the activity reschedule, so
+            # the readiness check before it, which runs in a thread as slowly
+            # as a loaded machine lets it, cannot spend the deadline first.
+            monkeypatch.setattr(bootstrap, "_BACKGROUND_BROWSER_SETUP_SECONDS", 0.01)
+            activity_callback()
             await asyncio.Event().wait()
 
         config = SimpleNamespace(browser=SimpleNamespace(chrome_path=None))
         monkeypatch.setattr(bootstrap, "get_config", lambda: config)
         monkeypatch.setattr(bootstrap, "_run_browser_setup", never_finishes)
-        # The deadline also covers the readiness thread. At 10 ms it could expire
-        # before that thread reported, so the start call itself raised; the
-        # claim here is about the task, observed after start returns.
-        monkeypatch.setattr(bootstrap, "_BACKGROUND_BROWSER_SETUP_SECONDS", 0.5)
         monkeypatch.setattr(bootstrap, "browser_setup_ready", lambda: False)
         monkeypatch.setattr(bootstrap, "process_role", lambda: ServerRole.OWNER)
         monkeypatch.setattr(
@@ -1954,12 +1950,15 @@ class TestTwoStageInstall:
         )
 
         initialize_bootstrap("managed")
-        await start_background_browser_setup_if_needed()
-
-        task = get_bootstrap_state().setup_task
-        assert task is not None
-        with pytest.raises(BrowserSetupFailedError, match="background deadline"):
-            await task
+        # The deadline set at start is the real one, half an hour; only the
+        # reschedule above shortens it. If that stops working, this fails
+        # here, and the timeout cancels the task with it.
+        async with asyncio.timeout(30):
+            await start_background_browser_setup_if_needed()
+            task = get_bootstrap_state().setup_task
+            assert task is not None
+            with pytest.raises(BrowserSetupFailedError, match="background deadline"):
+                await task
         assert not bootstrap.browser_setup_in_progress()
         assert stood_down == []
         with pytest.raises(BrowserSetupFailedError, match="background deadline"):
@@ -2951,13 +2950,26 @@ class TestInstallerSupervisorLaunch:
         Nothing grows here, so the byte ceiling has nothing to refuse and no
         caller is holding an inactivity deadline: the lifetime is the only
         bound left, and without it this install runs forever.
+
+        The lifetime passes on the loop's clock once the installer is running,
+        never in real time: a lifetime short enough for a test was spent on a
+        loaded host by the setup before the spawn, and then there was no
+        installer to reap.
         """
         from linkedin_mcp_server import bootstrap
         from linkedin_mcp_server.exceptions import BrowserSetupFailedError
 
         proc = _NeverExitingProc([], 0)
+        loop = asyncio.get_running_loop()
+        real_time = loop.time
+        skipped = 0.0
+        monkeypatch.setattr(loop, "time", lambda: real_time() + skipped)
 
         async def hanging_lines(stream: object):
+            nonlocal skipped
+            # The installer is running and silent, and the hours pass.
+            skipped = bootstrap._BROWSER_SETUP_LIFETIME_SECONDS
+            hang_guard.reschedule(loop.time() + 30)
             await asyncio.Event().wait()
             if False:  # pragma: no cover - makes this an async generator
                 yield ""
@@ -2966,10 +2978,11 @@ class TestInstallerSupervisorLaunch:
         monkeypatch.setattr(
             asyncio, "create_subprocess_exec", AsyncMock(return_value=proc)
         )
-        monkeypatch.setattr(bootstrap, "_BROWSER_SETUP_LIFETIME_SECONDS", 0.05)
 
+        # Only turns a hang into a failure, so it moves with the skipped hours.
         with pytest.raises(BrowserSetupFailedError, match="absolute lifetime"):
-            await asyncio.wait_for(bootstrap._run_patchright_install("--no-shell"), 5)
+            async with asyncio.timeout(30) as hang_guard:
+                await bootstrap._run_patchright_install("--no-shell")
 
         assert proc.waited, "the installer was reaped rather than left running"
 
@@ -4329,11 +4342,12 @@ class TestPatchrightInstallStreaming:
                 assert loop.time() < entry_deadline, "the root creation never began"
                 await asyncio.sleep(0.001)
             assert not created.is_set(), "the root was created on the event loop"
-            started = loop.time()
             with pytest.raises(TimeoutError):
                 async with asyncio.timeout(0.01):
                     await installing
-            elapsed = loop.time() - started
+            # Causal, not timed: a timeout that waited for the worker returns
+            # only after the release, which sets this. A wall-clock bound
+            # here measured GC pauses on a loaded machine instead.
             assert not created.is_set(), "the timeout waited for the root"
         finally:
             release.set()
@@ -4342,7 +4356,6 @@ class TestPatchrightInstallStreaming:
             await asyncio.wait({installing}, timeout=1.0)
 
         assert installing.done()
-        assert elapsed < 0.1, f"the timeout took {elapsed:.3f}s"
         assert await asyncio.to_thread(created.wait, 1.0)
         for _ in range(100):
             if not private.exists():
@@ -4385,11 +4398,10 @@ class TestPatchrightInstallStreaming:
                 assert loop.time() < entry_deadline, "the registry read never began"
                 await asyncio.sleep(0.001)
             assert not finished.is_set(), "the registry read ran on the event loop"
-            started = loop.time()
             with pytest.raises(TimeoutError):
                 async with asyncio.timeout(0.01):
                     await installing
-            elapsed = loop.time() - started
+            # Causal for the same reason as the root creation above.
             assert not finished.is_set(), "the timeout waited for the registry read"
         finally:
             release.set()
@@ -4398,7 +4410,6 @@ class TestPatchrightInstallStreaming:
             await asyncio.wait({installing}, timeout=1.0)
 
         assert installing.done()
-        assert elapsed < 0.1, f"the timeout took {elapsed:.3f}s"
 
     @pytest.mark.parametrize("release", [(3, 12, 0), (3, 12, 3), (3, 13, 15)])
     def test_windows_creates_its_own_acl_on_every_supported_python(

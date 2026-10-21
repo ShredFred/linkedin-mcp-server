@@ -261,7 +261,7 @@ class TestGetReadyExtractor:
                 AsyncMock(return_value=mock_extractor),
             ),
             patch(
-                "linkedin_mcp_server.tools.person.handle_auth_error",
+                "linkedin_mcp_server.dependencies.handle_auth_error",
                 new_callable=AsyncMock,
                 side_effect=AuthenticationStartedError("login opened"),
             ) as mock_handle,
@@ -293,9 +293,8 @@ class TestGetReadyExtractor:
                 new_callable=AsyncMock,
                 return_value=extractor,
             ),
-            patch.object(
-                feed_tools,
-                "handle_auth_error",
+            patch(
+                "linkedin_mcp_server.dependencies.handle_auth_error",
                 new=AsyncMock(wraps=handle_auth_error),
             ) as routed,
             patch(
@@ -1949,7 +1948,7 @@ class TestACancelWaitsForTheProfile:
 class TestTheCallerSeesAnOrdinaryFailure:
     async def test_through_the_mcp_boundary(self, driver):
         """An error result like any other, then a working call after it."""
-        from linkedin_mcp_server.daemon_auth import (
+        from linkedin_mcp_server.daemon.auth_repair import (
             MARKER_KEY,
             OwnerAuthSignalMiddleware,
         )
@@ -1996,7 +1995,7 @@ class TestTheCallerSeesAnOrdinaryFailure:
         from mcp import types as mt
         from fastmcp.server.middleware import MiddlewareContext
 
-        from linkedin_mcp_server.daemon_proxy import FrontendOwnerRecoveryMiddleware
+        from linkedin_mcp_server.daemon.proxy import FrontendCallMiddleware
 
         manager, lease = await _cached_with_a_call_reference(driver)
         manager.page_closed = True
@@ -2019,7 +2018,7 @@ class TestTheCallerSeesAnOrdinaryFailure:
             method="tools/call",
         )
         with pytest.raises(ToolError) as relayed:
-            await FrontendOwnerRecoveryMiddleware(backend).on_call_tool(
+            await FrontendCallMiddleware(backend, budget=30.0).on_call_tool(
                 context, forward
             )
 
