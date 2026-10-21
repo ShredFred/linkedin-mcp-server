@@ -229,6 +229,42 @@ _MONTHS = {
 _MONTH_RE = re.compile(r"^([A-Za-zäöüÄÖÜ]+)\s+(\d{4})$")
 
 
+_DAY_MONTH_RE = re.compile(r"(\d{1,2})\.?\s+([A-Za-zäÄ]{3,9})\.?(?:\s+(\d{4}))?")
+_MONTH_DAY_RE = re.compile(r"\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:,\s*(\d{4}))?")
+_MONTH_ABBR = {"jan": 1, "feb": 2, "mär": 3, "mrz": 3, "mar": 3, "apr": 4, "mai": 5,
+               "may": 5, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "okt": 10, "oct": 10,
+               "nov": 11, "dez": 12, "dec": 12}
+
+
+def date_text_past(date_text: str | None, today: Any = None) -> bool | None:
+    """Has the event ended? From a search card's date text, which carries no year
+    for dates near today ("Di., 13. Okt. bis Do., 15. Okt."). Measured 2026-10-21:
+    by_keyword booked every hit as past=False, so the HK 2026 read as upcoming six
+    days after it ended. The LAST date is the end. Without a year: this year if it
+    lies at most 120 days back (just ended), otherwise next year (upcoming).
+    None when no date is readable -- unknown is not 'upcoming'."""
+    import datetime as _dt
+
+    if not date_text:
+        return None
+    today = today or _dt.date.today()
+    hits = [(d, m, y) for d, m, y in _DAY_MONTH_RE.findall(date_text)]
+    if not hits:
+        hits = [(d, m, y) for m, d, y in _MONTH_DAY_RE.findall(date_text)]
+    for day, mon, year in reversed(hits):
+        no = _MONTH_ABBR.get(mon.lower()[:3])
+        if not no:
+            continue
+        try:
+            end = _dt.date(int(year) if year else today.year, no, int(day))
+        except ValueError:
+            return None
+        if year:
+            return end < today
+        return end < today and (today - end).days <= 120
+    return None
+
+
 def parse_follower_lines(lines: list[str]) -> dict[str, Any]:
     """'Name', 'Kontakt 2. Grades', '· 2.', headline, 'September 2026'."""
     name = lines[0] if lines else None
@@ -369,10 +405,10 @@ class ExtEventFinder:
                 events.append(
                     {
                         "event_id": it["id"],
-                        **parse_event_card(it["lines"]),
+                        **(card := parse_event_card(it["lines"])),
                         "url": f"https://www.linkedin.com/events/{it['id']}/",
                         "found_by": f"keyword:{keyword}",
-                        "past": False,
+                        "past": date_text_past(card.get("date_text")),
                     }
                 )
             if len(state["items"]) < 10:

@@ -208,3 +208,23 @@ def test_second_idless_comment_of_same_person_is_new(tmp_path):
     comments.append({**comments[0], "text": "zweit"})
     second = asyncio.run(col._engagers("1", reactors=False, source="t"))
     assert [c["text"] for c in second["new_comments"]] == ["zweit"]
+
+
+def test_date_text_past_from_card_without_year():
+    import datetime as dt
+    from linkedin_mcp_server.linkedin.ext_events import date_text_past
+
+    today = dt.date(2026, 10, 21)
+    assert date_text_past("Di., 13. Okt. bis Do., 15. Okt.", today) is True
+    assert date_text_past("Di., 16. März bis Fr., 19. März", today) is False
+    assert date_text_past("Mi., 4. Nov. bis Do., 5. Nov.", today) is False
+    assert date_text_past("Tue, Oct 13 - Thu, Oct 15", today) is True
+    assert date_text_past("15. Okt. 2025", today) is True
+    assert date_text_past("", today) is None
+    assert date_text_past("Online", today) is None
+
+
+def test_by_keyword_marks_past_from_date_text():
+    finder = _finder_with({"items": [{"id": "1", "lines": ["T", "Di., 13. Okt. bis Do., 15. Okt."]}]})
+    out = asyncio.run(finder.by_keyword("x"))
+    assert "past" in out[0]
