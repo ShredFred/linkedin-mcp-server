@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -116,8 +116,9 @@ from differential.test_preservation_gate import (  # noqa: F401 - fixtures
 )
 from differential.test_profile_commands import _functions
 from differential.watcher import OWNER_MODULE
-from linkedin_mcp_server.config.loaders import EnvironmentKeys
+from linkedin_mcp_server.config.loaders import EnvironmentKeys, load_from_env
 from linkedin_mcp_server.config.schema import AppConfig
+from linkedin_mcp_server.daemon.descriptor import config_fingerprint
 from linkedin_mcp_server.logging_config import MCPJSONFormatter
 
 MS = 1_000_000
@@ -178,7 +179,7 @@ _STORAGE_CELLS = [
 def _plant_in(row: str, home: Path, profile_dir: Path) -> tuple[Planted, Path]:
     """The cell's metadata planted in *home*, and the profile the cell runs
     on, the way ``test_eligibility_rows.planted`` plants it on a runner."""
-    from linkedin_mcp_server import daemon_descriptor
+    from linkedin_mcp_server.daemon import descriptor as daemon_descriptor
     from linkedin_mcp_server.session_state import canonical
 
     case = CASES[row]
@@ -209,9 +210,11 @@ def test_the_planted_metadata_is_classified_and_refused_as_the_cell_declares(
     planted, profile_dir = _plant_in(row, tmp_path / "home", tmp_path / "auth" / "p")
     try:
         storage = storage_reading(profile_dir)
-        from linkedin_mcp_server.daemon import daemon_would_be_used
+        from linkedin_mcp_server.daemon.discovery import daemon_would_be_used
 
-        with caplog.at_level(logging.WARNING, logger="linkedin_mcp_server.daemon"):
+        with caplog.at_level(
+            logging.WARNING, logger="linkedin_mcp_server.daemon.discovery"
+        ):
             assert daemon_would_be_used(_eligible_config(profile_dir)) is False
     finally:
         assert planted.remove() == []
@@ -223,12 +226,15 @@ def test_the_planted_metadata_is_classified_and_refused_as_the_cell_declares(
 
 
 def test_a_container_is_refused_in_the_line_the_cell_expects(monkeypatch, caplog):
-    from linkedin_mcp_server.daemon import daemon_would_be_used
+    from linkedin_mcp_server.daemon.discovery import daemon_would_be_used
 
     monkeypatch.setattr(
-        "linkedin_mcp_server.daemon.get_runtime_id", lambda: "linux-x64-container"
+        "linkedin_mcp_server.daemon.discovery.get_runtime_id",
+        lambda: "linux-x64-container",
     )
-    with caplog.at_level(logging.WARNING, logger="linkedin_mcp_server.daemon"):
+    with caplog.at_level(
+        logging.WARNING, logger="linkedin_mcp_server.daemon.discovery"
+    ):
         assert daemon_would_be_used(_eligible_config(Path("/unused/p"))) is False
 
     lines = decision_lines(_formatted(caplog.records))
@@ -244,27 +250,37 @@ def test_a_container_is_refused_in_the_line_the_cell_expects(monkeypatch, caplog
     ],
 )
 def test_a_rival_left_alone_says_so_in_the_line_counted_as_its_fallback(
-    reach, line, kind, caplog
+    reach, line, kind, caplog, tmp_path
 ):
     """The election's own decision on a same-build owner of another
     configuration, as it logs it."""
     from linkedin_mcp_server import __version__
-    from linkedin_mcp_server.daemon import Attachment, Mismatch, OwnerLookup, OwnerState
-    from linkedin_mcp_server.daemon_election import Reach, _decide_control_only
+    from linkedin_mcp_server.daemon.discovery import (
+        Attachment,
+        Mismatch,
+        OwnerLookup,
+        OwnerState,
+    )
+    from linkedin_mcp_server.daemon.election import Reach, _live_lookup
 
     attachment = Attachment(
         descriptor=SimpleNamespace(  # ty: ignore[invalid-argument-type]
-            instance_id="rival", package_version=__version__
+            instance_id="rival", package_version=__version__, pid=1
         ),
         token="t",
         control_only=True,
     )
-    with caplog.at_level(logging.INFO, logger="linkedin_mcp_server.daemon_election"):
-        found, asked, _ = _decide_control_only(
-            OwnerLookup(state=OwnerState.INCOMPATIBLE, mismatch=Mismatch.CONFIGURATION),
-            attachment,
+    rival = OwnerLookup(
+        state=OwnerState.INCOMPATIBLE,
+        attachment=attachment,
+        mismatch=Mismatch.CONFIGURATION,
+    )
+    inspector = SimpleNamespace(inspect_until=lambda timeout: rival)
+    with caplog.at_level(logging.INFO, logger="linkedin_mcp_server.daemon.election"):
+        found, asked, _ = _live_lookup(
             lambda _attachment, _timeout: getattr(Reach, reach),
             set(),
+            inspector=cast(Any, inspector),
             may_ask_for_turnover=True,
             deadline=time.monotonic() + 5.0,
         )
@@ -282,11 +298,16 @@ def test_the_frontend_says_it_drives_its_own_browser_and_forwards_in_its_own_lin
 ):
     """``_obtain_shared_owner``'s two ends, as the frontend logs them."""
     from linkedin_mcp_server import cli_main
-    from linkedin_mcp_server.daemon import DirectFallback, OwnerLookup, OwnerState
-    from linkedin_mcp_server.daemon_election import ElectionOutcome
+    from linkedin_mcp_server.daemon.discovery import (
+        DirectFallback,
+        OwnerLookup,
+        OwnerState,
+    )
+    from linkedin_mcp_server.daemon.election import ElectionOutcome
 
     monkeypatch.setattr(
-        "linkedin_mcp_server.daemon.daemon_would_be_used", lambda _config: True
+        "linkedin_mcp_server.daemon.discovery.daemon_would_be_used",
+        lambda _config: True,
     )
     monkeypatch.setattr(
         "linkedin_mcp_server.cli_main.get_profile_dir", lambda: tmp_path / "p"
@@ -301,7 +322,7 @@ def test_the_frontend_says_it_drives_its_own_browser_and_forwards_in_its_own_lin
     )
     outcomes = iter([fallback, forwarded])
     monkeypatch.setattr(
-        "linkedin_mcp_server.daemon_election.obtain_owner",
+        "linkedin_mcp_server.daemon.election.obtain_owner",
         lambda *_args, **_kwargs: next(outcomes),
     )
     with caplog.at_level(logging.INFO):
@@ -1424,7 +1445,7 @@ def test_the_frozen_rival_row_holds_its_observations(change, finding):
             id="no rival",
         ),
         pytest.param(
-            ("rival.environment", {EnvironmentKeys.LOGIN_TIMEOUT: "1800"}),
+            ("rival.environment", {EnvironmentKeys.TIMEOUT: "5000"}),
             "B did not run with its declared difference",
             id="no difference",
         ),
@@ -1454,7 +1475,7 @@ def test_the_frozen_rival_row_holds_its_observations(change, finding):
             id="no owner",
         ),
         pytest.param(
-            ("environment", {EnvironmentKeys.LOGIN_TIMEOUT: "1801"}),
+            ("environment", {EnvironmentKeys.TIMEOUT: "5001"}),
             "the cell did not run its declared configuration",
             id="A's setting",
         ),
@@ -1689,7 +1710,9 @@ def test_k3_is_held_to_k1_only_from_two_valid_records():
 # --- Declarations ----------------------------------------------------------------------
 
 
-def test_every_row_here_is_declared_held_to_direct_or_rival_and_judged():
+def test_every_row_here_is_declared_held_to_direct_or_rival_and_judged(
+    monkeypatch: pytest.MonkeyPatch,
+):
     for row, case in CASES.items():
         declared = harness.ROWS[row]
         assert lifecycle_problems(row, declared) == []
@@ -1706,9 +1729,22 @@ def test_every_row_here_is_declared_held_to_direct_or_rival_and_judged():
     assert (rival.eligible, rival.coordination, rival.rival) == (True, True, True)
     assert rival.environment == RIVAL_ENVIRONMENT
     assert rival.idle_timeout == RIVAL_IDLE_TIMEOUT_SECONDS
-    # One fingerprinted field, one second apart; the minimum hold the same.
-    assert set(RIVAL_OVERRIDES) == {EnvironmentKeys.LOGIN_TIMEOUT}
-    assert RIVAL_OVERRIDES != {k: RIVAL_ENVIRONMENT[k] for k in RIVAL_OVERRIDES}
+    # One field, and one the owner shares by: the row is about a client the
+    # owner refuses, so B's difference has to reach the fingerprint.
+    assert len(RIVAL_OVERRIDES) == 1
+    assert _fingerprint_under(monkeypatch, RIVAL_ENVIRONMENT) != _fingerprint_under(
+        monkeypatch, {**RIVAL_ENVIRONMENT, **RIVAL_OVERRIDES}
+    )
+
+
+def _fingerprint_under(
+    monkeypatch: pytest.MonkeyPatch, environment: dict[str, str]
+) -> str:
+    """The sharing fingerprint of a configuration loaded from *environment*."""
+    with monkeypatch.context() as scoped:
+        for name, value in environment.items():
+            scoped.setenv(name, value)
+        return config_fingerprint(load_from_env(AppConfig()), key="row-key")
 
 
 @pytest.mark.parametrize(
@@ -2051,7 +2087,7 @@ async def test_the_frozen_rival_row_passes_through_the_real_row_entry(scene):
     assert not host_a["rival"] and host_b["rival"]
     for name, value in RIVAL_ENVIRONMENT.items():
         assert host_a["env"][name] == value
-    assert host_b["env"][EnvironmentKeys.LOGIN_TIMEOUT] == "1801"
+    assert host_b["env"][EnvironmentKeys.TIMEOUT] == "5001"
     assert (
         host_b["env"][EnvironmentKeys.BROWSER_MIN_HOLD]
         == RIVAL_ENVIRONMENT[EnvironmentKeys.BROWSER_MIN_HOLD]

@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 import sys
-import time
+import threading
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock
 
@@ -335,7 +335,11 @@ class TestTheWindowlessLaunchEndToEnd:
                 stops["count"] += 1
                 recorder.setdefault("events", []).append("stop")
                 if stop_hangs:
-                    await asyncio.sleep(30)
+                    try:
+                        await asyncio.sleep(30)
+                    except asyncio.CancelledError:
+                        recorder["events"].append("stop abandoned")
+                        raise
                 return None
 
         async def start():
@@ -460,7 +464,6 @@ class TestTheWindowlessLaunchEndToEnd:
         start, _ = self._fake_playwright(recorder, refuse_headed=True, stop_hangs=True)
         manager = BrowserManager(user_data_dir=tmp_path / "p", headless=True)
 
-        began = time.monotonic()
         with mock.patch(
             "linkedin_mcp_server.core.browser._CLEANUP_TIMEOUT_SECONDS", 0.05
         ):
@@ -474,13 +477,20 @@ class TestTheWindowlessLaunchEndToEnd:
                     playwright.return_value.start = start
                     with pytest.raises(Exception):
                         await manager.start()
-        elapsed = time.monotonic() - began
 
         assert recorder["options"]["headless"] is False
         assert recorder["flags_at_driver_start"] == ["1"]
-        # Both the first stop and the cleanup retry are bounded. The fake hangs
-        # for 30s; anything near that means one of those bounds was skipped.
-        assert elapsed < 5, f"the wedged driver was waited out ({elapsed:.1f}s)"
+        # Both the first stop and the cleanup retry are bounded: each was given
+        # up on rather than waited out, and no second driver started. Read from
+        # the order of events, not the clock, because the close that follows
+        # also drains processes, which takes seconds under load.
+        assert recorder["events"] == [
+            "driver-start",
+            "stop",
+            "stop abandoned",
+            "stop",
+            "stop abandoned",
+        ]
 
     async def test_a_launch_that_fails_either_way_reports_the_first_error(
         self, tmp_path
@@ -1458,6 +1468,94 @@ class TestStartingAgainAfterAClose:
         assert manager._containment is None
         assert record["drained"] == [(first_marker, job)]
         assert record["drivers"][1].stops == 1, "the uncontained driver kept running"
+
+
+class TestRegistrationStaysOffTheLoop:
+    """Registering a launch's groups can wait seconds on ``ps``.
+
+    On the event loop that wait stalled every other caller of the server with
+    it, including a concurrent frontend whose preflight gives up after two
+    seconds. Off the loop, a cancel must still wait for it, because the cleanup
+    it leads to relies on the registration being complete.
+    """
+
+    @staticmethod
+    def _stalled(monkeypatch) -> tuple[threading.Event, threading.Event, list[str]]:
+        """Make the first registration block until released, and record the order."""
+        entered = threading.Event()
+        release = threading.Event()
+        events: list[str] = []
+        calls = 0
+
+        def remember(_marker: str) -> None:
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                events.append("registered")
+                return
+            entered.set()
+            # Bounded, so a stall on the loop fails the test instead of hanging it.
+            events.append("released" if release.wait(timeout=2.0) else "stalled")
+
+        monkeypatch.setattr(
+            "linkedin_mcp_server.core.browser.remember_detached_process_groups",
+            remember,
+        )
+        return entered, release, events
+
+    @pytest.mark.asyncio
+    async def test_the_loop_keeps_running_while_a_launch_registers(
+        self, tmp_path, monkeypatch
+    ):
+        wired = TestStartingAgainAfterAClose
+        manager, _record, start_driver = wired._wired(tmp_path, monkeypatch)
+        entered, release, events = self._stalled(monkeypatch)
+
+        try:
+            with wired._driving(start_driver):
+                starting = asyncio.ensure_future(manager.start())
+                # This resumes, and releases the registration, only if the
+                # registration left the loop free to run it.
+                await asyncio.to_thread(entered.wait, 2.0)
+                release.set()
+                await starting
+        finally:
+            release.set()
+
+        assert events == ["released"]
+        assert await manager.close() is True
+
+    @pytest.mark.asyncio
+    async def test_a_cancel_during_registration_waits_before_cleanup(
+        self, tmp_path, monkeypatch
+    ):
+        wired = TestStartingAgainAfterAClose
+        manager, _record, start_driver = wired._wired(tmp_path, monkeypatch)
+        entered, release, events = self._stalled(monkeypatch)
+
+        def drain(_marker: str, *, containment: object = None) -> bool:
+            events.append("drained")
+            return True
+
+        monkeypatch.setattr(
+            "linkedin_mcp_server.core.browser.drain_browser_process_marker", drain
+        )
+
+        try:
+            with wired._driving(start_driver):
+                starting = asyncio.ensure_future(manager.start())
+                await asyncio.to_thread(entered.wait, 2.0)
+                starting.cancel()
+                # Long enough for a cleanup that does not wait to run to its end.
+                await asyncio.wait({starting}, timeout=0.2)
+                release.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await starting
+        finally:
+            release.set()
+
+        assert events == ["released", "registered", "drained"]
+        assert manager.close_confirmed is True
 
 
 @pytest.mark.asyncio

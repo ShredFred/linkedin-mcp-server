@@ -29,7 +29,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
 
@@ -125,7 +125,7 @@ jobs:
 
       - name: Upload release notes
         if: steps.check.outputs.should-release == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-notes
           path: RELEASE_NOTES.md
@@ -149,7 +149,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
 
@@ -170,7 +170,7 @@ jobs:
       # uv cache save can still fail it. Artifacts are immutable, so overwrite
       # keeps a retry from tripping over the one the failed attempt wrote.
       - name: Upload distributions
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: python-package-distributions
           path: dist/
@@ -194,7 +194,7 @@ jobs:
       id-token: write  # Required for PyPI Trusted Publishing
     steps:
       - name: Download distributions
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: python-package-distributions
           path: dist/
@@ -272,7 +272,7 @@ jobs:
           PY
           echo "✅ Updated server.json to version $VERSION"
 
-      - name: Update Codex plugin version
+      - name: Update plugin versions
         run: |
           set -e
           python3 - "$VERSION" <<'PY'
@@ -280,39 +280,24 @@ jobs:
           import sys
           from pathlib import Path
 
+          # Only the manifests carry the release. The shared .mcp.json runs
+          # mcp-server-linkedin@latest, so it has no version to rewrite.
           version = sys.argv[1]
-          manifest_path = Path(
-              "plugins/linkedin-mcp-server/.codex-plugin/plugin.json"
+          manifest_paths = (
+              Path("plugins/linkedin-mcp-server/.codex-plugin/plugin.json"),
+              Path("plugins/linkedin-mcp-server/.claude-plugin/plugin.json"),
+              Path("plugins/linkedin-mcp-server/.cursor-plugin/plugin.json"),
           )
-          mcp_path = Path("plugins/linkedin-mcp-server/.mcp.json")
 
-          plugin = json.loads(manifest_path.read_text(encoding="utf-8"))
-          plugin["version"] = version
-
-          mcp = json.loads(mcp_path.read_text(encoding="utf-8"))
-          args = mcp["mcpServers"]["linkedin"]["args"]
-          package_args = [
-              index
-              for index, value in enumerate(args)
-              if value.startswith("mcp-server-linkedin@")
-          ]
-          if len(package_args) != 1:
-              raise SystemExit(
-                  "Codex plugin must contain exactly one versioned "
-                  "mcp-server-linkedin package argument"
+          for manifest_path in manifest_paths:
+              plugin = json.loads(manifest_path.read_text(encoding="utf-8"))
+              plugin["version"] = version
+              manifest_path.write_text(
+                  json.dumps(plugin, indent=2, ensure_ascii=False) + "\n",
+                  encoding="utf-8",
               )
-          args[package_args[0]] = f"mcp-server-linkedin@{version}"
-
-          manifest_path.write_text(
-              json.dumps(plugin, indent=2, ensure_ascii=False) + "\n",
-              encoding="utf-8",
-          )
-          mcp_path.write_text(
-              json.dumps(mcp, indent=2, ensure_ascii=False) + "\n",
-              encoding="utf-8",
-          )
           PY
-          echo "✅ Updated Codex plugin to version $VERSION"
+          echo "✅ Updated the Codex, Claude Code, and Cursor plugins to version $VERSION"
 
       # The rewrites above are text edits that report success whatever they
       # matched, so this asks every file that carries the version what it now
@@ -340,10 +325,15 @@ jobs:
                   "plugins/linkedin-mcp-server/.codex-plugin/plugin.json"
               ).read_text(encoding="utf-8")
           )
-          plugin_mcp = json.loads(
-              Path("plugins/linkedin-mcp-server/.mcp.json").read_text(
-                  encoding="utf-8"
-              )
+          claude_plugin = json.loads(
+              Path(
+                  "plugins/linkedin-mcp-server/.claude-plugin/plugin.json"
+              ).read_text(encoding="utf-8")
+          )
+          cursor_plugin = json.loads(
+              Path(
+                  "plugins/linkedin-mcp-server/.cursor-plugin/plugin.json"
+              ).read_text(encoding="utf-8")
           )
           project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
           name = project["project"]["name"]
@@ -393,11 +383,8 @@ jobs:
               ],
               "docker-compose.yml": [tag(image) for image in images],
               "Codex plugin": [plugin["version"]],
-              "Codex plugin MCP": [
-                  value.removeprefix("mcp-server-linkedin@")
-                  for value in plugin_mcp["mcpServers"]["linkedin"]["args"]
-                  if value.startswith("mcp-server-linkedin@")
-              ],
+              "Claude Code plugin": [claude_plugin["version"]],
+              "Cursor plugin": [cursor_plugin["version"]],
           }
           for site, values in found.items():
               if not values:
@@ -438,11 +425,12 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add manifest.json docker-compose.yml .github/mcp/server.json \
             plugins/linkedin-mcp-server/.codex-plugin/plugin.json \
-            plugins/linkedin-mcp-server/.mcp.json
+            plugins/linkedin-mcp-server/.claude-plugin/plugin.json \
+            plugins/linkedin-mcp-server/.cursor-plugin/plugin.json
           if git diff --staged --quiet; then
             echo "ℹ️ No changes to commit"
           else
-            git commit -m "chore: sync versioned files to v$VERSION [skip ci]"
+            git commit -m "chore(release): Sync versioned files to v$VERSION [skip ci]"
             git push origin main
             echo "✅ Committed version updates"
           fi
@@ -529,7 +517,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Log in to Docker Hub
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
@@ -538,7 +526,7 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build and push Docker images
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           push: true
@@ -584,7 +572,7 @@ jobs:
       # Overwrites for the same reason as the distributions upload: the bun
       # cache save runs after this and can fail the job around it.
       - name: Upload release assets
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: github-release-assets
           path: linkedin-mcp-server-v${{ env.VERSION }}.mcpb
@@ -603,12 +591,12 @@ jobs:
       contents: write
     steps:
       - name: Download release assets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: github-release-assets
 
       - name: Download release notes
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-notes
 

@@ -6,6 +6,23 @@ A Model Context Protocol (MCP) server that connects AI assistants to LinkedIn. A
 
 ## Features
 
+The fork's native mentions accept profile URNs. Decorated person names use a
+shorter search query while retaining the full display-name and entity-ID
+checks before publication; verify with `confirm_post=false` first.
+
+- **Guarded publishing**: Personal and company posts, real person/company
+  mentions, and read-only `verify_post` reconciliation after an uncertain result.
+- **Image metadata**: Distinct alt text and person tags per image, bound to the
+  uploaded files by exact local-blob hashes where thumbnails only show positions.
+- **Networking and events**: Dated connections, sent invitations, event research,
+  attendance, and bounded follow-up preparation.
+- **Saved activity**: Read saved posts and the account's own reactions.
+- **Local controls**: Shared action budgets, duplicate prevention, contact notes
+  and outcome records. An unknown result blocks an automatic repeat.
+
+These extensions belong to the fork. Build this checkout for Docker; the
+upstream image and a bare PyPI install do not include the fork's extra tools.
+
 - **Profile Access**: Get detailed LinkedIn profile information including experience, education, skills, projects, certifications, and more
 - **Own Profile**: Fetch the authenticated user's own profile to give agents self-context
 - **Profile Connections**: Send connection requests or accept incoming ones, with optional notes

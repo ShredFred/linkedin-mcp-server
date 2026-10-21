@@ -59,8 +59,8 @@ from linkedin_mcp_server.server import ServerRole, create_mcp_server
 from linkedin_mcp_server.setup import run_profile_creation
 
 if TYPE_CHECKING:
-    from linkedin_mcp_server.daemon import Attachment
-    from linkedin_mcp_server.daemon_proxy import DaemonProxyBackend
+    from linkedin_mcp_server.daemon.discovery import Attachment, Unanswered
+    from linkedin_mcp_server.daemon.proxy import DaemonProxyBackend
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +195,7 @@ def _retire_a_shared_browser(config: AppConfig, retirement: _Retirement) -> bool
     Nothing is contacted before the user answers. The lookup reads files only,
     and a process that would never use a shared browser does not even do that.
     """
-    from linkedin_mcp_server.daemon import daemon_would_be_used
+    from linkedin_mcp_server.daemon.discovery import daemon_would_be_used
 
     if not daemon_would_be_used(config):
         return False
@@ -228,7 +228,7 @@ def _owner_to_retire(config: AppConfig) -> "Attachment | None":
     A reading of files and nothing more, so it says what is recorded rather than
     what is running: an owner that exited leaves its record behind.
     """
-    from linkedin_mcp_server.daemon import (
+    from linkedin_mcp_server.daemon.discovery import (
         Mismatch,
         OwnerState,
         look_up_owner,
@@ -272,7 +272,7 @@ def _shared_browser_recorded(config: AppConfig) -> bool:
     browser, and silent: an unreadable record means nothing is named, never
     that the status check failed.
     """
-    from linkedin_mcp_server.daemon import (
+    from linkedin_mcp_server.daemon.discovery import (
         OwnerState,
         daemon_would_be_used,
         look_up_owner,
@@ -300,7 +300,7 @@ def _ask_to_retire(attachment: "Attachment") -> bool:
     """Send the idle-only retirement and act on the answer.
 
     Idle-only, and never anything else: a failure here is reported, not retried
-    as the unconditional stand-down, which would cut off another client's call.
+    as a turnover, which would cut off another client's call.
     An interrupt is left to the caller's ``_reporting_a_confirmed_retirement``,
     which covers reading the reply as well as sending the request.
     """
@@ -308,7 +308,7 @@ def _ask_to_retire(attachment: "Attachment") -> bool:
 
     import httpx2
 
-    from linkedin_mcp_server import daemon_owner
+    from linkedin_mcp_server.daemon import owner as daemon_owner
 
     instance = attachment.descriptor.instance_id
     parts = urlsplit(attachment.descriptor.url)
@@ -318,7 +318,9 @@ def _ask_to_retire(attachment: "Attachment") -> bool:
             response = client.post(
                 url,
                 headers={"Authorization": f"Bearer {attachment.token}"},
-                json=daemon_owner.idle_only_request(instance),
+                json=daemon_owner.stand_down_request(
+                    instance, mode=daemon_owner.STAND_DOWN_IDLE_ONLY
+                ),
             )
     except (httpx2.ConnectError, httpx2.ConnectTimeout):
         # No connection was made, so this request was not delivered. That is
@@ -662,13 +664,17 @@ def profile_info_and_exit() -> None:
     sys.exit(1)
 
 
-def _obtain_shared_owner(config: AppConfig) -> "DaemonProxyBackend | None":
+def _obtain_shared_owner(
+    config: AppConfig,
+) -> "DaemonProxyBackend | Unanswered | None":
     """Return the shared owner to forward to, starting one if nobody has.
 
-    Off by default, and inert when off. ``None`` means this process serves its
-    own client the way it always has: the flag is off, the transport is HTTP (one
-    server for many clients already, so there is nothing to deduplicate), or no
-    owner could be established at all.
+    Off by default, and inert when off. Anything but a backend means this
+    process serves its own client the way it always has: the flag is off, the
+    transport is HTTP (one server for many clients already, so there is nothing
+    to deduplicate), or no owner could be established at all. That last case
+    returns the election's :class:`Unanswered` when an owner it found did not
+    answer, so a busy browser can be explained by it later.
 
     Never fatal, and that is a decision rather than an oversight. A client that
     refused to start because a shared browser could not be elected would fail
@@ -686,25 +692,23 @@ def _obtain_shared_owner(config: AppConfig) -> "DaemonProxyBackend | None":
     (``drivers/browser.watch_for_handoff_requests``). The daemon lock decides who
     *owns* the browser; the lease decides who is driving it right now.
 
-    That safety net carries more weight on Windows than elsewhere, which is worth
-    knowing before the flag becomes the default. A frontend there takes no lock
-    at all and starts a child that competes for one
-    (``daemon_election._start_contending_for_the_lock``), so a local spawn
-    failure is indistinguishable from a rival owner that holds the lock and has
-    not published yet: ``obtain_owner`` returns at once and this process falls
-    back while an owner may in fact be coming up. On POSIX the equivalent
-    outcomes are terminal, because the frontend held the lock itself. Windows
-    already carries platform gaps that gate the default flip, and this is one of
-    them.
+    That safety net carries weight on every platform, which is worth knowing
+    before the flag becomes the default. A frontend takes no lock itself: it
+    starts a child that competes for one
+    (``daemon.spawn._start_owner``), and only the child that
+    wins holds it and publishes. A local spawn failure is therefore
+    indistinguishable from a rival owner that holds the lock and has not
+    published yet, so this process can fall back while an owner is in fact
+    coming up.
     """
-    from linkedin_mcp_server.daemon import daemon_would_be_used
+    from linkedin_mcp_server.daemon.discovery import daemon_would_be_used
 
     if not daemon_would_be_used(config):
         return None
 
     try:
-        from linkedin_mcp_server.daemon_election import obtain_owner
-        from linkedin_mcp_server.daemon_proxy import DaemonProxyBackend
+        from linkedin_mcp_server.daemon.election import obtain_owner
+        from linkedin_mcp_server.daemon.proxy import DaemonProxyBackend
         from linkedin_mcp_server.session_state import auth_root_dir
 
         profile = get_profile_dir()
@@ -736,7 +740,7 @@ def _obtain_shared_owner(config: AppConfig) -> "DaemonProxyBackend | None":
         "drive its own browser",
         outcome.attachment_lookup.state.value,
     )
-    return None
+    return outcome.unanswered
 
 
 def get_version() -> str:
@@ -906,16 +910,23 @@ def main(argv: Sequence[str] | None = None) -> None:
             # before this runs: `daemon_would_be_used` asks whether this is a
             # stdio process, and an interactively chosen HTTP server must not
             # elect a daemon.
-            proxy_backend = _obtain_shared_owner(config)
+            shared = _obtain_shared_owner(config)
 
             # Create and run the MCP server
-            if proxy_backend is None:
+            from linkedin_mcp_server.daemon.discovery import Unanswered
+
+            if shared is None:
                 mcp = create_mcp_server(tool_timeout=config.server.tool_timeout_seconds)
+            elif isinstance(shared, Unanswered):
+                mcp = create_mcp_server(
+                    tool_timeout=config.server.tool_timeout_seconds,
+                    silent_owner=shared,
+                )
             else:
                 mcp = create_mcp_server(
                     tool_timeout=config.server.tool_timeout_seconds,
                     role=ServerRole.PROXY,
-                    proxy_backend=proxy_backend,
+                    proxy_backend=shared,
                 )
 
             if transport == "streamable-http":

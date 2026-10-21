@@ -987,7 +987,8 @@ def _run_protection_steps(
         "docker-compose.yml",
         ".github/mcp/server.json",
         "plugins/linkedin-mcp-server/.codex-plugin/plugin.json",
-        "plugins/linkedin-mcp-server/.mcp.json",
+        "plugins/linkedin-mcp-server/.claude-plugin/plugin.json",
+        "plugins/linkedin-mcp-server/.cursor-plugin/plugin.json",
     )
     for name in files:
         path = repo / name
@@ -1194,7 +1195,7 @@ def test_release_rejects_invalid_restore_input_before_put(
 # The prepare-release job holds the admin token. Intentional strict-policy
 # preservation and file moves update its reviewed digest alongside behavioral coverage.
 _PREPARE_RELEASE_SHA256 = (
-    "1a7f3ef221640b26bbb742d130336d375d27992e9ef568a2fe27b3c609802c43"
+    "b16372cdf0938e1c12ef61f62b2a6d62559a0e3fe01387690b5bf7731cf61069"
 )
 
 

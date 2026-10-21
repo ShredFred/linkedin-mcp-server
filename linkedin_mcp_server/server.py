@@ -32,10 +32,7 @@ from linkedin_mcp_server.drivers.browser import (
     close_browser,
     watch_for_handoff_requests,
 )
-from linkedin_mcp_server.daemon_auth import (
-    FrontendAuthRepairMiddleware,
-    OwnerAuthSignalMiddleware,
-)
+from linkedin_mcp_server.daemon.auth_repair import OwnerAuthSignalMiddleware
 from linkedin_mcp_server.error_handler import raise_tool_error
 from linkedin_mcp_server.sequential_tool_middleware import (
     SequentialToolExecutionMiddleware,
@@ -64,7 +61,8 @@ from linkedin_mcp_server.tools.ext_company_actions import (  # fork extension
 )
 
 if TYPE_CHECKING:
-    from linkedin_mcp_server.daemon_proxy import DaemonProxyBackend
+    from linkedin_mcp_server.daemon.discovery import Unanswered
+    from linkedin_mcp_server.daemon.proxy import DaemonProxyBackend
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +164,7 @@ def create_mcp_server(
     role: ServerRole = ServerRole.DIRECT,
     auth_token: str | None = None,
     proxy_backend: "DaemonProxyBackend | None" = None,
+    silent_owner: "Unanswered | None" = None,
 ) -> FastMCP:
     """Create and configure the MCP server with all LinkedIn tools.
 
@@ -183,6 +182,9 @@ def create_mcp_server(
     using it. The two credentials are kept apart on purpose and must not be
     conflated: *auth_token* is what an owner *demands* of callers, while the
     backend's token is what a proxy *presents* to one.
+
+    *silent_owner* is the shared owner a Direct server fell back from because
+    it did not answer the election, named when the profile stays busy.
     """
     if auth_token is not None and role is not ServerRole.OWNER:
         # A token on a stdio server protects nothing — there is no port to
@@ -202,6 +204,12 @@ def create_mcp_server(
         # Only a proxy forwards. Accepting an owner here would mean a server that
         # was handed a bearer token for a shared browser and quietly ignored it.
         raise ValueError(f"Only a proxy forwards to an owner, not {role.value}")
+    if silent_owner is not None and role is not ServerRole.DIRECT:
+        # Only a Direct server falls back from an owner; an owner or a proxy
+        # naming one would explain its own busy browser by somebody else.
+        raise ValueError(
+            f"Only a Direct server falls back from an owner, not {role.value}"
+        )
 
     # The role is also process state, because the auth gates live in `bootstrap`
     # and are reached from a tool body with no server to ask (`server_role`).
@@ -251,41 +259,36 @@ def create_mcp_server(
         # waiting its turn is the commonest way to end up with work nobody
         # wants. Inside, a call would only become cancellable once it already
         # had the browser.
-        from linkedin_mcp_server.daemon_liveness import OwnerCallLivenessMiddleware
+        from linkedin_mcp_server.daemon.liveness import OwnerCallLivenessMiddleware
 
         mcp.add_middleware(OwnerCallLivenessMiddleware())
     # The other half, and only ever on the process that has a user in front of it.
     if role is ServerRole.PROXY:
-        # Handed the same budget every tool here is given, rather than reading it
-        # from the configuration singleton. The two agree for a server `cli_main`
-        # built, which loaded that configuration first, and need not for one
-        # constructed directly: measured at `tool_timeout=1.2` with no
-        # configuration installed, the repair budgeted itself 149.8 seconds of a
-        # 1.2-second call from the singleton's default.
-        mcp.add_middleware(FrontendAuthRepairMiddleware(tool_timeout=tool_timeout))
-        # After the repair, which keeps that one outermost. The order decides how
-        # the two compose: a call and the replay a sign-in triggers each get
-        # their own liveness wrapper, rather than one wrapper around the pair.
-        # The other way round, an owner that departed between the two would leave
-        # the replay unrecoverable.
-        from linkedin_mcp_server.daemon_proxy import (
+        from linkedin_mcp_server.daemon.proxy import (
             FrontendCallHeartbeatMiddleware,
-            FrontendOwnerRecoveryMiddleware,
+            FrontendCallMiddleware,
+            call_budget,
         )
 
         assert proxy_backend is not None  # the role check above established it
-        mcp.add_middleware(FrontendOwnerRecoveryMiddleware(proxy_backend))
-        # Innermost of the three, which is what makes a replay behave: a call the
-        # recovery middleware runs again enters here a second time and gets its
-        # own identifier and its own heartbeats, against whichever owner it is
-        # talking to now.
+        # Budgeted from the timeout every tool here is given, rather than from
+        # the configuration singleton. The two agree for a server `cli_main`
+        # built, which loaded that configuration first, and need not for one
+        # constructed directly.
+        mcp.add_middleware(
+            FrontendCallMiddleware(proxy_backend, budget=call_budget(tool_timeout))
+        )
+        # Inside the call's own middleware, which is what makes a repeat behave:
+        # every attempt it makes, a retry or the replay after a sign-in, enters
+        # here afresh and gets its own identifier and its own heartbeats,
+        # against whichever owner it is talking to now.
         mcp.add_middleware(FrontendCallHeartbeatMiddleware(proxy_backend))
     # Profile ownership belongs to whoever launches Chromium. A process that
     # only forwards calls must not take the lease: it would either block itself
     # until its own timeout, or take the lease and leave the process that
     # actually needs it waiting for one held by a caller that never uses it.
     if role.drives_browser:
-        mcp.add_middleware(SequentialToolExecutionMiddleware())
+        mcp.add_middleware(SequentialToolExecutionMiddleware(silent_owner=silent_owner))
     # The notice is appended to one tool result per process, so it belongs
     # wherever a user reads results. On a shared owner it would reach whichever
     # client happened to call first and nobody after that, however many clients
@@ -294,10 +297,13 @@ def create_mcp_server(
         mcp.add_middleware(UpdateNoticeMiddleware())
 
     if proxy_backend is not None:
-        from linkedin_mcp_server.daemon_proxy import create_proxy_provider
+        from linkedin_mcp_server.daemon.forwarder import OwnerForwarder
+        from linkedin_mcp_server.daemon.proxy import call_budget
 
+        # Each request on the hop gets the call's whole budget, so the owner,
+        # whose own tool timeout is shorter, reports a tool that timed out.
         mcp.add_provider(
-            create_proxy_provider(proxy_backend, tool_timeout=tool_timeout)
+            OwnerForwarder(proxy_backend, timeout=call_budget(tool_timeout))
         )
         # Not the default, which is "warn": a failing provider is logged and
         # skipped, and for a server whose *only* provider this is, that turns a

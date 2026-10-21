@@ -61,7 +61,9 @@ _BARE_AT_RE = re.compile(r"(?<![\w.])@(?=\w)")
 _SLUG_RE = re.compile(r"^[\w%.~-]{2,100}$")
 _PROFILE_ID_RE = re.compile(r"^ACoA[A-Za-z0-9_-]{10,}$")
 _PERSON_URN_RE = re.compile(r"^urn:li:fsd_profile:(ACoA[A-Za-z0-9_-]{10,})$")
-_COMPANY_URN_RE = re.compile(r"^urn:li:(?:fsd_company|organization|company):(\d{1,15})$")
+_COMPANY_URN_RE = re.compile(
+    r"^urn:li:(?:fsd_company|organization|company):(\d{1,15})$"
+)
 _URL_RE = re.compile(r"linkedin\.com/(in|company)/([^/?#]+)", re.IGNORECASE)
 
 
@@ -194,8 +196,11 @@ def apply_mention_list(
         # Whole words only: "Anna" must not turn "Annabelle" into markup.
         word = re.compile(r"(?<!\w)" + re.escape(name) + r"(?!\w)")
         at = next(
-            (m.start() for m in word.finditer(out)
-             if not any(a <= m.start() < b for a, b in spans)),
+            (
+                m.start()
+                for m in word.finditer(out)
+                if not any(a <= m.start() < b for a, b in spans)
+            ),
             -1,
         )
         if at < 0:
@@ -241,11 +246,15 @@ def prepare_text(
     if loose:
         info["plaintext_names"] = loose
         if mention_check == "strict":
-            return [], info, {
-                "status": "mention_plaintext_name",
-                "names": loose,
-                "message": "A name to be mentioned also stands as plain text.",
-            }
+            return (
+                [],
+                info,
+                {
+                    "status": "mention_plaintext_name",
+                    "names": loose,
+                    "message": "A name to be mentioned also stands as plain text.",
+                },
+            )
     return segments, info, None
 
 
@@ -291,7 +300,9 @@ _COMPANY_ID_JS = r"""(slug) => {
 }"""
 
 
-async def resolve_targets(page: Any, navigate: Any, mentions: list[Mention]) -> dict[str, Any] | None:
+async def resolve_targets(
+    page: Any, navigate: Any, mentions: list[Mention]
+) -> dict[str, Any] | None:
     """Fill ``entity_id`` from the slug; a refusal unless exactly one id."""
     for m in mentions:
         if m.entity_id:
@@ -374,6 +385,9 @@ _PREP_JS = r"""(arg) => {
   range.selectNodeContents(el);
   range.collapse(false);
   sel.removeAllRanges(); sel.addRange(range);
+  // Programmatic insertion does not scroll the caret like native typing.
+  // Keep the last paragraph in view before opening a typeahead below it.
+  (el.lastElementChild || el).scrollIntoView({block: 'center', inline: 'nearest'});
   return 'ok';
 }"""
 
@@ -463,9 +477,7 @@ _TAG_OPTION_JS = r"""(index) => {
 }"""
 
 
-def choose_option(
-    options: list[dict[str, Any]], mention: Mention
-) -> dict[str, Any]:
+def choose_option(options: list[dict[str, Any]], mention: Mention) -> dict[str, Any]:
     """The suggestion for ``mention``, decided by identifier, never by position.
 
     Returns ``{"status": "ok", "index", "verify_only"}`` or a refusal.
@@ -477,7 +489,11 @@ def choose_option(
     kind_ok = [o for o in options if o.get("kind") in (mention.kind, None)]
     hits = [o for o in kind_ok if o.get("entity") and o["entity"] == mention.entity_id]
     if len(hits) > 1:
-        return {"status": "mention_ambiguous", "mention": mention.name, "count": len(hits)}
+        return {
+            "status": "mention_ambiguous",
+            "mention": mention.name,
+            "count": len(hits),
+        }
     if hits:
         if fold(hits[0].get("title")) != want:
             return {
@@ -496,8 +512,24 @@ def choose_option(
             "seen": [o.get("title") for o in options][:8],
         }
     if len(blind) > 1:
-        return {"status": "mention_ambiguous", "mention": mention.name, "count": len(blind)}
+        return {
+            "status": "mention_ambiguous",
+            "mention": mention.name,
+            "count": len(blind),
+        }
     return {"status": "ok", "index": blind[0]["index"], "verify_only": True}
+
+
+def _query_name(mention: Mention) -> str:
+    """Search a decorated person's core name; keep the full verification label."""
+    if mention.kind == "person":
+        parts = re.split(r"\s+[-–—|]\s+", mention.name, maxsplit=1)
+        if len(parts) == 2 and len(parts[0].split()) >= 2 and parts[1].strip():
+            # A translated suffix can make search miss the very profile whose
+            # full label it displays. This changes only the query: both the
+            # exact label and entity id must still pass choose_option/read-back.
+            return parts[0].strip()
+    return mention.name
 
 
 class MentionWriter:
@@ -521,7 +553,9 @@ class MentionWriter:
     async def _js(self, script: str, arg: Any = None) -> Any:
         return await self._page.evaluate(script, arg, isolated_context=False)
 
-    async def _settled_options(self, mention: Mention, engine: str) -> dict[str, Any]:
+    async def _settled_options(
+        self, mention: Mention, engine: str, *, query: str | None = None
+    ) -> dict[str, Any]:
         """Poll until the list is present and unchanged for ``settle_polls``."""
         loop = asyncio.get_running_loop()
         end = loop.time() + self._timeout
@@ -530,7 +564,10 @@ class MentionWriter:
         snap: dict[str, Any] = {}
         while True:
             await asyncio.sleep(self._poll)
-            snap = await self._js(_OPTIONS_JS, {"company_words": words("company_hint")}) or {}
+            snap = (
+                await self._js(_OPTIONS_JS, {"company_words": words("company_hint")})
+                or {}
+            )
             sig = [
                 (o.get("title"), o.get("subtitle"), o.get("entity"))
                 for o in snap.get("options") or []
@@ -541,11 +578,23 @@ class MentionWriter:
             # query in it (measured); without that announcement it is still
             # loading, however stable it looks.
             announced = engine != "quill" or any(
-                fold(mention.name) in fold(s) for s in snap.get("live") or []
+                fold(query if query is not None else mention.name) in fold(s)
+                for s in snap.get("live") or []
             )
-            if snap.get("listbox") and same >= self._settle and announced:
+            ready = snap.get("listbox") and same >= self._settle and announced
+            # A stable prefix response can precede the full query's response.
+            # Keep waiting for the exact target/name rather than treating an
+            # unrelated early list as final. The deadline still fails closed.
+            candidate = any(
+                o.get("entity") == mention.entity_id
+                or fold(o.get("title")) == fold(mention.name)
+                for o in snap.get("options") or []
+            )
+            if ready and candidate:
                 return {"status": "ok", **snap}
             if loop.time() >= end:
+                if ready:
+                    return {"status": "ok", **snap}
                 return {
                     "status": "mention_list_not_loaded",
                     "mention": mention.name,
@@ -557,13 +606,15 @@ class MentionWriter:
             return {"status": "mention_target_unresolved", "mention": mention.name}
         before = await self._js(_ENTITIES_JS, self._selector) or []
         prep = await self._js(
-            _PREP_JS, {"selector": self._selector, "require_empty": False, "clear": False}
+            _PREP_JS,
+            {"selector": self._selector, "require_empty": False, "clear": False},
         )
         if prep != "ok":
             return {"status": f"text_{prep}"}
         # Key by key like a hand: the typeahead listens to key input.
-        await self._page.keyboard.type("@" + mention.name, delay=60)
-        listed = await self._settled_options(mention, engine)
+        query = _query_name(mention)
+        await self._page.keyboard.type("@" + query, delay=60)
+        listed = await self._settled_options(mention, engine, query=query)
         if listed["status"] != "ok":
             return listed
         choice = choose_option(listed.get("options") or [], mention)
@@ -597,13 +648,19 @@ class MentionWriter:
             "status": "ok",
             "mention": mention.name,
             "entity_id": got.get("id"),
-            "picked_by": "verified_after_insert" if choice["verify_only"] else "identifier",
+            "picked_by": "verified_after_insert"
+            if choice["verify_only"]
+            else "identifier",
+            **({"query": query} if query != mention.name else {}),
         }
 
-    async def write(self, segments: list[Segment], *, clear: bool = False) -> dict[str, Any]:
+    async def write(
+        self, segments: list[Segment], *, clear: bool = False
+    ) -> dict[str, Any]:
         """Write all segments into the editor (empty, or cleared first)."""
         prep = await self._js(
-            _PREP_JS, {"selector": self._selector, "require_empty": True, "clear": clear}
+            _PREP_JS,
+            {"selector": self._selector, "require_empty": True, "clear": clear},
         )
         if prep != "ok":
             return {"status": f"text_{prep}"}
@@ -620,11 +677,17 @@ class MentionWriter:
             if kind == "text":
                 prep = await self._js(
                     _PREP_JS,
-                    {"selector": self._selector, "require_empty": False, "clear": False},
+                    {
+                        "selector": self._selector,
+                        "require_empty": False,
+                        "clear": False,
+                    },
                 )
                 if prep != "ok":
                     return {"status": f"text_{prep}", "mentions": written}
-                ok = await self._js(_INSERT_JS, {"selector": self._selector, "text": value})
+                ok = await self._js(
+                    _INSERT_JS, {"selector": self._selector, "text": value}
+                )
                 if ok != "ok":
                     return {"status": f"text_{ok}", "mentions": written}
             else:
@@ -635,7 +698,11 @@ class MentionWriter:
         state = await self._js(_STATE_JS, self._selector) or {}
         shown = canon(state.get("text"))
         if shown != canon(plain_text(segments)) or "[[" in shown:
-            return {"status": "text_mismatch", "mentions": written, "shown": shown[:200]}
+            return {
+                "status": "text_mismatch",
+                "mentions": written,
+                "shown": shown[:200],
+            }
         if wanted:
             final = await self._js(_ENTITIES_JS, self._selector) or []
             if [str(e.get("id")) for e in final] != [str(m.entity_id) for m in wanted]:
