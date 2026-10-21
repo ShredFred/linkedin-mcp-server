@@ -412,8 +412,8 @@ PACE_BUDGETS: dict[str, dict[str, int]] = {
 # (local date) inclusive and falls back to PACE_BUDGETS by itself afterwards;
 # nothing needs to be reverted by hand.
 PACE_TEMP_RAISES: dict[str, dict[str, Any]] = {
-    "search": {"day": 200, "week": 1100, "until": "2026-10-20",
-               "reason": "operator 2026-10-14: temporary for full event search, a third per day"},
+    "search": {"day": 200, "week": 1100, "until": "2026-11-03",
+               "reason": "operator 2026-10-21: extended for the event backfill"},
 }
 
 
