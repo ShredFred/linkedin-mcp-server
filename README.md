@@ -49,10 +49,12 @@
 > - `get_event_attendees` — List the attendees of a LinkedIn event via people search with eventAttending, 10 per page, at human pace (3-6 s between pages).
 > - `get_event_status` — One event page view (page_read budget, no people search): attendee total and whether the account itself has RSVP'd.
 > - `get_group_members` — Members of a group the account belongs to (name, slug, degree, headline), in LinkedIn's rendered order.
+> - `get_my_reactions` — Posts the signed-in member recently reacted to (liked etc.), from the own activity page, newest first.
 > - `get_page_followers` — Newest followers of a company page the account administers (numeric page id, e.g. 12345678), with name, degree, headline and the month followed.
 > - `get_post_analytics` — Impressions, members reached, reactions, comments, reposts, saves, sends, profile views and followers gained for the account's own posts.
 > - `get_post_engagers` — Who reacted to a post (with reaction kind) and who commented.
 > - `get_profile_viewers` — Who viewed the account's profile (last 90 days, newest first; full list with Premium / Sales Navigator).
+> - `get_saved_posts` — Posts the signed-in member saved (My items > Saved posts), newest first.
 > - `inmail_credits` — Remaining Sales Navigator InMail credits (one page read).
 > - `invite_to_event` — Invite 1st-degree connections to a LinkedIn event.
 > - `job_watch` — Weekly job watch: saved searches (default Metallograf, Werkstoffprüfer, Wärmebehandlung in Germany, Austria and Switzerland) plus the jobs of a company list, past week only, one results page each.

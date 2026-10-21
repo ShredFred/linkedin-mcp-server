@@ -30,6 +30,7 @@ from linkedin_mcp_server.linkedin.ext_network import (
 )
 from linkedin_mcp_server.linkedin.ext_events import ExtEventFinder, event_summary
 from linkedin_mcp_server.linkedin.ext_repost import ExtReposter
+from linkedin_mcp_server.linkedin.ext_saved import ExtSavedReader
 from linkedin_mcp_server.linkedin.ext_engagement import (
     ExtEngagementReader,
     SeenStore,
@@ -733,6 +734,64 @@ def register_ext_stage2_tools(
             ctx, "get_profile_viewers", lambda ex: _actions(ex).profile_viewers(limit)
         )
 
+    # -- 5b. saved posts and own reactions -------------------------------------
+
+    def _saved(ex: Any) -> ExtSavedReader:
+        return ExtSavedReader(ex.ext_session, ex.ext_navigator)
+
+    @mcp.tool(
+        timeout=tool_timeout,
+        title="Get Saved Posts",
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+        tags={TAG, "post"},
+    )
+    async def get_saved_posts(
+        ctx: Context,
+        limit: Annotated[int, Field(ge=1, le=100)] = 20,
+        query: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Posts the signed-in member saved (My items > Saved posts), newest
+        first. Each post: activity_id, post_url, author_url, text (card text,
+        author line included). ``query`` keeps only posts whose text contains
+        every whitespace-separated term (case-insensitive).
+
+        Refusals: pace_budget_spent, pace_lock_busy.
+        """
+        refusal = _pace("page_read", tool="get_saved_posts")
+        if refusal:
+            return refusal
+        return await _run(
+            ctx, "get_saved_posts", lambda ex: _saved(ex).read("saved", limit, query)
+        )
+
+    @mcp.tool(
+        timeout=tool_timeout,
+        title="Get My Reactions",
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+        tags={TAG, "post"},
+    )
+    async def get_my_reactions(
+        ctx: Context,
+        limit: Annotated[int, Field(ge=1, le=100)] = 20,
+        query: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Posts the signed-in member recently reacted to (liked etc.), from the
+        own activity page, newest first. Same shape and ``query`` filter as
+        get_saved_posts.
+
+        Refusals: pace_budget_spent, pace_lock_busy.
+        """
+        refusal = _pace("page_read", tool="get_my_reactions")
+        if refusal:
+            return refusal
+        return await _run(
+            ctx,
+            "get_my_reactions",
+            lambda ex: _saved(ex).read("reactions", limit, query),
+        )
+
     # -- 6. comments -------------------------------------------------------------
 
     @mcp.tool(
@@ -804,7 +863,10 @@ def register_ext_stage2_tools(
         (retry_safe=false, may be live: check the post, never comment again).
         """
         if as_company is not None:
-            if not str(as_company).strip().isdigit() or not (company_name or "").strip():
+            if (
+                not str(as_company).strip().isdigit()
+                or not (company_name or "").strip()
+            ):
                 return {
                     "status": "invalid_input",
                     "field": "as_company",
@@ -812,8 +874,11 @@ def register_ext_stage2_tools(
                     "message": "as_company is the numeric page id; company_name is required.",
                 }
             if reply_to is not None:
-                return {"status": "not_supported", "posted": False,
-                        "message": "Replies as a page are not built."}
+                return {
+                    "status": "not_supported",
+                    "posted": False,
+                    "message": "Replies as a page are not built.",
+                }
         from linkedin_mcp_server.linkedin.ext_mentions import plain_text, prepare_text
 
         segments, mention_info, bad = prepare_text(text, mentions, mention_check)
@@ -955,17 +1020,25 @@ def register_ext_stage2_tools(
                 if as_company is not None:
                     access = await actions.read_access(str(as_company).strip())
                     if not access.get("can_act_as_page"):
-                        return {"status": "company_role_insufficient", "posted": False,
-                                "role": access.get("role"),
-                                "role_source": access.get("role_source")}
+                        return {
+                            "status": "company_role_insufficient",
+                            "posted": False,
+                            "role": access.get("role"),
+                            "role_source": access.get("role_source"),
+                        }
                     return await actions.comment_as_page(
-                        str(as_company).strip(), str(company_name), activity_id,
-                        segments, confirm=go,
+                        str(as_company).strip(),
+                        str(company_name),
+                        activity_id,
+                        segments,
+                        confirm=go,
                     )
                 if target:
                     return await actions.reply(activity_id, target, text, go)
                 if has_mentions:
-                    return await actions.comment(activity_id, text, go, segments=segments)
+                    return await actions.comment(
+                        activity_id, text, go, segments=segments
+                    )
                 return await actions.comment(activity_id, text, go)
 
             def make(ex: Any) -> Any:
@@ -1503,7 +1576,7 @@ def register_ext_stage2_tools(
                     "keywords": kw,
                     "landed": landed[:120],
                 }
-            out =[event_summary(e) for e in events][:limit]
+            out = [event_summary(e) for e in events][:limit]
             truncated = len(events) > limit
             return {
                 "keywords": kw,
