@@ -780,6 +780,8 @@ class Pacer:
         if action in PACE_WRITE_KINDS:
             left = min(left, PACE_WRITE_TOTAL_PER_DAY - self._writes_today(events))
         extra: dict[str, Any] = {}
+        if code_stale():
+            extra["stale_code"] = True  # a refusal names an outdated process
         until = self.rate_limited_until(events)
         if until is not None:
             left = 0
@@ -897,12 +899,40 @@ class Pacer:
 
     def summary(self) -> dict[str, Any]:
         events = self._events()
-        return {
+        out = {
             "actions": {a: self.state(a, events) for a in PACE_BUDGETS},
             "writes_today": self._writes_today(events),
             "writes_per_day": PACE_WRITE_TOTAL_PER_DAY,
             "ledger": str(self.ledger.path),
         }
+        if code_stale():
+            out["stale_code"] = (
+                "budgets in this file changed after this server process started;"
+                " restart it -- it still counts with the old limits"
+            )
+        return out
+
+
+# 2026-10-18: a long-running server answered pace_status with search 130/day
+# while the file already said 200 -- two processes, two budgets, no signal.
+_LOADED_SIGNATURE: tuple[int, int] | None = None
+
+
+def _signature() -> tuple[int, int] | None:
+    try:
+        st = Path(__file__).stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+_LOADED_SIGNATURE = _signature()
+
+
+def code_stale() -> bool:
+    """True when this module's file changed on disk since it was imported."""
+    now = _signature()
+    return bool(_LOADED_SIGNATURE and now and now != _LOADED_SIGNATURE)
 
 
 # --- rate-limit coupling with navigation (#957) -----------------------------
