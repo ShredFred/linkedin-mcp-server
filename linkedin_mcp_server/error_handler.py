@@ -274,9 +274,16 @@ def raise_tool_error(exception: Exception, context: str = "") -> NoReturn:
 
     elif isinstance(exception, NetworkError):
         logger.warning("Network error%s: %s", ctx, exception)
+        # A browser that never started is not a network fault: usually another
+        # server instance holds the persistent profile. Callers retry on this
+        # text and must be able to tell it from a real outage.
+        browser_start = "failed to start browser" in str(exception).lower()
         _raise_tool_error_with_diagnostics(
             exception,
-            "Network error. Check your connection and try again.",
+            "Failed to start browser (profile_busy): another LinkedIn MCP server"
+            " may hold the browser profile. Retry shortly."
+            if browser_start
+            else "Network error. Check your connection and try again.",
             context=context,
         )
 

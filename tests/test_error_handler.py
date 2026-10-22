@@ -115,6 +115,15 @@ def test_raises_tool_error_for_network_error():
         raise_tool_error(NetworkError("timeout"))
 
 
+def test_browser_start_failure_is_named_not_network():
+    err = NetworkError(
+        "Failed to start browser: BrowserType.launch_persistent_context:"
+        " Target page, context or browser has been closed"
+    )
+    with pytest.raises(ToolError, match="profile_busy"):
+        raise_tool_error(err)
+
+
 def test_raises_tool_error_for_browser_binary_missing():
     with pytest.raises(ToolError, match="Patchright Chromium browser is missing"):
         raise_tool_error(
