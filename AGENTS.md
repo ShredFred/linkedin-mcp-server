@@ -154,6 +154,7 @@ Optional additional keys:
 
 ## Tests
 
+- Tests must write artifacts only to temporary directories, including in subprocesses.
 - **Tautologies.** Assert an observable contract independent of the
   implementation. Before committing a test, mutate the covered behaviour
   to introduce a plausible regression and watch that test fail. Reject
@@ -166,6 +167,10 @@ Optional additional keys:
   only coverage. Prefer a unit test elsewhere, and keep in mind that a
   fixture imitating LinkedIn's markup is a claim about LinkedIn, while one
   driving a synthetic container is a claim about the algorithm only.
+- **Reproduce a timing flake at its seam.** Inject the stall where the code
+  waits, with a monkeypatch or a `time.sleep` in a scratch copy, and run only
+  the affected tests at `-n 4` at most. Agents share one machine; one session
+  owns full-suite runs.
 
 ## Verifying Bug Reports
 
@@ -217,11 +222,11 @@ uv version --bump minor          # or: major, patch — updates pyproject.toml A
 uv run towncrier build --version "$(uv version --short)" --yes
 # optional: under the new version heading in docs/CHANGELOG.md, above the categories, add a `### Highlights` list of up to three `**Lead-in.** sentence ([#N](link))` bullets
 git add pyproject.toml uv.lock docs/CHANGELOG.md  # docs/CHANGELOG.md again, for the Highlights edit
-gt create -m "chore: Bump version to X.Y.Z"
+gt create -m "chore(release): Bump version to X.Y.Z"
 gt submit                        # merge PR to trigger release workflow
 ```
 
-The CI release workflow automatically updates `manifest.json`, `docker-compose.yml` and `.github/mcp/server.json` with the new version. Do not update them manually.
+The CI release workflow automatically updates `manifest.json`, `docker-compose.yml`, `.github/mcp/server.json` and the Codex, Claude Code, and Cursor plugin manifests under `plugins/linkedin-mcp-server/`. Do not update them manually.
 
 After the workflow completes, file a PR against
 [`docker/mcp-registry`](https://github.com/docker/mcp-registry) updating
@@ -237,6 +242,8 @@ this server no longer has, and `USER_AGENT` now refuses to start
 (`config/loaders.py`). It needs the session directory as a mount instead. Docker
 validates a changed entry by pulling the image and listing its tools over stdio,
 so the tag it moves to has to be a release where that works.
+
+**Cursor Marketplace:** after the plugin is on `main`, submit this public repository at [cursor.com/marketplace/publish](https://cursor.com/marketplace/publish). Review is manual; the checklist is in [Cursor's plugin reference](https://cursor.com/docs/reference/plugins) (kebab-case name, relative paths, committed logo, README, local install verified).
 
 `.github/mcp/server.json` is a different registry: the official one at
 `registry.modelcontextprotocol.io`, which is a service reached through
@@ -270,16 +277,19 @@ can ask for that.
 
 ## Commit Messages
 
-- Follow conventional commits: `type(scope): subject`
+- Follow conventional commits: `type(scope): Subject`
 - Types: feat, fix, docs, style, refactor, test, chore, perf, ci
-- Keep subject <50 chars, imperative mood
+- Subject: capitalized, imperative, under 50 chars
 
 ## Development Workflow
 
 Always read [`CONTRIBUTING.md`](.github/CONTRIBUTING.md) before filing an issue or working on this repository.
 
 - Write a short synthetic prompt that would reproduce the PR diff if given to a fresh Claude Code session. Don't copy the user's first message — distill the conversation into a single instruction that captures the full scope of changes. This tells the maintainer what was intended, which is often more useful than reviewing the full diff. Use a Markdown blockquote under a `## Synthetic prompt` heading.
-- End every PR body with `Generated with <model> for <job> in <tool> via <host>.` CI requires that line, including the period. For example, `Generated with Claude Opus 5.5 for implementation in Claude Code via T3 Code.` For several models, write `Generated with <model 1> for <job 1> and <model 2> for <job 2> in <tool> via <host>.` Every model needs a job. Commas or `/` list several jobs for one model.
+- End PR bodies with `Generated with <model> for <job> in <tool> via <host>.`
+  Repeat `<model> for <job>` joined by `and`; join jobs with `/`.
+  Humans are `Human`. Ask for unknown values.
+  Keep attribution in that line: before pushing, amend agent `Co-authored-by` trailers out of your commits.
 - When implementing a new feature/fix:
   1. Packet: before filing or commenting on a GitHub issue, read [.agents/skills/issue-packet/SKILL.md](.agents/skills/issue-packet/SKILL.md).
   2. Branch from `main`: `feature/issue-number-short-description`

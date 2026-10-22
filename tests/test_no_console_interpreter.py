@@ -18,7 +18,7 @@ from linkedin_mcp_server import no_console
 PKG = Path(no_console.__file__).resolve().parent
 SPAWNING = (
     "bootstrap.py",
-    "daemon_election.py",
+    "daemon/spawn.py",
     "installer_supervisor.py",
     "process_tree.py",
 )

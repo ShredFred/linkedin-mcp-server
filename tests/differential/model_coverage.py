@@ -110,6 +110,14 @@ AUTH_MODEL_COVERAGE: dict[str, tuple[str, tuple[str, ...]]] = {
             "::test_a_tool_that_changes_something_is_never_replayed",
         ),
     ),
+    # In process only: the native lane stays open (auth_repair.RESPONSE_LOSS_OPEN).
+    "response loss: a stale marker the owner produced, cut on the hop back": (
+        "H-R16-response-loss",
+        (
+            "tests/test_daemon_auth.py::TestALostMarkerResponse"
+            "::test_the_caller_is_told_it_is_unknown_and_the_next_call_repairs",
+        ),
+    ),
     "two frontends meeting one dead session": (
         "H-R16-second",
         (
@@ -205,14 +213,14 @@ ELIGIBILITY_MODEL_COVERAGE: dict[str, tuple[str, tuple[str, ...]]] = {
         "H-R14",
         (
             "tests/test_daemon_election.py::TestAnOwnerThisBuildMayOnlyControl"
-            "::test_a_live_owner_of_this_build_with_another_configuration_is_left_alone",
+            "::test_a_live_owner_of_this_version_with_another_configuration_is_left_alone",
         ),
     ),
     "rival silent: one probe, then Direct": (
         "H-R14",
         (
             "tests/test_daemon_election.py::TestAnOwnerThisBuildMayOnlyControl"
-            "::test_a_silent_owner_of_this_build_with_another_configuration_is_left_alone",
+            "::test_a_silent_owner_of_this_version_with_another_configuration_is_left_alone",
         ),
     ),
     "rival refused: leftovers buried, the election goes on": (
@@ -222,11 +230,20 @@ ELIGIBILITY_MODEL_COVERAGE: dict[str, tuple[str, tuple[str, ...]]] = {
             "::test_a_dead_owner_of_another_configuration_is_leftovers",
         ),
     ),
-    "another build's configuration: not probed": (
+    "an older version's configuration: turned over, not probed": (
         "H-R14",
         (
             "tests/test_daemon_election.py::TestAnOwnerThisBuildMayOnlyControl"
-            "::test_another_builds_configuration_is_not_probed",
+            "::test_an_older_owner_of_another_configuration_is_turned_over",
+            "tests/test_daemon_election.py::TestAnOwnerThisBuildMayOnlyControl"
+            "::test_an_older_owner_not_proved_for_control_is_never_asked",
+        ),
+    ),
+    "a newer or unknown version's configuration: not asked, not probed": (
+        "H-R14",
+        (
+            "tests/test_daemon_election.py::TestAnOwnerThisBuildMayOnlyControl"
+            "::test_a_newer_or_unknown_version_of_another_configuration_is_waited_out",
         ),
     ),
     "a configuration mismatch is read, and its pair is control only": (
@@ -263,3 +280,9 @@ def model_rows() -> dict[str, list[str]]:
             if row not in rows:
                 rows.append(row)
     return found
+
+
+if __name__ == "__main__":
+    # One node id a line, for ``pytest @FILE`` in the evidence workflow, which
+    # runs every mapped test on each platform.
+    print("\n".join(model_rows()))

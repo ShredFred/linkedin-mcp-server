@@ -939,8 +939,8 @@ class TestForwardingToASharedOwner:
 
     @staticmethod
     def _outcome(attachment):
-        from linkedin_mcp_server.daemon import OwnerLookup, OwnerState
-        from linkedin_mcp_server.daemon_election import ElectionOutcome
+        from linkedin_mcp_server.daemon.discovery import OwnerLookup, OwnerState
+        from linkedin_mcp_server.daemon.election import ElectionOutcome
 
         state = OwnerState.ATTACHABLE if attachment else OwnerState.ABSENT
         return ElectionOutcome(OwnerLookup(state=state, attachment=attachment))
@@ -960,7 +960,7 @@ class TestForwardingToASharedOwner:
         # The default. Electing an owner here would cost every user a detached
         # process for a feature they did not ask for.
         asked = MagicMock()
-        monkeypatch.setattr("linkedin_mcp_server.daemon_election.obtain_owner", asked)
+        monkeypatch.setattr("linkedin_mcp_server.daemon.election.obtain_owner", asked)
 
         assert cli_main._obtain_shared_owner(self._config(daemon_enabled=False)) is None
         asked.assert_not_called()
@@ -971,7 +971,7 @@ class TestForwardingToASharedOwner:
         # An explicit HTTP bind is already one server for many clients, so there
         # is nothing left for a daemon to deduplicate.
         asked = MagicMock()
-        monkeypatch.setattr("linkedin_mcp_server.daemon_election.obtain_owner", asked)
+        monkeypatch.setattr("linkedin_mcp_server.daemon.election.obtain_owner", asked)
         config = self._config(daemon_enabled=True, transport="streamable-http")
 
         assert cli_main._obtain_shared_owner(config) is None
@@ -984,7 +984,7 @@ class TestForwardingToASharedOwner:
         # it had before. Nothing about the profile or an owner may be looked up.
         asked = MagicMock()
         looked_up = MagicMock()
-        monkeypatch.setattr("linkedin_mcp_server.daemon_election.obtain_owner", asked)
+        monkeypatch.setattr("linkedin_mcp_server.daemon.election.obtain_owner", asked)
         monkeypatch.setattr("linkedin_mcp_server.cli_main.get_profile_dir", looked_up)
         config = self._config(daemon_enabled=True)
         config.browser.chrome_path = "/opt/custom/chrome"
@@ -1010,21 +1010,21 @@ class TestForwardingToASharedOwner:
             for name in ("obtain_owner", "prepare", "lock", "read", "backend")
         }
         monkeypatch.setattr(
-            "linkedin_mcp_server.daemon_election.obtain_owner",
+            "linkedin_mcp_server.daemon.election.obtain_owner",
             effects["obtain_owner"],
         )
         monkeypatch.setattr(
-            "linkedin_mcp_server.daemon_descriptor.prepare_daemon_state",
+            "linkedin_mcp_server.daemon.descriptor.prepare_daemon_state",
             effects["prepare"],
         )
         monkeypatch.setattr(
-            "linkedin_mcp_server.daemon_descriptor.read", effects["read"]
+            "linkedin_mcp_server.daemon.descriptor.read", effects["read"]
         )
         monkeypatch.setattr(
-            "linkedin_mcp_server.daemon_lock.DaemonLock.__init__", effects["lock"]
+            "linkedin_mcp_server.daemon.lock.DaemonLock.__init__", effects["lock"]
         )
         monkeypatch.setattr(
-            "linkedin_mcp_server.daemon_proxy.DaemonProxyBackend.__init__",
+            "linkedin_mcp_server.daemon.proxy.DaemonProxyBackend.__init__",
             effects["backend"],
         )
         monkeypatch.setattr(
@@ -1051,7 +1051,7 @@ class TestForwardingToASharedOwner:
 
         profile = tmp_path / "profile"
         elected = MagicMock(return_value=self._outcome(None))
-        monkeypatch.setattr("linkedin_mcp_server.daemon_election.obtain_owner", elected)
+        monkeypatch.setattr("linkedin_mcp_server.daemon.election.obtain_owner", elected)
         monkeypatch.setattr(
             "linkedin_mcp_server.cli_main.get_profile_dir", lambda: profile
         )
@@ -1076,7 +1076,7 @@ class TestForwardingToASharedOwner:
         # is the one attachment the proxy backend refuses to be built around.
         attachment.control_only = False
         monkeypatch.setattr(
-            "linkedin_mcp_server.daemon_election.obtain_owner",
+            "linkedin_mcp_server.daemon.election.obtain_owner",
             lambda *_args, **_kwargs: self._outcome(attachment),
         )
         monkeypatch.setattr(
@@ -1087,7 +1087,9 @@ class TestForwardingToASharedOwner:
 
         # Through the backend the proxy layer is built from, which is what now
         # carries it. The claim is unchanged: the election's answer survives.
-        assert found is not None
+        from linkedin_mcp_server.daemon.proxy import DaemonProxyBackend
+
+        assert isinstance(found, DaemonProxyBackend)
         assert found.attachment is attachment
 
     def test_a_failed_election_leaves_this_process_driving_its_own_browser(
@@ -1098,7 +1100,7 @@ class TestForwardingToASharedOwner:
         # exists to remove. A client that refused to start would fail where
         # nobody reads the reason, so the warning is what has to carry it.
         monkeypatch.setattr(
-            "linkedin_mcp_server.daemon_election.obtain_owner",
+            "linkedin_mcp_server.daemon.election.obtain_owner",
             lambda *_args, **_kwargs: self._outcome(None),
         )
         monkeypatch.setattr(
@@ -1118,7 +1120,7 @@ class TestForwardingToASharedOwner:
         def explode(*_args, **_kwargs):
             raise RuntimeError("the lock is on a filesystem without locking")
 
-        monkeypatch.setattr("linkedin_mcp_server.daemon_election.obtain_owner", explode)
+        monkeypatch.setattr("linkedin_mcp_server.daemon.election.obtain_owner", explode)
         monkeypatch.setattr(
             "linkedin_mcp_server.cli_main.get_profile_dir", lambda: tmp_path / "profile"
         )
@@ -1140,7 +1142,7 @@ class TestForwardingToASharedOwner:
         # runs. Stubbing `_obtain_shared_owner` would let it go on discarding the
         # outcome — the bug this PR fixes — while this test still passed.
         monkeypatch.setattr(
-            "linkedin_mcp_server.daemon_election.obtain_owner",
+            "linkedin_mcp_server.daemon.election.obtain_owner",
             lambda *_args, **_kwargs: self._outcome(attachment),
         )
         monkeypatch.setattr(
@@ -1201,7 +1203,7 @@ class TestForwardingToASharedOwner:
             called.append(True)
             raise RuntimeError("no owner")
 
-        monkeypatch.setattr("linkedin_mcp_server.daemon_election.obtain_owner", record)
+        monkeypatch.setattr("linkedin_mcp_server.daemon.election.obtain_owner", record)
         monkeypatch.setattr(
             "linkedin_mcp_server.cli_main.choose_transport_interactive",
             lambda: "streamable-http",
@@ -1302,8 +1304,9 @@ class _Owner:
     ):
         import httpx2
 
-        from linkedin_mcp_server import daemon_descriptor, daemon_liveness
-        from linkedin_mcp_server.daemon_owner import create_owner_server
+        from linkedin_mcp_server.daemon import descriptor as daemon_descriptor
+        from linkedin_mcp_server.daemon import liveness as daemon_liveness
+        from linkedin_mcp_server.daemon.owner import create_owner_server
         from linkedin_mcp_server.session_state import auth_root_dir, get_runtime_id
 
         self.events: list[tuple] = []
@@ -1315,30 +1318,30 @@ class _Owner:
         self.port = 49152
         profile.mkdir(parents=True, exist_ok=True)
         auth_root = auth_root_dir(profile)
-        daemon_descriptor.publish(
-            auth_root,
-            daemon_descriptor.build(
-                instance_id=self.instance,
-                package_version="4.20.0",
-                runtime_id=get_runtime_id(),
-                profile=profile,
-                host=self.HOST,
-                port=self.port,
-                path="/mcp",
-                token=self.token,
-                # Another configuration than the client's: retirement is about
-                # the browser, not about whether this client could use it.
-                config=AppConfig(),
-                log_path=auth_root / "daemon.log",
-            ),
-            self.token,
+        descriptor = daemon_descriptor.build(
+            instance_id=self.instance,
+            package_version="4.20.0",
+            runtime_id=get_runtime_id(),
+            profile=profile,
+            host=self.HOST,
+            port=self.port,
+            path="/mcp",
+            token=self.token,
+            # Another configuration than the client's: retirement is about
+            # the browser, not about whether this client could use it.
+            config=AppConfig(),
+            log_path=auth_root / "daemon.log",
         )
+        daemon_descriptor.prepare(auth_root, descriptor, self.token)
+        daemon_descriptor.commit_prepared(auth_root, self.instance)
         self.liveness = daemon_liveness.get_liveness()
         self.liveness.serving_as(self.instance)
+        # Committed just above, so admission is open, as for the real owner.
+        self.liveness.the_endpoint_is_live()
 
         def stand_down() -> None:
             # What `run_owner`'s own callback does.
-            self.liveness.retire("turnover")
+            self.liveness.turn_over()
             self.turnover.append("asked")
 
         self.app = create_owner_server(
@@ -1361,7 +1364,7 @@ class _Owner:
 
         if bridged:
             monkeypatch.setattr(
-                "linkedin_mcp_server.daemon_owner.direct_http_client",
+                "linkedin_mcp_server.daemon.owner.direct_http_client",
                 lambda *, timeout: httpx2.Client(
                     transport=Bridge(), trust_env=False, timeout=timeout
                 ),
@@ -1397,24 +1400,39 @@ class _Owner:
             content=content,
         )
 
+    def admit_a_call(self, *, running: bool) -> None:
+        """Count one admitted call, *running* in its tool body or still queued.
+
+        Decided through the owner's own core but with no task started, because
+        these tests have no event loop of their own to start one on.
+        """
+        import time
+
+        from linkedin_mcp_server.daemon.core import owner as lifecycle
+        from linkedin_mcp_server.daemon.liveness import new_call_id
+
+        call_id = new_call_id()
+        state, _effects = lifecycle.on_event(
+            self.liveness.state, lifecycle.Admit(call_id, time.monotonic())
+        )
+        if running:
+            state, _effects = lifecycle.on_event(state, lifecycle.BodyBegan(call_id))
+        self.liveness._state = state
+
     def sent_only_the_idle_only_request(self) -> bool:
-        from linkedin_mcp_server.daemon_owner import STAND_DOWN_PATH
+        from linkedin_mcp_server.daemon.owner import STAND_DOWN_PATH
 
         return [(m, path, json.loads(body)) for m, path, body in self.requests] == [
             (
                 "POST",
                 STAND_DOWN_PATH,
-                {
-                    "only_if_idle": True,
-                    "protocol": _protocol(),
-                    "instance": self.instance,
-                },
+                {"version": 1, "mode": "idle_only", "instance": self.instance},
             )
         ]
 
 
 def _protocol() -> int:
-    from linkedin_mcp_server.daemon_descriptor import PROTOCOL_VERSION
+    from linkedin_mcp_server.daemon.descriptor import PROTOCOL_VERSION
 
     return PROTOCOL_VERSION
 
@@ -1423,20 +1441,21 @@ class TestRetiringASharedBrowser:
     """--logout, --login and --import-from-browser under a shared browser.
 
     The contract: ask only after the user confirms, retire only an owner with
-    nothing in flight or queued, never fall back to the unconditional
-    stand-down, never describe a request that may have been sent as unsent,
+    nothing in flight or queued, never fall back to a turnover, never
+    describe a request that may have been sent as unsent,
     and change the profile only once its lease is held.
     """
 
     @pytest.fixture(autouse=True)
     def _machine(self, monkeypatch, tmp_path, isolate_profile_dir):
-        from linkedin_mcp_server import daemon_descriptor
+        from linkedin_mcp_server.daemon import descriptor as daemon_descriptor
+        from linkedin_mcp_server.private_state import harden_directory
         from linkedin_mcp_server.storage_class import Classification, StorageClass
 
         # Every daemon file under a home of this test's own, never the real one.
+        # Hardened rather than created: on Windows the daemon refuses a home
+        # whose access list is still inherited, as no real profile root is.
         self.home = tmp_path / "home"
-        # Hardened, not merely created: on Windows the daemon refuses a home
-        # whose permissions are still inherited (see test_daemon_election).
         harden_directory(self.home)
         monkeypatch.setattr(daemon_descriptor, "_account_home", lambda: self.home)
         monkeypatch.setattr(
@@ -1552,7 +1571,9 @@ class TestRetiringASharedBrowser:
         self._seed_session()
         owner = self._owner()
         looked = MagicMock(side_effect=AssertionError("looked for an owner"))
-        self.monkeypatch.setattr("linkedin_mcp_server.daemon.look_up_owner", looked)
+        self.monkeypatch.setattr(
+            "linkedin_mcp_server.daemon.discovery.look_up_owner", looked
+        )
         entries_before = sorted(p.name for p in self.home.rglob("*"))
         prompts = self._answers("y")
 
@@ -1574,7 +1595,7 @@ class TestRetiringASharedBrowser:
         owner = None
         if recorded != "nothing":
             owner = self._owner()
-            from linkedin_mcp_server import daemon_descriptor
+            from linkedin_mcp_server.daemon import descriptor as daemon_descriptor
             from linkedin_mcp_server.session_state import auth_root_dir
 
             path = daemon_descriptor.descriptor_path(auth_root_dir(self.profile))
@@ -1599,7 +1620,7 @@ class TestRetiringASharedBrowser:
     def test_an_unreadable_record_is_said_once_and_the_lease_decides(
         self, damage, capsys
     ):
-        from linkedin_mcp_server import daemon_descriptor
+        from linkedin_mcp_server.daemon import descriptor as daemon_descriptor
         from linkedin_mcp_server.session_state import auth_root_dir
 
         self._seed_session()
@@ -1611,7 +1632,7 @@ class TestRetiringASharedBrowser:
             daemon_descriptor.token_path(auth_root, owner.instance).write_text("x")
         else:
             self.monkeypatch.setattr(
-                "linkedin_mcp_server.daemon.look_up_owner",
+                "linkedin_mcp_server.daemon.discovery.look_up_owner",
                 MagicMock(side_effect=OSError("state storage went away")),
             )
         prompts = self._answers("y")
@@ -1625,14 +1646,14 @@ class TestRetiringASharedBrowser:
         assert not self._session_intact()
 
     def test_an_owner_of_another_protocol_is_never_asked(self, capsys):
-        from linkedin_mcp_server import daemon_descriptor
+        from linkedin_mcp_server.daemon import descriptor as daemon_descriptor
         from linkedin_mcp_server.session_state import auth_root_dir
 
         self._seed_session()
         owner = self._owner()
         path = daemon_descriptor.descriptor_path(auth_root_dir(self.profile))
         raw = json.loads(path.read_text())
-        raw["protocol_version"] = _protocol() - 1
+        raw["protocol_version"] = _protocol() + 1
         path.write_text(json.dumps(raw))
         prompts = self._answers("y")
 
@@ -1779,7 +1800,7 @@ class TestRetiringASharedBrowser:
 
         assert owner.sent_only_the_idle_only_request()
         assert owner.liveness.retiring is True
-        assert owner.liveness.retire_reason == "retire"
+        assert owner.liveness.state.retirement == "retire"
         assert owner.turnover == ["asked"]
         # One reference, taken once, in the one place the logout takes it.
         assert taken == [1]
@@ -1792,9 +1813,7 @@ class TestRetiringASharedBrowser:
 
         self._seed_session()
         owner = self._owner()
-        if busy_with == "running":
-            owner.liveness.watch("v1." + "a" * 32, MagicMock())
-        owner.liveness.call_started()
+        owner.admit_a_call(running=busy_with == "running")
         self._answers("y", "y")
 
         assert self._logout() == 1
@@ -1814,7 +1833,7 @@ class TestRetiringASharedBrowser:
         import os
 
         owner = self._owner()
-        owner.liveness.call_started()
+        owner.admit_a_call(running=False)
         self._answers("y", "y")
 
         login_code, creation = self._login()
@@ -2002,7 +2021,7 @@ class TestRetiringASharedBrowser:
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             closed = probe.getsockname()[1]
-        from linkedin_mcp_server import daemon_descriptor
+        from linkedin_mcp_server.daemon import descriptor as daemon_descriptor
         from linkedin_mcp_server.session_state import auth_root_dir
 
         path = daemon_descriptor.descriptor_path(auth_root_dir(self.profile))
@@ -2347,7 +2366,7 @@ class TestRetiringASharedBrowser:
         self._seed_session()
         owner = self._owner()
         self.monkeypatch.setattr(
-            "linkedin_mcp_server.daemon.look_up_owner",
+            "linkedin_mcp_server.daemon.discovery.look_up_owner",
             MagicMock(side_effect=KeyboardInterrupt),
         )
         prompts = self._answers("y")
@@ -2389,7 +2408,7 @@ class TestStatusUnderAHeldProfile:
 
     @pytest.fixture(autouse=True)
     def _machine(self, monkeypatch, tmp_path, isolate_profile_dir):
-        from linkedin_mcp_server import daemon_descriptor
+        from linkedin_mcp_server.daemon import descriptor as daemon_descriptor
         from linkedin_mcp_server.exceptions import BrowserBusyError
         from linkedin_mcp_server.session_state import (
             get_runtime_id,
@@ -2469,7 +2488,9 @@ class TestStatusUnderAHeldProfile:
         self.config.server.daemon_enabled = False
         _Owner(self.monkeypatch, self.home, self.profile)
         looked = MagicMock(side_effect=AssertionError("looked for an owner"))
-        self.monkeypatch.setattr("linkedin_mcp_server.daemon.look_up_owner", looked)
+        self.monkeypatch.setattr(
+            "linkedin_mcp_server.daemon.discovery.look_up_owner", looked
+        )
 
         out = self._status(capsys, caplog)
 
@@ -2478,7 +2499,7 @@ class TestStatusUnderAHeldProfile:
 
     def test_an_unreadable_record_names_nothing(self, capsys, caplog):
         self.monkeypatch.setattr(
-            "linkedin_mcp_server.daemon.look_up_owner",
+            "linkedin_mcp_server.daemon.discovery.look_up_owner",
             MagicMock(side_effect=OSError("state storage went away")),
         )
 

@@ -9,7 +9,6 @@ import pytest
 from linkedin_mcp_server import ext_outreach as outreach
 from linkedin_mcp_server.linkedin import ext_actions as A
 from linkedin_mcp_server.linkedin import ext_own_content as oc
-from linkedin_mcp_server.tools import ext_own_content as t
 ACT = "7123456789012345678"
 CID = "7123456789012340001"
 ME = "jane-doe-acme"

@@ -20,6 +20,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -100,8 +101,8 @@ def _messages(caplog) -> list[str]:
 
 def _attachment(tmp_path: Path, port: int = 51234) -> Any:
     from linkedin_mcp_server.config.schema import AppConfig
-    from linkedin_mcp_server.daemon import Attachment
-    from linkedin_mcp_server.daemon_descriptor import build, new_instance_id, new_token
+    from linkedin_mcp_server.daemon.discovery import Attachment
+    from linkedin_mcp_server.daemon.descriptor import build, new_instance_id, new_token
 
     directory = tmp_path / "profile"
     directory.mkdir(exist_ok=True)
@@ -124,7 +125,7 @@ def _attachment(tmp_path: Path, port: int = 51234) -> Any:
 
 
 def _beating(monkeypatch, answer: Callable[[], Any]) -> None:
-    from linkedin_mcp_server.daemon_proxy import FrontendCallHeartbeatMiddleware
+    from linkedin_mcp_server.daemon.proxy import FrontendCallHeartbeatMiddleware
 
     async def beat(_attachment: Any, _call_id: str) -> Any:
         return answer()
@@ -133,13 +134,16 @@ def _beating(monkeypatch, answer: Callable[[], Any]) -> None:
 
 
 async def _preflight_lines(monkeypatch, caplog, tmp_path, answer) -> list[str]:
-    from linkedin_mcp_server.daemon_proxy import FrontendCallHeartbeatMiddleware
+    from linkedin_mcp_server.daemon.proxy import (
+        FrontendCallHeartbeatMiddleware,
+        Responsiveness,
+    )
 
     _beating(monkeypatch, answer)
     attachment = _attachment(tmp_path)
-    with caplog.at_level(logging.INFO, logger="linkedin_mcp_server.daemon_proxy"):
+    with caplog.at_level(logging.INFO, logger="linkedin_mcp_server.daemon.proxy"):
         await FrontendCallHeartbeatMiddleware(MagicMock())._preflight(
-            attachment, "v1." + "0" * 32
+            attachment, "v1." + "0" * 32, Responsiveness()
         )
     return _messages(caplog)
 
@@ -147,7 +151,7 @@ async def _preflight_lines(monkeypatch, caplog, tmp_path, answer) -> list[str]:
 async def test_a_retiring_owners_preflight_refusal_reads_as_retiring(
     monkeypatch, caplog, tmp_path
 ):
-    from linkedin_mcp_server.daemon_descriptor import PROTOCOL_VERSION
+    from linkedin_mcp_server.daemon.descriptor import PROTOCOL_VERSION
 
     attachment = _attachment(tmp_path)
     instance = attachment.descriptor.instance_id
@@ -162,12 +166,15 @@ async def test_a_retiring_owners_preflight_refusal_reads_as_retiring(
             },
         )
 
-    from linkedin_mcp_server.daemon_proxy import FrontendCallHeartbeatMiddleware
+    from linkedin_mcp_server.daemon.proxy import (
+        FrontendCallHeartbeatMiddleware,
+        Responsiveness,
+    )
 
     _beating(monkeypatch, refused)
-    with caplog.at_level(logging.INFO, logger="linkedin_mcp_server.daemon_proxy"):
+    with caplog.at_level(logging.INFO, logger="linkedin_mcp_server.daemon.proxy"):
         await FrontendCallHeartbeatMiddleware(MagicMock())._preflight(
-            attachment, "v1." + "0" * 32
+            attachment, "v1." + "0" * 32, Responsiveness()
         )
     attempts = attempts_in(_messages(caplog))
     assert attempts == [{"attempt": "preflight", "classification": "retiring"}]
@@ -199,8 +206,8 @@ async def test_a_go_ahead_is_no_attempt_line(monkeypatch, caplog, tmp_path):
 async def test_the_owners_signed_refusal_reads_as_a_dispatch_refusal(
     monkeypatch, caplog, tmp_path
 ):
-    from linkedin_mcp_server.daemon_liveness import RETIRING, _refusal, get_liveness
-    from linkedin_mcp_server.daemon_proxy import (
+    from linkedin_mcp_server.daemon.liveness import RETIRING, _refusal, get_liveness
+    from linkedin_mcp_server.daemon.proxy import (
         FrontendCallHeartbeatMiddleware,
         OwnerUnreachableError,
     )
@@ -216,7 +223,7 @@ async def test_the_owners_signed_refusal_reads_as_a_dispatch_refusal(
     async def refused_at_the_owner(_context: Any) -> Any:
         return _refusal(RETIRING, "shut down before this call started")
 
-    with caplog.at_level(logging.INFO, logger="linkedin_mcp_server.daemon_proxy"):
+    with caplog.at_level(logging.INFO, logger="linkedin_mcp_server.daemon.proxy"):
         with pytest.raises(OwnerUnreachableError):
             await FrontendCallHeartbeatMiddleware(cast(Any, backend)).on_call_tool(
                 MagicMock(), cast(Any, refused_at_the_owner)
@@ -229,11 +236,11 @@ async def test_an_election_and_a_replay_read_from_the_frontends_lines(
     monkeypatch, caplog, tmp_path
 ):
     from linkedin_mcp_server.config.schema import AppConfig
-    from linkedin_mcp_server.daemon import OwnerLookup, OwnerState
-    from linkedin_mcp_server.daemon_election import ElectionOutcome
-    from linkedin_mcp_server.daemon_proxy import (
+    from linkedin_mcp_server.daemon.discovery import OwnerLookup, OwnerState
+    from linkedin_mcp_server.daemon.election import ElectionOutcome
+    from linkedin_mcp_server.daemon.proxy import (
         DaemonProxyBackend,
-        FrontendOwnerRecoveryMiddleware,
+        FrontendCallMiddleware,
         OwnerUnreachableError,
     )
 
@@ -246,7 +253,7 @@ async def test_an_election_and_a_replay_read_from_the_frontends_lines(
         config=AppConfig(),
     )
     monkeypatch.setattr(
-        "linkedin_mcp_server.daemon_election.obtain_owner",
+        "linkedin_mcp_server.daemon.election.obtain_owner",
         lambda *_a, **_k: ElectionOutcome(
             OwnerLookup(state=OwnerState.ATTACHABLE, attachment=replacement),
             started_owner=True,
@@ -264,8 +271,8 @@ async def test_an_election_and_a_replay_read_from_the_frontends_lines(
             )
         return "read"
 
-    with caplog.at_level(logging.INFO, logger="linkedin_mcp_server.daemon_proxy"):
-        answer = await FrontendOwnerRecoveryMiddleware(backend).on_call_tool(
+    with caplog.at_level(logging.INFO, logger="linkedin_mcp_server.daemon.proxy"):
+        answer = await FrontendCallMiddleware(backend, budget=30.0).on_call_tool(
             MagicMock(), cast(Any, call_next)
         )
     assert answer == "read"
@@ -287,25 +294,30 @@ def _stopped_server() -> tuple[Any, Any]:
 
 
 async def test_the_owners_idle_exit_line_is_the_one_the_rows_wait_for(caplog):
-    from linkedin_mcp_server import daemon_liveness
-    from linkedin_mcp_server.daemon_owner import _serve_until_stopped
+    from linkedin_mcp_server.daemon import liveness as daemon_liveness
+    from linkedin_mcp_server.daemon.owner import _serve_until_stopped
 
     liveness = daemon_liveness.get_liveness()
     liveness.the_endpoint_is_live()
-    liveness._quiet_since = liveness._quiet_since - 60  # ty: ignore
+    quiet_since = liveness.state.quiet_since
+    assert quiet_since is not None
+    liveness._state = replace(liveness.state, quiet_since=quiet_since - 60)
     server, serving = _stopped_server()
-    with caplog.at_level(logging.INFO, logger="linkedin_mcp_server.daemon_owner"):
-        await _serve_until_stopped(server, serving, [], 0.05, lock=None)
+    with caplog.at_level(logging.INFO, logger="linkedin_mcp_server.daemon.owner"):
+        await _serve_until_stopped(server, serving, 0.05, lock=None)
     assert any(retirement_race.OWNER_IDLE_LINE in line for line in _messages(caplog))
 
 
 async def test_a_turnover_that_cuts_a_call_is_read_from_the_owners_lines(
     monkeypatch, caplog
 ):
-    from linkedin_mcp_server import daemon_liveness, daemon_owner
+    from linkedin_mcp_server.daemon import liveness as daemon_liveness
+    from linkedin_mcp_server.daemon import owner as daemon_owner
+    from linkedin_mcp_server.daemon.core import owner as lifecycle
 
-    monkeypatch.setattr(daemon_owner, "_TURNOVER_DRAIN_SECONDS", 0.2)
+    monkeypatch.setattr(lifecycle, "TURNOVER_DRAIN_SECONDS", 0.2)
     liveness = daemon_liveness.get_liveness()
+    liveness.the_endpoint_is_live()
 
     async def held() -> None:
         await asyncio.sleep(3600)
@@ -313,8 +325,9 @@ async def test_a_turnover_that_cuts_a_call_is_read_from_the_owners_lines(
     task = liveness.admit(daemon_liveness.new_call_id(), held)
     assert task is not None
     server, serving = _stopped_server()
+    liveness.turn_over()
     with caplog.at_level(logging.INFO):
-        await daemon_owner._serve_until_stopped(server, serving, ["asked"], lock=None)
+        await daemon_owner._serve_until_stopped(server, serving, lock=None)
     await asyncio.gather(task, return_exceptions=True)
     assert owner_log_reading(_messages(caplog)) == {
         "turned_over": True,
@@ -324,11 +337,12 @@ async def test_a_turnover_that_cuts_a_call_is_read_from_the_owners_lines(
 
 
 async def test_a_turnover_with_nothing_admitted_cuts_nothing(caplog):
-    from linkedin_mcp_server import daemon_owner
+    from linkedin_mcp_server.daemon import owner as daemon_owner
 
     server, serving = _stopped_server()
+    daemon_owner.get_liveness().turn_over()
     with caplog.at_level(logging.INFO):
-        await daemon_owner._serve_until_stopped(server, serving, ["asked"], lock=None)
+        await daemon_owner._serve_until_stopped(server, serving, lock=None)
     assert owner_log_reading(_messages(caplog)) == {
         "turned_over": True,
         "cut": 0,
@@ -367,14 +381,15 @@ async def test_directs_idle_close_line_is_the_one_the_rows_wait_for(
 
 
 def test_the_declared_values_are_the_products():
-    from linkedin_mcp_server import daemon_owner
+    from linkedin_mcp_server.daemon import owner as daemon_owner
+    from linkedin_mcp_server.daemon.core import owner as lifecycle
     from linkedin_mcp_server.config.schema import AppConfig
 
     server = daemon_owner.create_owner_server(
         config=AppConfig(), token="token", host="127.0.0.1", port=51234
     )
     assert server.config.timeout_graceful_shutdown == OWNER_GRACE_SECONDS
-    assert daemon_owner._TURNOVER_DRAIN_SECONDS == TURNOVER_DRAIN_SECONDS
+    assert lifecycle.TURNOVER_DRAIN_SECONDS == TURNOVER_DRAIN_SECONDS
     assert retirement_race.WARM_TOOL == harness.READ_TOOL
 
 
@@ -420,7 +435,7 @@ _SECRET = "the-owners-secret-token"
 
 
 def _recording(monkeypatch, published: Any, answer: httpx2.Response) -> list[Any]:
-    from linkedin_mcp_server import daemon_owner
+    from linkedin_mcp_server.daemon import owner as daemon_owner
 
     sent: list[Any] = []
 
@@ -440,8 +455,8 @@ def _recording(monkeypatch, published: Any, answer: httpx2.Response) -> list[Any
     return sent
 
 
-def test_the_stand_down_is_the_products_bodyless_request(monkeypatch, tmp_path):
-    from linkedin_mcp_server.daemon_owner import STAND_DOWN_PATH
+def test_the_stand_down_is_the_products_turnover_request(monkeypatch, tmp_path):
+    from linkedin_mcp_server.daemon.owner import STAND_DOWN_PATH
 
     sent = _recording(
         monkeypatch, _published(), httpx2.Response(200, json={"standing_down": True})
@@ -453,12 +468,38 @@ def test_the_stand_down_is_the_products_bodyless_request(monkeypatch, tmp_path):
     [request] = sent
     assert request.method == "POST"
     assert request.url.path == STAND_DOWN_PATH
-    assert request.content == b""
+    assert json.loads(request.content) == {
+        "version": 1,
+        "mode": "turnover",
+        "instance": "owner-a",
+    }
     assert request.headers["authorization"] == f"Bearer {_SECRET}"
     assert found["status"] == 200 and found["standing_down"] is True
     assert found["addressed"] is True and found["error"] is None
     assert found["sent_ns"] <= found["answered_ns"]
     assert _SECRET not in json.dumps(found)
+
+
+def test_a_frozen_baseline_owner_gets_its_own_bodyless_request(monkeypatch, tmp_path):
+    # The baseline predates the versioned request and refuses a body it does
+    # not know, so a K2 row asks it the way it understands.
+    from differential.daemon_state import BASELINE_LAYOUT, DaemonStateLayout
+
+    sent = _recording(
+        monkeypatch, _published(), httpx2.Response(200, json={"standing_down": True})
+    )
+    monkeypatch.setattr(DaemonStateLayout, "read", lambda _self, _root: _published())
+    monkeypatch.setattr(
+        DaemonStateLayout, "read_token", lambda _self, _root, _published: _SECRET
+    )
+    account = harness.ActorAccount(tmp_path / "profile", layout=BASELINE_LAYOUT)
+
+    found = harness.ask_to_stand_down(account, _identified())
+
+    [request] = sent
+    assert request.content == b""
+    assert request.headers["authorization"] == f"Bearer {_SECRET}"
+    assert found["status"] == 200 and found["standing_down"] is True
 
 
 def test_a_descriptor_naming_another_owner_gets_no_request(monkeypatch, tmp_path):
@@ -1843,7 +1884,10 @@ class _RaceScene(_CalibrationScene):
         self.closed = False
         self.on_stderr: Callable[[str], None] = lambda _line: None
         self.background: list[asyncio.Future[Any]] = []
-        self.last_end = time.monotonic()
+        #: When the last call ended. The quiet period starts there and not at
+        #: construction: under a slow setup, a clock started here would let
+        #: ``closes_under_call`` spend its one close on the warm-up.
+        self.last_end: float | None = None
         for name, value in (
             ("IDLE_RACE_TIMEOUT_SECONDS", self.idle),
             ("OWNER_GRACE_SECONDS", 0.2),
@@ -1872,13 +1916,13 @@ class _RaceScene(_CalibrationScene):
     async def _idle_closer(self) -> None:
         while True:
             await asyncio.sleep(0.05)
-            quiet = time.monotonic() - self.last_end
             if (
-                self.browser
+                self.last_end is not None
+                and self.browser
                 and not self.never_closes
                 and not self.closed
                 and (self.in_flight == 0 or self.closes_under_call)
-                and quiet >= self.idle
+                and time.monotonic() - self.last_end >= self.idle
             ):
                 self.closed = True
                 self._close()

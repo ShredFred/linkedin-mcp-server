@@ -462,16 +462,25 @@ def test_manual_selection_is_one_platform_and_one_group() -> None:
     assert len(ci_evidence.evidence_matrix("all", "pipes")) == len(
         ci_evidence.PLATFORMS
     )
-    assert len(ci_evidence.evidence_matrix("macos-latest", "all")) == len(
+    assert len(ci_evidence.evidence_matrix("windows-latest", "all")) == len(
         ci_evidence.GROUPS
     )
     everything = ci_evidence.evidence_matrix("all", "all")
-    assert len(everything) == len(ci_evidence.PLATFORMS) * len(ci_evidence.GROUPS)
     assert {(job["os"], job["rows"]) for job in everything} == {
         (os_name, group)
         for os_name in ci_evidence.PLATFORMS
         for group in ci_evidence.GROUPS
+        if group != "crash" or os_name == "windows-latest"
     }
+    assert len(everything) == len({(job["os"], job["rows"]) for job in everything})
+
+
+def test_the_crash_group_runs_on_windows_only() -> None:
+    assert [job["os"] for job in ci_evidence.evidence_matrix("all", "crash")] == [
+        "windows-latest"
+    ]
+    with pytest.raises(ci_evidence.CiEvidenceError):
+        ci_evidence.evidence_matrix("ubuntu-latest", "crash")
 
 
 @pytest.mark.parametrize(
@@ -540,6 +549,13 @@ _CALL_ROWS = (
     "tests/differential/test_profile_command_rows.py",
     "tests/differential/test_auth_repair_rows.py",
     "tests/differential/test_eligibility_rows.py",
+    "tests/differential/test_crash_overlap_rows.py",
+)
+
+#: Source-model evidence: the frozen witnesses and the mapped model nodes.
+_MODEL_ROWS = (
+    "tests/differential/test_frozen_witness_rows.py",
+    "tests/differential/model_coverage.py",
 )
 
 
@@ -680,7 +696,7 @@ def test_manual_evidence_is_dispatch_only_and_defaults_to_one_linux_job() -> Non
     assert evidence["env"]["FASTMCP_MCP_CAMELCASE_COMPAT"] == "false"
     assert _cache_keys(evidence) == [_BROWSER_CACHE_KEY]
     evidence_run = _runs(evidence)
-    for row in (*_NATIVE_ROWS, *_CALL_ROWS):
+    for row in (*_NATIVE_ROWS, *_CALL_ROWS, *_MODEL_ROWS):
         assert row in evidence_run
     assert "baseline.py" in evidence_run
     uploads = [

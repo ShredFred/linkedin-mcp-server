@@ -9,21 +9,66 @@ to use it, because the fingerprint it compares covers exactly these fields.
 
 from __future__ import annotations
 
-import json
 import os
 import stat
+from collections.abc import Iterator
 from dataclasses import fields
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
-from linkedin_mcp_server import daemon_config
+from linkedin_mcp_server.daemon import config as daemon_config
+from linkedin_mcp_server.daemon import startup
 from linkedin_mcp_server.config.schema import AppConfig
-from linkedin_mcp_server.daemon_descriptor import config_fingerprint
+from linkedin_mcp_server.daemon.descriptor import config_fingerprint
 
 _NONCE = "0123456789abcdef" * 4
-_CONTROL = daemon_config.ControlEndpoint("127.0.0.1", 54321)
+
+
+class _Frontend:
+    """The frontend's ends of two real pipes around an owner's startup channel.
+
+    *sent* is everything the frontend says, written up front and then ended,
+    unless *keep_open* holds the input open the way a suspended starter would.
+    """
+
+    def __init__(self, sent: bytes = b"", *, keep_open: bool = False) -> None:
+        inbound, frontend_input = os.pipe()
+        self._input: int | None = frontend_input
+        self._output, outbound = os.pipe()
+        os.write(self._input, sent)
+        if not keep_open:
+            self.end_input()
+        self.channel = startup.OwnerChannel(inbound, outbound)
+
+    def end_input(self) -> None:
+        descriptor, self._input = self._input, None
+        if descriptor is not None:
+            os.close(descriptor)
+
+    def received(self) -> bytes:
+        """Everything the owner wrote, once it has ended its output."""
+        data = b""
+        while chunk := os.read(self._output, 65536):
+            data += chunk
+        return data
+
+    def close(self) -> None:
+        self.end_input()
+        self.channel.close_output()
+        self.channel.close()
+        os.close(self._output)
+
+
+def _greeting(config: AppConfig, *, protocol: object = startup.PROTOCOL) -> bytes:
+    """HELLO and CONFIG as a frontend of this build writes them."""
+    return startup.encode(
+        startup.message(startup.HELLO, _NONCE, protocol=protocol)
+    ) + startup.encode(
+        startup.message(startup.CONFIG, _NONCE, config=daemon_config.encode(config))
+    )
 
 
 def _config(**browser: object) -> AppConfig:
@@ -43,12 +88,10 @@ class TestRoundTrip:
         # just started.
         original = _config(
             headless=False,
-            user_agent="Mozilla/5.0 (test)",
             proxy_server="http://proxy.example:8080",
             proxy_username="user",
             proxy_password="secret",
             viewport_width=1920,
-            login_timeout_seconds=900.0,
         )
 
         restored = daemon_config.decode(daemon_config.encode(original))
@@ -59,106 +102,25 @@ class TestRoundTrip:
         )
 
     def test_owner_handover_carries_the_post_spawn_nonce(self):
-        original = _config(headless=False)
+        from linkedin_mcp_server.daemon import owner as daemon_owner
 
-        handover = daemon_config.decode_handover(
-            daemon_config.encode_handover(original, _NONCE, _CONTROL)
+        original = _config(
+            headless=False,
+            proxy_server="http://proxy.example:8080",
+            proxy_username="user",
+            proxy_password="secret",
         )
+        frontend = _Frontend(_greeting(original))
+        try:
+            handover = daemon_owner._read_handover(frontend.channel, timeout=5.0)
+        finally:
+            frontend.close()
 
         assert handover.handshake_nonce == _NONCE
         assert handover.config.browser.headless is False
-        assert handover.startup_protocol == daemon_config.STARTUP_PROTOCOL_VERSION
-
-    def test_missing_startup_protocol_means_the_predecessor_frontend(self):
-        payload = json.loads(daemon_config.encode_handover(_config(), _NONCE, _CONTROL))
-        payload.pop("startup_protocol")
-        payload.pop("control_host")
-        payload.pop("control_port")
-
-        handover = daemon_config.decode_handover(json.dumps(payload))
-
-        assert handover.startup_protocol == 1
-        assert handover.control is None
-
-    @pytest.mark.parametrize("value", [True, 0, 4, "2"])
-    def test_unknown_startup_protocol_is_refused(self, value: object):
-        payload = json.loads(daemon_config.encode_handover(_config(), _NONCE, _CONTROL))
-        payload["startup_protocol"] = value
-
-        with pytest.raises(ValueError, match="startup protocol"):
-            daemon_config.decode_handover(json.dumps(payload))
-
-    def test_the_current_record_names_the_control_rendezvous(self):
-        handover = daemon_config.decode_handover(
-            daemon_config.encode_handover(_config(), _NONCE, _CONTROL)
-        )
-
-        assert handover.startup_protocol == 3
-        assert handover.control == _CONTROL
-
-    def test_a_current_record_without_a_rendezvous_is_refused(self):
-        # Nothing could authorize such an owner: it would prepare a generation
-        # and then wait out its commit deadline with the lock in hand.
-        payload = json.loads(daemon_config.encode_handover(_config(), _NONCE, _CONTROL))
-        payload.pop("control_host")
-
-        with pytest.raises(ValueError, match="control host"):
-            daemon_config.decode_handover(json.dumps(payload))
-
-    @pytest.mark.parametrize("port", [0, 65536, -1, True, "8080", 8080.0])
-    def test_an_unusable_control_port_is_refused(self, port: object):
-        payload = json.loads(daemon_config.encode_handover(_config(), _NONCE, _CONTROL))
-        payload["control_port"] = port
-
-        with pytest.raises(ValueError, match="control port"):
-            daemon_config.decode_handover(json.dumps(payload))
-
-    @pytest.mark.parametrize("protocol", [1, 2])
-    def test_an_older_protocol_may_not_name_a_rendezvous(self, protocol: int):
-        # A frontend on either predecessor protocol never listens, so a record
-        # naming one did not come from a frontend that would answer it.
-        payload = json.loads(daemon_config.encode_handover(_config(), _NONCE, _CONTROL))
-        payload["startup_protocol"] = protocol
-
-        with pytest.raises(ValueError, match="control channel"):
-            daemon_config.decode_handover(json.dumps(payload))
-
-    def test_the_pipe_commit_protocol_still_decodes(self):
-        # The version between the two: commit authorization on the configuration
-        # pipe. An owner from this build can still be started by a frontend that
-        # speaks it, which is the rollback case in the other direction.
-        payload = json.loads(daemon_config.encode_handover(_config(), _NONCE, _CONTROL))
-        payload["startup_protocol"] = 2
-        del payload["control_host"], payload["control_port"]
-
-        handover = daemon_config.decode_handover(json.dumps(payload))
-
-        assert handover.startup_protocol == 2
-        assert handover.control is None
-        assert daemon_config.authorizes_commit(handover.startup_protocol)
-
-    def test_only_the_predecessor_protocol_publishes_unauthorized(self):
-        assert not daemon_config.authorizes_commit(1)
-        assert daemon_config.authorizes_commit(2)
-        assert daemon_config.authorizes_commit(3)
-
-    def test_the_rendezvous_stays_outside_the_sections_a_predecessor_parses(self):
-        # What makes a current record readable by an owner that has never heard
-        # of a control channel. Every version of the decoder reads ``browser``
-        # and ``server`` by name and refuses an unknown setting *inside* them,
-        # while ignoring top-level names it does not know.
-        payload = json.loads(daemon_config.encode_handover(_config(), _NONCE, _CONTROL))
-
-        assert {"control_host", "control_port", "startup_protocol"} <= set(payload)
-        assert not {"control_host", "control_port"} & set(payload["browser"])
-        assert not {"control_host", "control_port"} & set(payload["server"])
-        # And the predecessor's own reconstruction, which reads exactly these
-        # three names, still finds everything it needs.
-        assert {"browser", "server", "handshake_nonce"} <= set(payload)
-
-    def test_owner_handover_requires_a_valid_nonce(self):
-        with pytest.raises(ValueError, match="handshake nonce"):
-            daemon_config.decode_handover(daemon_config.encode(_config()))
+        # The one secret in the configuration crosses on the pipe and nowhere
+        # else, so it has to arrive intact here.
+        assert handover.config.browser.proxy_password == "secret"
 
     def test_every_browser_setting_crosses_unchanged(self):
         # The fingerprint check above is necessary and not sufficient: it only
@@ -169,7 +131,6 @@ class TestRoundTrip:
         original = _config(
             headless=False,
             slow_mo=25,
-            user_agent="Mozilla/5.0 (test)",
             viewport_width=1920,
             viewport_height=1080,
             default_timeout=9000,
@@ -183,7 +144,6 @@ class TestRoundTrip:
             browser_min_hold_seconds=5.0,
             browser_idle_timeout_seconds=120.0,
             auto_import_from_browser=False,
-            eager_full_chromium=True,
         )
 
         carried = daemon_config.encode(original)
@@ -195,7 +155,7 @@ class TestRoundTrip:
         # for any field left at its default — `chrome_path` is one, and so is
         # every field added in future. Checking the serialised keys against the
         # dataclass is what makes the name of this test true.
-        assert set(json.loads(carried)["browser"]) == {
+        assert set(cast(dict[str, object], carried["browser"])) == {
             field.name for field in fields(original.browser)
         }
 
@@ -234,21 +194,34 @@ class TestRoundTrip:
         assert restored.server.tool_timeout_seconds == 42.5
 
 
+@pytest.fixture
+def owner_streams(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Give the owner output streams of its own to redirect into the log.
+
+    `_attach_daemon_log` points stdout and stderr at the log with a real
+    `os.dup2`. On the runner's own descriptors that would send pytest's output
+    into a temporary file, and stubbing `os.dup2` instead replaces it for the
+    whole process, so pytest's capture loses the calls that restore its streams.
+    """
+    from linkedin_mcp_server.daemon import owner as daemon_owner
+
+    with open(os.devnull, "w") as stdout, open(os.devnull, "w") as stderr:
+        monkeypatch.setattr(
+            daemon_owner, "sys", SimpleNamespace(stdout=stdout, stderr=stderr)
+        )
+        yield
+
+
+@pytest.mark.usefixtures("owner_streams")
 class TestDaemonLogState:
     @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits are required")
     def test_fresh_log_state_is_private_under_umask_zero(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        from linkedin_mcp_server import daemon_descriptor, daemon_owner
+        from linkedin_mcp_server.daemon import descriptor as daemon_descriptor
+        from linkedin_mcp_server.daemon import owner as daemon_owner
 
         monkeypatch.setattr(daemon_descriptor, "_account_home", lambda: tmp_path)
-        monkeypatch.setattr(daemon_owner.os, "dup2", lambda *args: None)
-        stream = type("Stream", (), {"fileno": lambda self: 1})()
-        monkeypatch.setattr(
-            daemon_owner,
-            "sys",
-            type("Streams", (), {"stdout": stream, "stderr": stream})(),
-        )
         previous = os.umask(0)
         try:
             log_path = daemon_owner._attach_daemon_log(tmp_path / "auth")
@@ -265,17 +238,11 @@ class TestDaemonLogState:
     def test_log_file_uses_the_private_file_acl(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        from linkedin_mcp_server import daemon_descriptor, daemon_owner
+        from linkedin_mcp_server.daemon import descriptor as daemon_descriptor
+        from linkedin_mcp_server.daemon import owner as daemon_owner
         from linkedin_mcp_server.windows_acl import describe_dacl
 
         monkeypatch.setattr(daemon_descriptor, "_account_home", lambda: tmp_path)
-        monkeypatch.setattr(daemon_owner.os, "dup2", lambda *args: None)
-        stream = type("Stream", (), {"fileno": lambda self: 1})()
-        monkeypatch.setattr(
-            daemon_owner,
-            "sys",
-            type("Streams", (), {"stdout": stream, "stderr": stream})(),
-        )
 
         log_path = daemon_owner._attach_daemon_log(tmp_path / "auth")
 
@@ -286,7 +253,7 @@ class TestDaemonLogState:
     def test_windows_log_is_hardened_before_publication(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        from linkedin_mcp_server import daemon_owner
+        from linkedin_mcp_server.daemon import owner as daemon_owner
 
         log_path = tmp_path / "daemon.log"
         hardened: list[Path] = []
@@ -317,11 +284,11 @@ class TestDaemonLogState:
     ):
         """Publication hands the file over, so the publisher stops owning it.
 
-        Another candidate can open the published inode before the verification
-        below fails, and withdrawing the path then unlinks a log that is
-        already being written to.
+        Once published, the path no longer proves which file it names, so
+        withdrawing it after the verification below fails could remove a
+        foreign entry instead of the log this process staged.
         """
-        from linkedin_mcp_server import daemon_owner
+        from linkedin_mcp_server.daemon import owner as daemon_owner
         from linkedin_mcp_server.private_state import PrivateStateError
 
         log_path = tmp_path / "daemon.log"
@@ -338,21 +305,20 @@ class TestDaemonLogState:
         assert not list(tmp_path.glob(".daemon-log-*")), "and nothing stayed staged"
 
     @pytest.mark.skipif(
-        os.name == "nt",
-        reason="on Windows the log is hardened while still staged, so a failure "
-        "publishes nothing (_publish_windows_daemon_log); this is the POSIX path",
+        os.name == "nt", reason="Windows hardens a staged file before publishing it"
     )
     def test_failed_fresh_log_hardening_leaves_the_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        """A candidate that fails does not take the log away from one that did not.
+        """An owner whose hardening fails leaves the log it created in place.
 
-        Its own creation may have lost the race by a syscall, in which case
-        another candidate is already appending to this inode and nothing here
-        can tell. The file was opened owner-only, so leaving it costs nothing
-        and the next attachment hardens it through the existing-file path.
+        The path may no longer name the inode it created, so removing it could
+        take a foreign entry. The file was opened owner-only, so leaving it
+        costs nothing and the next attachment hardens it through the
+        existing-file path.
         """
-        from linkedin_mcp_server import daemon_descriptor, daemon_owner
+        from linkedin_mcp_server.daemon import descriptor as daemon_descriptor
+        from linkedin_mcp_server.daemon import owner as daemon_owner
         from linkedin_mcp_server.private_state import PrivateStateError
 
         monkeypatch.setattr(daemon_descriptor, "_account_home", lambda: tmp_path)
@@ -369,58 +335,58 @@ class TestDaemonLogState:
         assert log_path.is_file()
         assert stat.S_IMODE(log_path.stat().st_mode) & 0o077 == 0
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX open flags decide this")
-    def test_a_lost_creation_race_leaves_the_winners_log_alone(
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX creates the log in place")
+    def test_a_log_planted_after_the_check_fails_startup(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        """Two candidates can both find the path absent, and one has to yield.
-
-        A candidate that did not create the file may not remove it again, or
-        its own failure unlinks the log the candidate that went on to win the
-        daemon lock is already writing to.
-        """
-        from linkedin_mcp_server import daemon_descriptor, daemon_owner
-        from linkedin_mcp_server.private_state import PrivateStateError
+        """Only the lock holder creates the log, so a late entry is foreign."""
+        from linkedin_mcp_server.daemon import descriptor as daemon_descriptor
+        from linkedin_mcp_server.daemon import owner as daemon_owner
 
         monkeypatch.setattr(daemon_descriptor, "_account_home", lambda: tmp_path)
-        monkeypatch.setattr(daemon_owner.os, "dup2", lambda *args: None)
-        stream = type("Stream", (), {"fileno": lambda self: 1})()
-        monkeypatch.setattr(
-            daemon_owner,
-            "sys",
-            type("Streams", (), {"stdout": stream, "stderr": stream})(),
-        )
-        monkeypatch.setattr(
-            daemon_owner,
-            "harden_created_file",
-            lambda _path: (_ for _ in ()).throw(PrivateStateError("ACL failure")),
-        )
-
         log_path = daemon_owner.daemon_log_path(tmp_path / "auth")
         real_open = os.open
-        raced: list[bool] = []
 
-        def racing_open(path, flags, mode=0o777, **rest):
-            if Path(path) == log_path and not raced:
-                raced.append(True)
-                # The other candidate creates the file between this one's
-                # absence check and its own open.
-                log_path.write_bytes(b"winner\n")
+        def planting_open(path, flags, mode=0o777, **rest):
+            if Path(path) == log_path and not log_path.exists():
+                log_path.write_bytes(b"foreign\n")
             return real_open(path, flags, mode, **rest)
 
-        monkeypatch.setattr(daemon_owner.os, "open", racing_open)
+        monkeypatch.setattr(daemon_owner.os, "open", planting_open)
 
-        attached = daemon_owner._attach_daemon_log(tmp_path / "auth")
+        with pytest.raises(FileExistsError):
+            daemon_owner._attach_daemon_log(tmp_path / "auth")
 
-        assert raced, "the creation race was actually exercised"
-        assert attached == log_path
-        assert log_path.read_bytes() == b"winner\n"
+        assert log_path.read_bytes() == b"foreign\n"
+
+    @pytest.mark.skipif(os.name != "nt", reason="POSIX rename replaces its target")
+    def test_a_windows_log_planted_before_publication_fails_startup(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Publication refuses an entry that appeared after the check."""
+        from linkedin_mcp_server.daemon import owner as daemon_owner
+
+        log_path = tmp_path / "daemon.log"
+        real_harden = daemon_owner.harden_created_file
+
+        def harden_then_plant(staged: Path) -> None:
+            real_harden(staged)
+            log_path.write_bytes(b"foreign\n")
+
+        monkeypatch.setattr(daemon_owner, "harden_created_file", harden_then_plant)
+
+        with pytest.raises(FileExistsError):
+            daemon_owner._publish_windows_daemon_log(log_path)
+
+        assert log_path.read_bytes() == b"foreign\n"
+        assert not list(tmp_path.glob(".daemon-log-*")), "and nothing stayed staged"
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics are required")
     def test_a_planted_log_symlink_is_refused_before_open(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        from linkedin_mcp_server import daemon_descriptor, daemon_owner
+        from linkedin_mcp_server.daemon import descriptor as daemon_descriptor
+        from linkedin_mcp_server.daemon import owner as daemon_owner
         from linkedin_mcp_server.private_state import PrivateStateError
 
         monkeypatch.setattr(daemon_descriptor, "_account_home", lambda: tmp_path)
@@ -442,16 +408,10 @@ class TestDaemonLogState:
     def test_an_existing_regular_log_is_hardened_before_append(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        from linkedin_mcp_server import daemon_descriptor, daemon_owner
+        from linkedin_mcp_server.daemon import descriptor as daemon_descriptor
+        from linkedin_mcp_server.daemon import owner as daemon_owner
 
         monkeypatch.setattr(daemon_descriptor, "_account_home", lambda: tmp_path)
-        monkeypatch.setattr(daemon_owner.os, "dup2", lambda *args: None)
-        stream = type("Stream", (), {"fileno": lambda self: 1})()
-        monkeypatch.setattr(
-            daemon_owner,
-            "sys",
-            type("Streams", (), {"stdout": stream, "stderr": stream})(),
-        )
         directory = daemon_descriptor.daemon_dir(tmp_path / "auth")
         directory.mkdir(parents=True, mode=0o777)
         directory.chmod(0o777)
@@ -462,6 +422,7 @@ class TestDaemonLogState:
         attached = daemon_owner._attach_daemon_log(tmp_path / "auth")
 
         assert attached == log_path
+        assert log_path.read_text() == "existing\n"
         assert stat.S_IMODE(directory.stat().st_mode) == 0o700
         assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
 
@@ -478,7 +439,7 @@ def _owner_job_handoff(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     if os.name != "nt":
         return
-    from linkedin_mcp_server import daemon_owner
+    from linkedin_mcp_server.daemon import owner as daemon_owner
 
     real_main = daemon_owner.main
     monkeypatch.setattr(
@@ -503,7 +464,7 @@ class TestRefusing:
         original.server.transport = "streamable-http"
         original.server.port = 9999
 
-        carried = json.loads(daemon_config.encode(original))
+        carried = cast(dict[str, Any], daemon_config.encode(original))
 
         assert "login" not in carried["server"]
         assert "transport" not in carried["server"]
@@ -514,51 +475,45 @@ class TestRefusing:
         # not come from encode(). Skipping it quietly would be an owner running
         # on settings nobody chose.
         with pytest.raises(ValueError, match="unknown"):
-            daemon_config.decode(json.dumps({"browser": {"nonsense": 1}, "server": {}}))
+            daemon_config.decode({"browser": {"nonsense": 1}, "server": {}})
 
     def test_a_frontend_setting_smuggled_into_the_server_section_is_refused(self):
         # The allowed list is enforced on the way in, not only on the way out.
         with pytest.raises(ValueError, match="unknown"):
-            daemon_config.decode(json.dumps({"browser": {}, "server": {"login": True}}))
+            daemon_config.decode({"browser": {}, "server": {"login": True}})
 
     def test_a_value_of_the_wrong_type_is_refused_before_it_reaches_a_browser(self):
         # JSON cannot tell seconds from a count. Left unchecked this surfaces
         # deep inside a browser launch, in a detached process, as an error
         # nobody can trace back to here.
         with pytest.raises(ValueError, match="wrong type"):
-            daemon_config.decode(
-                json.dumps({"browser": {"slow_mo": "quickly"}, "server": {}})
-            )
+            daemon_config.decode({"browser": {"slow_mo": "quickly"}, "server": {}})
 
     def test_a_boolean_is_not_accepted_where_a_number_belongs(self):
         # bool is a subclass of int, so an isinstance check alone accepts True
         # as a timeout. That is exactly the silent nonsense this refuses.
         with pytest.raises(ValueError, match="wrong type"):
-            daemon_config.decode(
-                json.dumps({"browser": {"slow_mo": True}, "server": {}})
-            )
+            daemon_config.decode({"browser": {"slow_mo": True}, "server": {}})
 
     def test_an_integer_is_accepted_where_a_float_belongs(self):
         # The other direction, and it has to work: JSON writes 0 for 0.0, so
         # refusing would make an ordinary configuration untransportable.
         restored = daemon_config.decode(
-            json.dumps({"browser": {"login_timeout_seconds": 0}, "server": {}})
+            {"browser": {"login_timeout_seconds": 0}, "server": {}}
         )
 
         assert restored.browser.login_timeout_seconds == 0
 
     def test_an_optional_setting_may_be_unset(self):
         restored = daemon_config.decode(
-            json.dumps({"browser": {"user_agent": None}, "server": {}})
+            {"browser": {"chrome_path": None}, "server": {}}
         )
 
-        assert restored.browser.user_agent is None
+        assert restored.browser.chrome_path is None
 
     def test_a_log_level_outside_the_supported_set_is_refused(self):
         with pytest.raises(ValueError, match="wrong type"):
-            daemon_config.decode(
-                json.dumps({"browser": {}, "server": {"log_level": "CHATTY"}})
-            )
+            daemon_config.decode({"browser": {}, "server": {"log_level": "CHATTY"}})
 
     def test_a_configuration_the_frontend_would_reject_is_rejected_here_too(self):
         # The owner is the process that opens the browser, so a value refused at
@@ -571,7 +526,7 @@ class TestRefusing:
 
         with pytest.raises(ConfigurationError, match="tool_timeout_seconds"):
             daemon_config.decode(
-                json.dumps({"browser": {}, "server": {"tool_timeout_seconds": -1.0}})
+                {"browser": {}, "server": {"tool_timeout_seconds": -1.0}}
             )
 
     def test_the_owner_applies_the_browser_mode_it_was_handed(
@@ -590,76 +545,56 @@ class TestRefusing:
         # Driven through `main`, and asserted against the global the launcher
         # actually reads. Calling `set_headless` directly here would only prove
         # that setter works; what was broken is that the owner never called it.
-        import io
-        import sys
-
         import linkedin_mcp_server.drivers.browser as browser_module
-        from linkedin_mcp_server import daemon_owner
-        from linkedin_mcp_server.process_control import ControlListener
+        from linkedin_mcp_server.daemon import owner as daemon_owner
 
+        def refuse_lock(*_args):
+            raise OSError("lock unavailable")
+
+        monkeypatch.setattr(daemon_owner, "_take_lock", refuse_lock)
         visible = AppConfig()
-        visible.browser.user_data_dir = "~/p/profile"
         visible.browser.headless = False
 
         original = browser_module.current_headless()
-        stdin = sys.stdin
         browser_module.set_headless(True)
         monkeypatch.setattr(
             daemon_owner,
             "_attach_daemon_log",
             lambda auth_root: auth_root / "daemon.log",
         )
-        # A real rendezvous, so the owner gets past its control attach and on to
-        # the lock. Nothing here accepts it: the connection waits in the backlog,
-        # exactly as it does until a parent has a prepared generation to validate.
-        control = ControlListener.open()
-        sys.stdin = io.StringIO(
-            daemon_config.encode_handover(
-                visible,
-                _NONCE,
-                daemon_config.ControlEndpoint(control.host, control.port),
-            )
-            + "\n"
+        frontend = _Frontend(_greeting(visible))
+        monkeypatch.setattr(
+            daemon_owner, "_claim_startup_channel", lambda: frontend.channel
         )
         try:
-            # It gets as far as taking the lock, which fails on the deliberately
-            # invalid descriptor and is reported rather than raised. That is
-            # well past the point where the browser mode is settled.
-            assert daemon_owner.main(["--lock-fd", "-1"]) == 1
+            # The lock failure is reported rather than raised, without creating
+            # account state. The browser mode must already be settled by then.
+            assert daemon_owner.main([]) == 1
 
             assert browser_module.current_headless() is False, (
                 "the owner ignored the browser mode it was handed"
             )
         finally:
-            control.close()
-            sys.stdin = stdin
+            frontend.close()
             browser_module.set_headless(original)
 
     def test_owner_verdict_carries_the_handed_over_nonce(self):
-        from linkedin_mcp_server import daemon_owner
+        import io
 
-        class RecordingStream:
-            def __init__(self) -> None:
-                self.written = ""
-                self.flushed = False
-                self.closed = False
+        from linkedin_mcp_server.daemon import owner as daemon_owner
 
-            def write(self, value: str) -> int:
-                self.written += value
-                return len(value)
+        frontend = _Frontend()
+        try:
+            daemon_owner._Handshake(frontend.channel, _NONCE).committed()
+            # The verdict ends the output, so this read reaches end of file.
+            received = io.BytesIO(frontend.received())
+        finally:
+            frontend.close()
 
-            def flush(self) -> None:
-                self.flushed = True
-
-            def close(self) -> None:
-                self.closed = True
-
-        stream = RecordingStream()
-        daemon_owner._Handshake(cast(Any, stream), _NONCE).committed()
-
-        assert stream.written == f"owner {_NONCE} committed\n"
-        assert stream.flushed
-        assert stream.closed
+        assert startup.read_frame(received.read) == startup.message(
+            startup.VERDICT, _NONCE, status=startup.COMMITTED
+        )
+        assert received.read() == b""
 
     def test_a_configuration_failure_reports_then_closes_without_a_verdict(
         self, monkeypatch: pytest.MonkeyPatch
@@ -667,7 +602,7 @@ class TestRefusing:
         # Startup output can already contain status-shaped lines. Until the
         # configuration yields the post-spawn nonce, the owner has no frame it can
         # authenticate, so failure is represented by a fixed diagnostic and EOF.
-        from linkedin_mcp_server import daemon_owner
+        from linkedin_mcp_server.daemon import owner as daemon_owner
 
         events: list[str] = []
 
@@ -681,17 +616,17 @@ class TestRefusing:
             def close(self) -> None:
                 pass
 
-        class RecordingStream:
+        class RecordingChannel:
             def close(self) -> None:
                 events.append("closed")
 
-        def reject() -> daemon_config.OwnerHandover:
+        def reject(*_args: object, **_kwargs: object) -> daemon_config.OwnerHandover:
             raise ValueError("invalid handed-over configuration")
 
         monkeypatch.setattr(daemon_owner, "_BootstrapDiagnostics", RecordingBootstrap)
         monkeypatch.setattr(daemon_owner, "_claim_bootstrap_stream", lambda: None)
         monkeypatch.setattr(
-            daemon_owner, "_claim_handshake_stream", lambda: RecordingStream()
+            daemon_owner, "_claim_startup_channel", lambda: RecordingChannel()
         )
         monkeypatch.setattr(daemon_owner, "_read_handover", reject)
         monkeypatch.setattr(
@@ -721,7 +656,7 @@ class TestRefusing:
         stage: str,
         code: str,
     ):
-        from linkedin_mcp_server import daemon_owner
+        from linkedin_mcp_server.daemon import owner as daemon_owner
 
         events: list[str] = []
         config = AppConfig()
@@ -750,21 +685,16 @@ class TestRefusing:
         monkeypatch.setattr(daemon_owner, "_BootstrapDiagnostics", RecordingBootstrap)
         monkeypatch.setattr(daemon_owner, "_Handshake", RecordingHandshake)
         monkeypatch.setattr(daemon_owner, "_claim_bootstrap_stream", lambda: None)
-        monkeypatch.setattr(daemon_owner, "_claim_handshake_stream", lambda: None)
+        monkeypatch.setattr(daemon_owner, "_claim_startup_channel", lambda: None)
         monkeypatch.setattr(
             daemon_owner,
             "_read_handover",
-            lambda: daemon_config.OwnerHandover(config, _NONCE),
+            lambda *_args, **_kwargs: daemon_config.OwnerHandover(config, _NONCE),
         )
         monkeypatch.setattr(
             daemon_owner.logger,
             "exception",
             lambda *_args, **_kwargs: pytest.fail("pre-log failure used logging"),
-        )
-        monkeypatch.setattr(
-            daemon_owner,
-            "_abandon_inherited_lock",
-            lambda fd: events.append(f"unlocked:{fd}"),
         )
         if stage == "state":
 
@@ -776,16 +706,16 @@ class TestRefusing:
                     raise OSError("profile state is unavailable")
 
             monkeypatch.setattr(daemon_owner, "Path", lambda _value: UnresolvablePath())
-            expected = ["unlocked:123", f"diagnostic:{code}", "aborted"]
+            expected = [f"diagnostic:{code}", "aborted"]
         else:
 
-            class AdoptedLock:
+            class HeldLock:
                 def release(self) -> None:
                     events.append("released")
 
             monkeypatch.setattr(daemon_owner, "auth_root_dir", lambda profile: tmp_path)
             monkeypatch.setattr(
-                daemon_owner, "_take_lock", lambda auth_root, fd: AdoptedLock()
+                daemon_owner, "_take_lock", lambda auth_root: HeldLock()
             )
             monkeypatch.setattr(
                 daemon_owner,
@@ -796,17 +726,31 @@ class TestRefusing:
             )
             expected = [f"diagnostic:{code}", "aborted", "released"]
 
-        assert daemon_owner.main(["--lock-fd", "123"]) == 1
+        assert daemon_owner.main([]) == 1
         assert events == expected
 
-    def test_predecessor_windows_frontend_is_refused_before_state_access(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        "protocol",
+        [
+            startup.PROTOCOL - 1,
+            startup.PROTOCOL + 1,
+            str(startup.PROTOCOL),
+            float(startup.PROTOCOL),
+            True,
+            None,
+        ],
+    )
+    def test_a_frontend_speaking_another_startup_protocol_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch, protocol: object
     ):
-        from linkedin_mcp_server import daemon_owner
+        # A frontend from another build greets this owner after a package was
+        # replaced under it. The owner refuses before any state is touched,
+        # answers nothing a frontend could mistake for an ACK, and says only
+        # that its configuration was refused. A bool is an int in Python, so
+        # ``True`` is refused by type, not by value.
+        from linkedin_mcp_server.daemon import owner as daemon_owner
 
         events: list[str] = []
-        config = AppConfig()
-        config.browser.user_data_dir = str(tmp_path / "profile")
 
         class RecordingBootstrap:
             def __init__(self, _stream: object) -> None:
@@ -818,45 +762,36 @@ class TestRefusing:
             def close(self) -> None:
                 pass
 
-        class RecordingHandshake:
-            def __init__(self, _stream: object, _nonce: str) -> None:
-                pass
-
-            def fail(self) -> None:
-                events.append("failed")
-
-            def close(self) -> None:
-                events.append("closed")
-
-        monkeypatch.setattr(daemon_owner, "_IS_WINDOWS", True)
+        frontend = _Frontend(_greeting(_config(), protocol=protocol))
         monkeypatch.setattr(daemon_owner, "_BootstrapDiagnostics", RecordingBootstrap)
-        monkeypatch.setattr(daemon_owner, "_Handshake", RecordingHandshake)
         monkeypatch.setattr(daemon_owner, "_claim_bootstrap_stream", lambda: None)
-        monkeypatch.setattr(daemon_owner, "_claim_handshake_stream", lambda: None)
+        monkeypatch.setattr(
+            daemon_owner, "_claim_startup_channel", lambda: frontend.channel
+        )
         monkeypatch.setattr(
             daemon_owner,
-            "_read_handover",
-            lambda: daemon_config.OwnerHandover(config, _NONCE, startup_protocol=1),
+            "auth_root_dir",
+            lambda _profile: pytest.fail("a refused handover resolved profile state"),
         )
-        monkeypatch.setattr(daemon_owner, "auth_root_dir", lambda _profile: tmp_path)
         monkeypatch.setattr(
             daemon_owner,
-            "_attach_daemon_log",
-            lambda _auth_root: pytest.fail("predecessor reached the v2 state root"),
+            "_take_lock",
+            lambda _auth_root: pytest.fail("a refused handover took the lock"),
         )
+        try:
+            assert daemon_owner.main([]) == 1
+            received = frontend.received()
+        finally:
+            frontend.close()
 
-        assert daemon_owner.main([]) == 1
-        assert events == [
-            f"diagnostic:{daemon_owner.BOOTSTRAP_STATE}",
-            "failed",
-            "closed",
-        ]
+        assert events == [f"diagnostic:{daemon_owner.BOOTSTRAP_CONFIGURATION}"]
+        assert received == b"", "the owner answered a frontend it cannot speak to"
 
-    def test_lock_adoption_failure_unlocks_the_inherited_handoff(
+    def test_a_lock_failure_is_reported_before_the_daemon_log(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        from linkedin_mcp_server import daemon_owner
-        from linkedin_mcp_server.daemon_lock import DaemonLockError
+        from linkedin_mcp_server.daemon import owner as daemon_owner
+        from linkedin_mcp_server.daemon.lock import DaemonLockError
 
         events: list[str] = []
         config = AppConfig()
@@ -888,11 +823,11 @@ class TestRefusing:
         monkeypatch.setattr(daemon_owner, "_BootstrapDiagnostics", RecordingBootstrap)
         monkeypatch.setattr(daemon_owner, "_Handshake", RecordingHandshake)
         monkeypatch.setattr(daemon_owner, "_claim_bootstrap_stream", lambda: None)
-        monkeypatch.setattr(daemon_owner, "_claim_handshake_stream", lambda: None)
+        monkeypatch.setattr(daemon_owner, "_claim_startup_channel", lambda: None)
         monkeypatch.setattr(
             daemon_owner,
             "_read_handover",
-            lambda: daemon_config.OwnerHandover(config, _NONCE),
+            lambda *_args, **_kwargs: daemon_config.OwnerHandover(config, _NONCE),
         )
         monkeypatch.setattr(daemon_owner, "auth_root_dir", lambda profile: tmp_path)
         monkeypatch.setattr(
@@ -908,12 +843,7 @@ class TestRefusing:
         monkeypatch.setattr(
             daemon_owner,
             "_take_lock",
-            lambda *args: (_ for _ in ()).throw(DaemonLockError("cannot adopt")),
-        )
-        monkeypatch.setattr(
-            daemon_owner,
-            "_abandon_inherited_lock",
-            lambda fd: events.append(f"unlocked:{fd}"),
+            lambda *args: (_ for _ in ()).throw(DaemonLockError("lock unusable")),
         )
         monkeypatch.setattr(
             daemon_owner.logger,
@@ -923,19 +853,18 @@ class TestRefusing:
             ),
         )
 
-        assert daemon_owner.main(["--lock-fd", "123"]) == 1
+        assert daemon_owner.main([]) == 1
         assert events == [
             f"diagnostic:{daemon_owner.BOOTSTRAP_LOCK}",
             "aborted",
             "bootstrap-closed",
             "handshake-closed",
-            "unlocked:123",
         ]
 
-    def test_attached_bootstrap_keeps_legacy_record_before_versioned_hint(
+    def test_attached_bootstrap_reports_the_stage_before_the_versioned_hint(
         self, tmp_path: Path
     ):
-        from linkedin_mcp_server import daemon_owner
+        from linkedin_mcp_server.daemon import owner as daemon_owner
 
         class RecordingStream:
             def __init__(self) -> None:
@@ -967,7 +896,7 @@ class TestRefusing:
     def test_lock_loser_retries_without_attaching_the_log(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        from linkedin_mcp_server import daemon_owner
+        from linkedin_mcp_server.daemon import owner as daemon_owner
 
         events: list[str] = []
         config = AppConfig()
@@ -999,11 +928,11 @@ class TestRefusing:
         monkeypatch.setattr(daemon_owner, "_BootstrapDiagnostics", RecordingBootstrap)
         monkeypatch.setattr(daemon_owner, "_Handshake", RecordingHandshake)
         monkeypatch.setattr(daemon_owner, "_claim_bootstrap_stream", lambda: None)
-        monkeypatch.setattr(daemon_owner, "_claim_handshake_stream", lambda: None)
+        monkeypatch.setattr(daemon_owner, "_claim_startup_channel", lambda: None)
         monkeypatch.setattr(
             daemon_owner,
             "_read_handover",
-            lambda: daemon_config.OwnerHandover(config, _NONCE),
+            lambda *_args, **_kwargs: daemon_config.OwnerHandover(config, _NONCE),
         )
         monkeypatch.setattr(daemon_owner, "auth_root_dir", lambda profile: tmp_path)
         monkeypatch.setattr(
@@ -1021,111 +950,50 @@ class TestRefusing:
         assert daemon_owner.main([]) == 0
         assert events == ["retry", "bootstrap-closed", "handshake-closed"]
 
-    def test_a_suspended_starter_cannot_pin_the_owner_on_config_read(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        import threading
+    def test_a_suspended_starter_cannot_pin_the_owner_on_config_read(self):
         import time
 
-        from linkedin_mcp_server import daemon_owner
+        from linkedin_mcp_server.daemon import owner as daemon_owner
 
-        release = threading.Event()
-
-        class _SuspendedStarter:
-            def readline(self) -> str:
-                release.wait()
-                return ""
-
-        monkeypatch.setattr(daemon_owner.sys, "stdin", _SuspendedStarter())
+        # The input stays open and silent, which is a starter stopped between
+        # spawning this process and writing its HELLO.
+        frontend = _Frontend(keep_open=True)
         started = time.monotonic()
         try:
             with pytest.raises(TimeoutError, match="did not provide its configuration"):
-                daemon_owner._read_handover(timeout=0.01)
+                daemon_owner._read_handover(frontend.channel, timeout=0.01)
+            elapsed = time.monotonic() - started
         finally:
-            release.set()
+            frontend.close()
 
-        assert time.monotonic() - started < 1.0
+        assert elapsed < 1.0
 
-    def test_configuration_timeout_unlocks_the_inherited_handoff(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_the_owner_refuses_to_start_without_a_configuration(
+        self, monkeypatch: pytest.MonkeyPatch
     ):
-        from linkedin_mcp_server import daemon_descriptor, daemon_lock, daemon_owner
-
-        if not daemon_lock._INHERITED_LOCKS_TRANSFER:
-            pytest.skip("inherited lock handoff is POSIX-only")
-
-        monkeypatch.setattr(daemon_descriptor, "_account_home", lambda: tmp_path)
-
-        events: list[str] = []
-
-        class RecordingBootstrap:
-            def __init__(self, _stream: object) -> None:
-                pass
-
-            def report(self, code: str) -> None:
-                events.append(f"diagnostic:{code}")
-
-            def close(self) -> None:
-                pass
-
-        class RecordingStream:
-            def close(self) -> None:
-                events.append("closed")
-
-        parent = daemon_lock.DaemonLock(tmp_path)
-        assert parent.try_acquire()
-        inherited = parent.inheritable_copy()
-        monkeypatch.setattr(daemon_owner, "_BootstrapDiagnostics", RecordingBootstrap)
-        monkeypatch.setattr(daemon_owner, "_claim_bootstrap_stream", lambda: None)
-        monkeypatch.setattr(
-            daemon_owner, "_claim_handshake_stream", lambda: RecordingStream()
-        )
-        monkeypatch.setattr(
-            daemon_owner,
-            "_read_handover",
-            lambda: (_ for _ in ()).throw(TimeoutError("starter suspended")),
-        )
-
-        try:
-            assert daemon_owner.main(["--lock-fd", str(inherited)]) == 1
-
-            contender = daemon_lock.DaemonLock(tmp_path)
-            assert contender.try_acquire()
-            contender.release()
-        finally:
-            parent.release()
-
-        assert events == [
-            f"diagnostic:{daemon_owner.BOOTSTRAP_CONFIGURATION}",
-            "closed",
-        ]
-
-    def test_the_owner_refuses_to_start_without_a_configuration(self):
-        # The owner reads its settings from standard input and must not fall
-        # back to parsing its own command line: `load_config` would then see the
-        # daemon's argv, and the browser it opened would be configured by
-        # accident rather than by the client that asked for it.
+        # The owner reads its settings from the startup channel and must not
+        # fall back to parsing its own command line: `load_config` would then
+        # see the daemon's argv, and the browser it opened would be configured
+        # by accident rather than by the client that asked for it.
         #
         # Exercised through `main`, which is otherwise reached only inside a
-        # spawned process where coverage cannot see it.
-        import io
-        import sys
+        # spawned process where coverage cannot see it. What arrives is the
+        # line the old handover would have carried, which the framed channel
+        # reads as a header announcing far more than a frame may hold.
+        from linkedin_mcp_server.daemon import owner as daemon_owner
 
-        from linkedin_mcp_server import daemon_owner
-
-        original = sys.stdin
-        sys.stdin = io.StringIO("   \n")
+        frontend = _Frontend(b"   \n")
+        monkeypatch.setattr(
+            daemon_owner, "_claim_startup_channel", lambda: frontend.channel
+        )
         try:
             assert daemon_owner.main([]) == 1
         finally:
-            sys.stdin = original
+            frontend.close()
 
     def test_something_that_is_not_a_configuration_is_refused(self):
-        with pytest.raises(ValueError, match="not valid JSON"):
-            daemon_config.decode("not json at all")
-
         with pytest.raises(ValueError, match="not an object"):
-            daemon_config.decode("[1, 2, 3]")
+            daemon_config.decode([1, 2, 3])
 
         with pytest.raises(ValueError, match="no browser section"):
-            daemon_config.decode(json.dumps({"server": {}}))
+            daemon_config.decode({"server": {}})

@@ -236,6 +236,8 @@ def test_fork_tools_are_registered_and_tagged():
         "follow_up_list",
         "set_contact_note",
         "get_profile_viewers",
+        "get_saved_posts",
+        "get_my_reactions",
         "comment_on_post",
         "repost_post",
         "job_watch",

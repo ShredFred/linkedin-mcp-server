@@ -14,9 +14,7 @@ from pydantic import Field
 
 from linkedin_mcp_server.callbacks import MCPContextProgressCallback
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
-from linkedin_mcp_server.core.exceptions import AuthenticationError
-from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_error
-from linkedin_mcp_server.error_handler import raise_tool_error
+from linkedin_mcp_server.dependencies import get_ready_extractor, tool_errors
 from linkedin_mcp_server.linkedin import parse_company_sections
 from linkedin_mcp_server.linkedin.contracts import RATE_LIMITED_SECTION_TEXT
 from linkedin_mcp_server.linkedin.contracts import rate_limited_section_error
@@ -40,6 +38,7 @@ def register_company_tools(
         annotations={"readOnlyHint": True, "openWorldHint": True},
         tags={"company"},
     )
+    @tool_errors
     async def get_company_profile(
         company_name: str,
         ctx: Context,
@@ -70,33 +69,24 @@ def register_company_tools(
             URL facet; plain-text company names are silently ignored by
             that facet.
         """
-        try:
-            # Validate before starting the browser; the reader normalizes the original reference.
-            normalize_company_identifier(company_name)
-            extractor = await get_ready_extractor(ctx, tool_name="get_company_profile")
-            requested, unknown = parse_company_sections(sections)
+        # Validate before starting the browser; the reader normalizes the original reference.
+        normalize_company_identifier(company_name)
+        extractor = await get_ready_extractor(ctx, tool_name="get_company_profile")
+        requested, unknown = parse_company_sections(sections)
 
-            logger.info(
-                "Reading company: %s (sections=%s)",
-                company_name,
-                sections,
-            )
+        logger.info(
+            "Reading company: %s (sections=%s)",
+            company_name,
+            sections,
+        )
 
-            cb = MCPContextProgressCallback(ctx)
-            result = await extractor.read_company(company_name, requested, callbacks=cb)
+        cb = MCPContextProgressCallback(ctx)
+        result = await extractor.read_company(company_name, requested, callbacks=cb)
 
-            if unknown:
-                result["unknown_sections"] = unknown
+        if unknown:
+            result["unknown_sections"] = unknown
 
-            return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "get_company_profile")
-        except Exception as e:
-            raise_tool_error(e, "get_company_profile")  # NoReturn
+        return result
 
     @mcp.tool(
         timeout=tool_timeout,
@@ -104,6 +94,7 @@ def register_company_tools(
         annotations={"readOnlyHint": True, "openWorldHint": True},
         tags={"company"},
     )
+    @tool_errors
     async def get_company_posts(
         company_name: str,
         ctx: Context,
@@ -122,51 +113,42 @@ def register_company_tools(
             Dict with url, sections (name -> raw text), and optional references.
             The LLM should parse the raw text to extract individual posts.
         """
-        try:
-            company_name = normalize_company_identifier(company_name)
-            extractor = await get_ready_extractor(ctx, tool_name="get_company_posts")
-            logger.info("Reading company posts: %s", company_name)
+        company_name = normalize_company_identifier(company_name)
+        extractor = await get_ready_extractor(ctx, tool_name="get_company_posts")
+        logger.info("Reading company posts: %s", company_name)
 
-            await ctx.report_progress(
-                progress=0, total=100, message="Reading company posts"
-            )
+        await ctx.report_progress(
+            progress=0, total=100, message="Reading company posts"
+        )
 
-            url = company_page_url(company_name, "/posts/")
-            extracted = await extractor.extract_page(
-                url, section_name="posts", max_scrolls=max_scrolls
-            )
+        url = company_page_url(company_name, "/posts/")
+        extracted = await extractor.extract_page(
+            url, section_name="posts", max_scrolls=max_scrolls
+        )
 
-            sections: dict[str, str] = {}
-            references: dict[str, list[Reference]] = {}
-            section_errors: dict[str, dict[str, Any]] = {}
-            if extracted.text and extracted.text != RATE_LIMITED_SECTION_TEXT:
-                sections["posts"] = extracted.text
-                if extracted.references:
-                    references["posts"] = extracted.references
-            elif extracted.text == RATE_LIMITED_SECTION_TEXT:
-                section_errors["posts"] = rate_limited_section_error()
-            elif extracted.error:
-                section_errors["posts"] = extracted.error
+        sections: dict[str, str] = {}
+        references: dict[str, list[Reference]] = {}
+        section_errors: dict[str, dict[str, Any]] = {}
+        if extracted.text and extracted.text != RATE_LIMITED_SECTION_TEXT:
+            sections["posts"] = extracted.text
+            if extracted.references:
+                references["posts"] = extracted.references
+        elif extracted.text == RATE_LIMITED_SECTION_TEXT:
+            section_errors["posts"] = rate_limited_section_error()
+        elif extracted.error:
+            section_errors["posts"] = extracted.error
 
-            await ctx.report_progress(progress=100, total=100, message="Complete")
+        await ctx.report_progress(progress=100, total=100, message="Complete")
 
-            result: dict[str, Any] = {
-                "url": url,
-                "sections": sections,
-            }
-            if references:
-                result["references"] = references
-            if section_errors:
-                result["section_errors"] = section_errors
-            return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "get_company_posts")
-        except Exception as e:
-            raise_tool_error(e, "get_company_posts")  # NoReturn
+        result: dict[str, Any] = {
+            "url": url,
+            "sections": sections,
+        }
+        if references:
+            result["references"] = references
+        if section_errors:
+            result["section_errors"] = section_errors
+        return result
 
     @mcp.tool(
         timeout=tool_timeout,
@@ -174,6 +156,7 @@ def register_company_tools(
         annotations={"readOnlyHint": True, "openWorldHint": True},
         tags={"company", "search"},
     )
+    @tool_errors
     async def search_companies(
         keywords: str,
         ctx: Context,
@@ -189,31 +172,21 @@ def register_company_tools(
             Dict with url, sections (search_results -> raw text), and optional references.
             The LLM should parse the raw text to extract individual companies and their pages.
         """
-        # Fork extension: blank keywords navigate to an unfiltered page whose
-        # result reads as a search answer; refuse before any page load.
+        # A blank query must not turn an unfiltered page into search evidence.
         if not keywords or not keywords.strip():
             raise ToolError("keywords must not be empty.")
-        try:
-            extractor = await get_ready_extractor(ctx, tool_name="search_companies")
-            logger.info("Searching companies: keywords='%s'", keywords)
+        extractor = await get_ready_extractor(ctx, tool_name="search_companies")
+        logger.info("Searching companies: keywords='%s'", keywords)
 
-            await ctx.report_progress(
-                progress=0, total=100, message="Starting company search"
-            )
+        await ctx.report_progress(
+            progress=0, total=100, message="Starting company search"
+        )
 
-            result = await extractor.search_companies(keywords)
+        result = await extractor.search_companies(keywords)
 
-            await ctx.report_progress(progress=100, total=100, message="Complete")
+        await ctx.report_progress(progress=100, total=100, message="Complete")
 
-            return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "search_companies")
-        except Exception as e:
-            raise_tool_error(e, "search_companies")  # NoReturn
+        return result
 
     @mcp.tool(
         timeout=tool_timeout,
@@ -221,6 +194,7 @@ def register_company_tools(
         annotations={"readOnlyHint": True, "openWorldHint": True},
         tags={"company"},
     )
+    @tool_errors
     async def get_company_employees(
         company_name: str,
         ctx: Context,
@@ -254,32 +228,19 @@ def register_company_tools(
             Dict with url, sections (employees -> raw text), and optional references.
             References include /in/ profile paths for listed employees.
         """
-        try:
-            # Preserve the reference for the reader's single normalization pass.
-            normalize_company_identifier(company_name)
-            extractor = await get_ready_extractor(
-                ctx, tool_name="get_company_employees"
-            )
-            logger.info(
-                "Reading company employees: %s (keywords=%s)", company_name, keywords
-            )
+        # Preserve the reference for the reader's single normalization pass.
+        normalize_company_identifier(company_name)
+        extractor = await get_ready_extractor(ctx, tool_name="get_company_employees")
+        logger.info(
+            "Reading company employees: %s (keywords=%s)", company_name, keywords
+        )
 
-            await ctx.report_progress(
-                progress=0, total=100, message="Loading company employees"
-            )
+        await ctx.report_progress(
+            progress=0, total=100, message="Loading company employees"
+        )
 
-            result = await extractor.get_company_employees(
-                company_name, keywords=keywords
-            )
+        result = await extractor.get_company_employees(company_name, keywords=keywords)
 
-            await ctx.report_progress(progress=100, total=100, message="Complete")
+        await ctx.report_progress(progress=100, total=100, message="Complete")
 
-            return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "get_company_employees")
-        except Exception as e:
-            raise_tool_error(e, "get_company_employees")  # NoReturn
+        return result

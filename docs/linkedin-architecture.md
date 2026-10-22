@@ -29,15 +29,16 @@ a page-owning collaborator.
 | `ext_composer_labels` | `LABELS`, `words()` | `browser-free` |
 | `ext_composer_probe` | `ExtComposerProbe`, `FORBIDDEN_CLICK`, `STEP_ACTIONS`, `check_click_label()`, `check_steps()`, `check_type_mention()`, `check_url()`, `run_probe_steps()` | `browser-free` |
 | `ext_engagement` | `ExtEngagementReader`, `REACTION_ICONS`, `REACTION_TEXT`, `SEEN_ENV`, `SeenStore`, `engager_key()`, `parse_activity_id()`, `parse_person_ref()`, `parse_post_summary()`, `reaction_kind()`, `seen_path()`, `split_comment_lines()`, `split_engager_lines()` | `browser-free` |
-| `ext_events` | `ExtEventFinder`, `attendee_count()`, `event_id()`, `event_summary()`, `keyword_url()`, `organiser_url()`, `parse_current_position()`, `parse_event_card()`, `parse_follower_lines()`, `place_facts()` | `page-owning` |
+| `ext_events` | `ExtEventFinder`, `UnconfirmedEmpty`, `attendee_count()`, `date_text_past()`, `event_id()`, `event_summary()`, `keyword_url()`, `organiser_url()`, `parse_current_position()`, `parse_event_card()`, `parse_follower_lines()`, `place_facts()` | `page-owning` |
 | `ext_inmail` | `CREDITS_LINE_MAX`, `ExtInmail`, `SENT_SNIPPET_MAX`, `SN_INBOX_URL`, `canon()`, `credit_mentions()`, `credit_refusal()`, `credits_line()`, `credits_lines()`, `diagnose_credits_page()`, `edit_landed()`, `first_match()`, `mark_edited()`, `parse_credits()`, `parse_degree()`, `parse_sent_item()`, `pick_own_message()`, `strip_edit_marker()`, `thread_url()` | `browser-free` |
-| `ext_media` | `ALT_MAX`, `DOCUMENT_SUFFIXES`, `IMAGE_SUFFIXES`, `MAX_IMAGES`, `MediaAttacher`, `UNMEASURED_SUFFIXES`, `VIDEO_SUFFIXES`, `check_media()`, `describe()` | `browser-free` |
+| `ext_media` | `ALT_MAX`, `DOCUMENT_SUFFIXES`, `IMAGES_TOTAL_MAX_BYTES`, `IMAGE_MAX_BYTES`, `IMAGE_SUFFIXES`, `MAX_IMAGES`, `MediaAttacher`, `UNMEASURED_SUFFIXES`, `VIDEO_SUFFIXES`, `check_media()`, `describe()` | `browser-free` |
 | `ext_mentions` | `Mention`, `MentionWriter`, `apply_mention_list()`, `canon()`, `choose_option()`, `fold()`, `has_markup()`, `mentions_of()`, `parse_mentions()`, `parse_target()`, `plain_text()`, `plaintext_names()`, `prepare_text()`, `resolve_targets()` | `browser-free` |
 | `ext_network` | `ATTENDEE_FIELDS_CARD`, `ATTENDEE_FIELDS_MINIMAL`, `CONNECTIONS_URL`, `EVENT_COUNT_JS`, `EVENT_COUNT_WAIT_SECONDS`, `EVENT_STATUS_JS`, `ExtNetworkReader`, `MAX_ATTENDEE_PAGES`, `MAX_LIST_LIMIT`, `SENT_INVITATIONS_URL`, `SearchLimitReached`, `classify_action()`, `event_attendees_url()`, `event_page_flags()`, `is_search_limit_text()`, `own_rsvp_from()`, `parse_connected_date()`, `parse_degree()`, `project_attendees()`, `read_event_count()`, `split_person_lines()` | `browser-free` |
 | `ext_own_content` | `CANCEL_WORDS`, `CONFIRM_DELETE_WORDS`, `DELETE_COMMENT_WORDS`, `DELETE_POST_WORDS`, `DISCARD_WORDS`, `EDIT_COMMENT_WORDS`, `EDIT_POST_WORDS`, `ExtOwnContent`, `ME_URL`, `SAVE_WORDS`, `comment_permalink()`, `company_of()`, `parse_comment_ref()`, `post_gone_evidence()`, `prefill_matches()`, `same_company()`, `same_member()`, `slug_of()`, `text_matches()` | `browser-free` |
 | `ext_post` | `ExtPostComposer`, `FEED_URL`, `RECENT_ACTIVITY_URL`, `SHARE_URL` | `browser-free` |
 | `ext_post_outcome` | `CARDS_JS`, `CARD_RENDER_INTERVAL`, `CARD_RENDER_POLLS`, `DATED_CARD_MIN_AGE`, `DISCARD_PROMPT_JS`, `DISCARD_WORDS`, `DRAFT_PROMPT_WORDS`, `DUPLICATE_WINDOW_SECONDS`, `ERROR_POLLS`, `FRESH_SECONDS`, `ME_ALIAS`, `MIN_TRUNCATED_CHARS`, `Navigate`, `PREFIX_CHARS`, `READBACK_WAITS`, `SETTLE_POLL`, `SETTLE_TIMEOUT`, `SHORT_READBACK_WAITS`, `STATE_JS`, `Sleep`, `UPLOAD_TIMEOUT`, `card_age_seconds()`, `card_body()`, `card_matches()`, `classify()`, `decide()`, `find_matches()`, `fresh_hit()`, `normalize()`, `post_url()`, `prefix()`, `read_activity()`, `read_state()`, `recent_duplicate()`, `resolve_me()`, `settle()`, `state_arg()`, `wait_for_upload()` | `browser-free` |
 | `ext_repost` | `ExtReposter`, `classify_menu_entry()`, `is_share_menu()`, `new_lines()`, `pick_entry()` | `browser-free` |
+| `ext_saved` | `CARD_HEADINGS`, `ExtSavedReader`, `REACTIONS_URL`, `SAVED_POSTS_URL`, `activity_id()`, `matches()`, `normalise_cards()`, `own_slug()`, `split_feed_text()` | `browser-free` |
 | `ext_selftest` | `outreach_selftest()` | `page-owning` |
 | `ext_urls` | `BENIGN_PROFILE_QUERY`, `benign_query()`, `canonical_profile_path()`, `identity_path()`, `profile_key()`, `profile_slug_from_url()` | `browser-free` |
 | `extractor` | `LinkedInExtractor` | `page-owning` |
@@ -83,6 +84,7 @@ a page-owning collaborator.
 - `ext_post` -> `ext_composer_labels`, `ext_media`, `ext_mentions`, `ext_post_outcome`, `navigation`, `session`
 - `ext_post_outcome` -> _(none)_
 - `ext_repost` -> `ext_actions`
+- `ext_saved` -> _(none)_
 - `ext_selftest` -> `connection`, `connection_actions`, `ext_urls`, `identifiers`, `message_sender`, `navigation`, `session`
 - `ext_urls` -> _(none)_
 - `extractor` -> `capture`, `company`, `connection_actions`, `content`, `contracts`, `conversations`, `feed`, `job_pages`, `job_policy`, `jobs`, `message_sender`, `navigation`, `person`, `posts`, `profile_page`, `session`, `text`

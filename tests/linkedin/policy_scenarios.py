@@ -27,7 +27,6 @@ from linkedin_mcp_server.linkedin import person as person_module
 from linkedin_mcp_server.linkedin import session as session_module
 from linkedin_mcp_server.linkedin import LinkedInExtractor
 from linkedin_mcp_server.linkedin.fields import COMPANY_SECTIONS, PERSON_SECTIONS
-from linkedin_mcp_server.server import create_mcp_server
 
 from .support.policy_trace import (
     FakeClock,
