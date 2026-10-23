@@ -365,7 +365,7 @@ _REPLY_SUBMIT_JS = (
   if (!root || !root.contains(editor)) return {count: 0};
   const isSubmit = b => vis(b) && /^(antworten|reply|kommentieren|comment|posten|post|senden|send)$/i.test((b.innerText || '').trim()) &&
       b.getAttribute('data-ext-reply') !== 'reply-button' &&
-      !/^(antworten|reply).*(auf|to)/i.test(b.getAttribute('aria-label') || '') &&
+      !/^(antworten|reply)\b.*\b(auf|to)\b/i.test(b.getAttribute('aria-label') || '') &&
       ownerId(b) === ownerId(editor);
   let box = editor;
   for (let i = 0; i < 8 && box !== root; i++) {

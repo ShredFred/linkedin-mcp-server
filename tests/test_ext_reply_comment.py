@@ -526,3 +526,28 @@ def test_dom_collapsed_thread_cap(dom):
         page.evaluate("() => document.body.dataset.clicks")
     ) == (str(ea.REPLY_MAX_EXPANSIONS))
     assert state["replied"] is None
+
+
+@pytestmark_dom
+def test_dom_submit_excludes_reply_to_navigation_control(dom):
+    loop, page = dom
+    loop.run_until_complete(
+        page.set_content(
+            f'<div componentkey="replaceableComment_urn:li:comment:(activity:{A},{CID})" '
+            'data-ext-reply="root"><div><div id="reply-input" contenteditable="true">Text</div>'
+            '<button aria-label="Reply to Erika">Reply</button>'
+            '<button id="actual-submit">Reply</button></div></div>'
+        )
+    )
+    got = loop.run_until_complete(
+        page.evaluate(
+            "() => ("
+            + ea._REPLY_SUBMIT_JS
+            + ")(document.getElementById('reply-input'))"
+        )
+    )
+    assert got["count"] == 1
+    assert (
+        loop.run_until_complete(page.get_attribute("#actual-submit", "data-ext-reply"))
+        == "reply-submit"
+    )

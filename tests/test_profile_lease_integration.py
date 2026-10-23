@@ -1428,6 +1428,9 @@ class TestAMomentaryHolderDoesNotCancelTheRepair:
         monkeypatch.setattr(setup, "_login_into_fresh_profile", signed_in)
         monkeypatch.setattr(setup, "close_browser", AsyncMock())
         monkeypatch.setattr(bootstrap, "close_browser", AsyncMock())
+        # This is a lease/login lifecycle test with a synthetic browser. Browser
+        # installation has its own supervisor tests and must not use the network.
+        monkeypatch.setattr(bootstrap, "_ensure_browser_installed", AsyncMock())
 
         holder = _hold_profile(get_profile_lease(isolate_profile_dir).auth_root, 1.5)
         try:

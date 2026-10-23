@@ -213,7 +213,7 @@ def test_content_check_catches_bare_and_disguised_links(text):
         "Termin: https://calendly.com/acme_jane-doe/30min",
         "Termin: calendly.com/acme_jane-doe/30min",
         "Mehr unter www.example.com, z.B. die Fallstudien.",
-        "Familie \U0001f468‍\U0001f469‍\U0001f467 und Flagge \U0001f3f4\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f",
+        "Familie \U0001f468\u200d\U0001f469\u200d\U0001f467 und Flagge \U0001f3f4\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f",
     ],
 )
 def test_content_check_lets_ordinary_text_pass(text):
@@ -222,7 +222,7 @@ def test_content_check_lets_ordinary_text_pass(text):
     assert check_message_content(text) is None
 
 
-@pytest.mark.parametrize("hidden", ["؜", "⁠", "­", "⁤"])
+@pytest.mark.parametrize("hidden", ["\u061c", "\u2060", "\u00ad", "\u2064"])
 def test_hidden_format_characters_refused_everywhere(hidden):
     from linkedin_mcp_server.tools.ext import check_invite_note, check_message_content
 
