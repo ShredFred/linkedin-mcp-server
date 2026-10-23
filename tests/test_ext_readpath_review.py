@@ -73,8 +73,8 @@ def test_reactors_complete_false_when_duplicates_hide_the_cut(monkeypatch):
     page = _Page({"items": items, "more": False, "failed": False})
     monkeypatch.setattr(ExtEngagementReader, "_page", property(lambda s: page))
     reader = ExtEngagementReader.__new__(ExtEngagementReader)
-    reader._goto = _noop
-    reader._pause = _noop
+    setattr(reader, "_goto", _noop)
+    setattr(reader, "_pause", _noop)
     out = asyncio.run(reader.read_reactors("1", 3))
     assert len(out["reactors"]) == 2  # dup collapsed, then p0; p1..p3 cut off
     assert out["complete"] is False
@@ -92,8 +92,8 @@ def test_by_keyword_dedupes_shifted_pages():
     class _S:
         delay = staticmethod(_noop)
 
-    finder._read = read
-    finder._session = _S()
+    setattr(finder, "_read", read)
+    setattr(finder, "_session", _S())
     events = asyncio.run(finder.by_keyword("x", max_pages=2))
     assert [e["event_id"] for e in events] == [str(i) for i in range(11)]
     assert finder.last_has_more is False  # short last page: nothing more
@@ -108,8 +108,8 @@ def test_by_keyword_flags_has_more_after_full_last_page():
     class _S:
         delay = staticmethod(_noop)
 
-    finder._read = read
-    finder._session = _S()
+    setattr(finder, "_read", read)
+    setattr(finder, "_session", _S())
     events = asyncio.run(finder.by_keyword("x", max_pages=1))
     assert len(events) == 10
     assert finder.last_has_more is True
@@ -124,8 +124,8 @@ def _finder_with(state):
     class _S:
         delay = staticmethod(_noop)
 
-    finder._read = read
-    finder._session = _S()
+    setattr(finder, "_read", read)
+    setattr(finder, "_session", _S())
     return finder
 
 
@@ -157,8 +157,8 @@ def test_by_keyword_rereads_a_slow_page_once():
     class _S:
         delay = staticmethod(_noop)
 
-    finder._read = read
-    finder._session = _S()
+    setattr(finder, "_read", read)
+    setattr(finder, "_session", _S())
     assert [e["event_id"] for e in asyncio.run(finder.by_keyword("x"))] == ["1"]
     assert finder.last_unconfirmed_empty is False
 
@@ -182,8 +182,8 @@ def test_legacy_idless_comment_key_is_still_known_once(tmp_path):
     col.seen = SeenStore(tmp_path / "seen.json")
     # Memory written before 2026-10-01: 'comment:<id>:' with empty extra.
     col.seen.remember("1", {engager_key("comment", "u1", "", name="A")})
-    col.engagement = _Eng()
-    col._take = lambda *a, **k: None
+    setattr(col, "engagement", _Eng())
+    setattr(col, "_take", lambda *a, **k: None)
     first = asyncio.run(col._engagers("1", reactors=False, source="t"))
     assert first["new_comments"] == []
     # After migration a later comment of the same person is new again.
@@ -201,8 +201,8 @@ def test_second_idless_comment_of_same_person_is_new(tmp_path):
 
     col = ext_daily.Collector.__new__(ext_daily.Collector)
     col.seen = SeenStore(tmp_path / "seen.json")
-    col.engagement = _Eng()
-    col._take = lambda *a, **k: None
+    setattr(col, "engagement", _Eng())
+    setattr(col, "_take", lambda *a, **k: None)
     first = asyncio.run(col._engagers("1", reactors=False, source="t"))
     assert len(first["new_comments"]) == 1
     comments.append({**comments[0], "text": "zweit"})
@@ -225,6 +225,8 @@ def test_date_text_past_from_card_without_year():
 
 
 def test_by_keyword_marks_past_from_date_text():
-    finder = _finder_with({"items": [{"id": "1", "lines": ["T", "Di., 13. Okt. bis Do., 15. Okt."]}]})
+    finder = _finder_with(
+        {"items": [{"id": "1", "lines": ["T", "Di., 13. Okt. bis Do., 15. Okt."]}]}
+    )
     out = asyncio.run(finder.by_keyword("x"))
     assert "past" in out[0]

@@ -289,7 +289,9 @@ class TestConnectWithPerson:
         buttons.count = AsyncMock(return_value=2)
         target = MagicMock()
         target.click = AsyncMock(side_effect=RuntimeError("intercepted"))
-        target.evaluate = AsyncMock(return_value="https://www.linkedin.com/in/testuser/")
+        target.evaluate = AsyncMock(
+            return_value="https://www.linkedin.com/in/testuser/"
+        )
         target.dispose = AsyncMock()
         target.element_handle = AsyncMock(return_value=target)
         buttons.nth = MagicMock(return_value=target)

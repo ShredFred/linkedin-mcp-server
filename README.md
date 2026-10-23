@@ -77,6 +77,7 @@
 >
 > **Changed behaviour**
 >
+> - The browser-installer supervisor bootstraps its trusted package root before importing fork helpers under isolated Python startup. Docker builds exclude temporary test state, including filename-encoding probes.
 > - `send_message` text is stricter than upstream: besides tab and other control characters, CR (also as CRLF) and invisible or bidi control characters are refused; multi-line text uses upstream's paragraph path.
 > - Profile URLs are normalised in one place (`linkedin/ext_urls.py`): benign query keys by allowlist (`isSelfProfile=false`, `trk`, ...), no fragment, percent-decoded slug (umlauts), optional locale segment; the recipient stays pinned by its profile URN and anything else fails closed.
 > - `connect_with_person` reads the 2026 More menu: `pending` when the invitation is only shown there, Connect from the menu (`connect_via: more_menu`), and a distinct `follow_only` next to `connect_unavailable`.

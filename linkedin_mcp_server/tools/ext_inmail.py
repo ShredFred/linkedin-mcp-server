@@ -8,6 +8,8 @@ checks (links, placeholders, salutation), ledger duplicate check, pacer.
 
 from __future__ import annotations
 
+from linkedin_mcp_server.tools.ext import ToolRegistrar
+
 import re
 import time
 import uuid
@@ -15,7 +17,7 @@ from datetime import datetime
 from typing import Any
 
 import anyio
-from fastmcp import Context, FastMCP
+from fastmcp import Context
 
 from linkedin_mcp_server import ext_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
@@ -183,7 +185,7 @@ def precheck_edit(new_text: str) -> dict[str, Any] | None:
 
 
 def register_ext_inmail_tools(
-    mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
+    mcp: ToolRegistrar, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
 ) -> None:
     from linkedin_mcp_server.tools.ext import (
         _before_deadline,
@@ -272,6 +274,7 @@ def register_ext_inmail_tools(
         username, bad = _recipient(ident)
         if bad:
             return bad
+        assert username is not None
         refusal = precheck_inmail(username, subject, body) or repeat_refusal(
             username, allow_repeat
         )
@@ -438,17 +441,15 @@ def register_ext_inmail_tools(
                     free_marks["credit_check"] = "unavailable"
                 else:
                     _pending_free_checks[attempt] = balance_before
-            _remember_balance((result.get("credits_after") or {}).get("remaining"))
+            _remember_balance(_remaining(result.get("credits_after")))
             ledger.append(
                 {
                     **free_marks,
                     "attempt": attempt,
                     "status": status,
                     "detail": result["status"],
-                    "credits_before": (result.get("credits") or {}).get("remaining"),
-                    "credits_after": (result.get("credits_after") or {}).get(
-                        "remaining"
-                    ),
+                    "credits_before": _remaining(result.get("credits")),
+                    "credits_after": _remaining(result.get("credits_after")),
                     "url": result.get("url"),
                 }
             )
@@ -681,3 +682,10 @@ def register_ext_inmail_tools(
             return {**base, "attempt": attempt, **result}
 
         return await _run(ctx, "edit_sent_message", body_fn)
+
+
+def _remaining(credits: object) -> int | None:
+    if not isinstance(credits, dict):
+        return None
+    value = credits.get("remaining")
+    return value if isinstance(value, int) and not isinstance(value, bool) else None

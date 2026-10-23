@@ -231,7 +231,7 @@ def test_cancellation_during_send_blocks_and_counts(monkeypatch):
         fake.delivered[username] += 1  # the click may have happened
         raise asyncio.CancelledError()
 
-    fake.send_message = cancelled
+    setattr(fake, "send_message", cancelled)
     with pytest.raises(BaseException):
         _batch(fake, monkeypatch, ["anna"])
     fake2 = FakeLinkedIn()
@@ -417,7 +417,7 @@ def test_upstream_deadline_answer_books_unknown_and_blocks_the_retry(monkeypatch
             retry_safe=False,
         )
 
-    fake.send_message = deadline
+    setattr(fake, "send_message", deadline)
     _batch(fake, monkeypatch, ["anna"])
     rows = [
         row

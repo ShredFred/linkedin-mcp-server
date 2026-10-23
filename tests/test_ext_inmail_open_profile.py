@@ -150,7 +150,7 @@ class _FakePage:
 def _composer(header, balances=(150, 150)):
     obj = object.__new__(ExtInmail)
     page = _FakePage(header)
-    obj._session = type("S", (), {"page": page})()
+    setattr(obj, "_session", type("S", (), {"page": page})())
 
     async def no_wait(low, high):
         return None
@@ -164,9 +164,9 @@ def _composer(header, balances=(150, 150)):
         page.balance_reads += 1
         return {"remaining": left.pop(0) if left else None}
 
-    obj._wait = no_wait
-    obj._goto = goto
-    obj.inmail_credits = credits
+    setattr(obj, "_wait", no_wait)
+    setattr(obj, "_goto", goto)
+    setattr(obj, "inmail_credits", credits)
     return obj, page
 
 
@@ -183,7 +183,7 @@ def _send(header, *, confirm, allow, balances=(150, 150)):
     from linkedin_mcp_server.linkedin.ext_inmail import _SN_SEND
 
     sent_clicks = [c for c in page.clicks if c in _SN_SEND]
-    _send.page = page
+    setattr(_send, "page", page)
     return out, sent_clicks
 
 
@@ -378,9 +378,9 @@ def test_free_without_panel_marker_stops_even_with_flag():
 
 def test_no_extra_balance_read_without_flag_or_dry_run():
     _send(PAID_LINE, confirm=True, allow=False)
-    assert _send.page.balance_reads == 1  # only the existing read-back
+    assert getattr(_send, "page").balance_reads == 1  # only the existing read-back
     _send(FREE_LINE, confirm=False, allow=True)
-    assert _send.page.balance_reads == 0
+    assert getattr(_send, "page").balance_reads == 0
 
 
 def test_flag_books_the_balance_read_on_the_pacer(monkeypatch):

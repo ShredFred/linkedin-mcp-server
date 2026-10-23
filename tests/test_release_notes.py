@@ -1212,3 +1212,9 @@ def test_prepare_release_job_is_unchanged() -> None:
     assert hashlib.sha256(block.encode("utf-8")).hexdigest() == (
         _PREPARE_RELEASE_SHA256
     )
+
+
+def test_upstream_release_pipeline_is_bound_to_its_publisher() -> None:
+    # An upstream version bump merged into a fork is not a release instruction.
+    check = _workflow()["jobs"]["check-version-bump"]
+    assert check["if"] == "github.repository == 'stickerdaniel/linkedin-mcp-server'"

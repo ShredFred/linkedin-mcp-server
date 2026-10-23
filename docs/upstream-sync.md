@@ -39,3 +39,9 @@ proxy and authentication documentation stays available.
 Completion means the upstream commit is reachable in the fork history, the
 required features and guards are tested, the README is current and free of
 known promotion blocks, and the active checkout uses the integrated version.
+
+
+The upstream release workflow is bound to its original publisher repository.
+A version bump imported into this fork does not publish to upstream's PyPI or
+Docker namespace. Fork publication needs a separate, explicitly configured
+release identity; ordinary MCP updates use the source checkout and locked wrapper.

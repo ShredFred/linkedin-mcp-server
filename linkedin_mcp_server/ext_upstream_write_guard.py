@@ -82,9 +82,7 @@ def claim_upstream_write_names(mcp: FastMCP) -> None:
             )
         mcp.local_provider.remove_tool(name)
         if allowed:
-            renamed = found[0].model_copy(
-                update={"name": f"{name}{UNGUARDED_SUFFIX}"}
-            )
+            renamed = found[0].model_copy(update={"name": f"{name}{UNGUARDED_SUFFIX}"})
             mcp.add_tool(renamed)
 
 

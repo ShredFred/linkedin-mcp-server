@@ -8,6 +8,8 @@ read-back is the preview iframe's title. All names are invented.
 
 from __future__ import annotations
 
+from value_assertions import require_value
+
 import json
 
 import pytest
@@ -69,7 +71,9 @@ def _html(**cfg) -> str:
         '<button id="media" aria-label="Medieninhalte"></button>'
         '<button id="more" aria-label="Mehr"></button><button>Posten</button></div>'
         '<div id="root"></div>'
-        f"<script>window.FAKE = {json.dumps(cfg)};</script>" + RUNTIME + "</body></html>"
+        f"<script>window.FAKE = {json.dumps(cfg)};</script>"
+        + RUNTIME
+        + "</body></html>"
     )
 
 
@@ -88,16 +92,26 @@ async def page():
 
 
 def _attacher(pg, kinds):
-    return MediaAttacher(pg, editor_selector="#ed", media_words=words("media"),
-                         allow_tags=False, kinds=kinds, poll=0.2, timeout=6.0)
+    return MediaAttacher(
+        pg,
+        editor_selector="#ed",
+        media_words=words("media"),
+        allow_tags=False,
+        kinds=kinds,
+        poll=0.2,
+        timeout=6.0,
+    )
 
 
 async def _no_nav(url):
     raise AssertionError("no navigation expected")
 
 
-@pytest.mark.parametrize("kinds", [("image", "video"), ("image", "video", "document")],
-                         ids=["member", "page"])
+@pytest.mark.parametrize(
+    "kinds",
+    [("image", "video"), ("image", "video", "document")],
+    ids=["member", "page"],
+)
 async def test_video_member_composer(page, tmp_path, kinds) -> None:
     f = tmp_path / "clip.mp4"
     f.write_bytes(b"\x00")
@@ -139,7 +153,15 @@ async def test_document_title_lost_is_caught(page, tmp_path) -> None:
 def test_document_needs_a_title(tmp_path) -> None:
     f = tmp_path / "deck.pdf"
     f.write_bytes(b"%PDF-1.4")
-    assert check_media([{"path": str(f)}])[1]["status"] == "document_title_required"
+    assert (
+        require_value(check_media([{"path": str(f)}])[1])["status"]
+        == "document_title_required"
+    )
     img = tmp_path / "a.png"
     img.write_bytes(b"x")
-    assert check_media([{"path": str(f), "title": "x"}, {"path": str(img)}])[1]["status"] == "media_mix_unsupported"
+    assert (
+        require_value(
+            check_media([{"path": str(f), "title": "x"}, {"path": str(img)}])[1]
+        )["status"]
+        == "media_mix_unsupported"
+    )

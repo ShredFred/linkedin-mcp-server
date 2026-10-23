@@ -3,6 +3,10 @@ attendee paging. No browser, no live action."""
 
 from __future__ import annotations
 
+from linkedin_mcp_server.linkedin.navigation import PageNavigator
+from linkedin_mcp_server.linkedin.session import PageSession
+from typing import cast
+
 import asyncio
 import json
 import multiprocessing
@@ -253,7 +257,9 @@ def test_repeated_attendee_page_is_not_complete():
         async def _navigate_to_page(self, url):
             pass
 
-    reader = ExtNetworkReader(Session(), Nav())
+    reader = ExtNetworkReader(
+        cast("PageSession", Session()), cast("PageNavigator", Nav())
+    )
 
     async def same_cards():
         return cards
@@ -261,9 +267,9 @@ def test_repeated_attendee_page_is_not_complete():
     async def nothing(*a, **k):
         return None
 
-    reader._cards = same_cards
-    reader._wait_for_cards = nothing
-    reader._wait_for_actions = nothing
+    setattr(reader, "_cards", same_cards)
+    setattr(reader, "_wait_for_cards", nothing)
+    setattr(reader, "_wait_for_actions", nothing)
     out = asyncio.run(reader.get_event_attendees("7457346711301214208", 1, 3))
     assert out["count"] == 10
     assert out["complete"] is False

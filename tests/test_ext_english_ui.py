@@ -150,7 +150,17 @@ class TestTrailingNumberIsText:
 
     def test_only_one_count_line_is_dropped(self):
         c = split_comment_lines(
-            ["P Verified Profile 1st", "P", "• 1st", "Role", "2d",
-             "See you in", "2026", "3", "Like", "Reply"]
+            [
+                "P Verified Profile 1st",
+                "P",
+                "• 1st",
+                "Role",
+                "2d",
+                "See you in",
+                "2026",
+                "3",
+                "Like",
+                "Reply",
+            ]
         )
         assert c["text"].endswith("2026")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from value_assertions import require_value
+
 import pytest
 
 from linkedin_mcp_server.ext_message_checks import check_message
@@ -19,6 +21,7 @@ class _Loc:
         return _Loc(self.hits, css, self.clicks)
 
     def filter(self, has_text=None):
+        assert has_text is not None
         return _Loc(self.hits, (self.key, has_text.pattern), self.clicks)
 
     @property
@@ -77,12 +80,12 @@ def _editor(hits, menu=("Bearbeiten",)):
     from linkedin_mcp_server.linkedin.ext_inmail import ExtInmail
 
     obj = object.__new__(ExtInmail)
-    obj._session = type("S", (), {"page": _Page(hits, list(menu))})()
+    setattr(obj, "_session", type("S", (), {"page": _Page(hits, list(menu))})())
 
     async def no_wait(low, high):
         return None
 
-    obj._wait = no_wait
+    setattr(obj, "_wait", no_wait)
     return obj
 
 
@@ -189,7 +192,9 @@ class TestFirstMatch:
 
 class TestMessageChecks:
     def test_clean_text_passes(self):
-        text = "Hallo Herr Köhler,\nkurz zur HK: https://calendly.com/acme_jane-doe/30min"
+        text = (
+            "Hallo Herr Köhler,\nkurz zur HK: https://calendly.com/acme_jane-doe/30min"
+        )
         assert check_message(text, "Dieter Köhler") == []
 
     def test_wrong_calendly_and_http(self):
@@ -218,8 +223,7 @@ class TestMessageChecks:
 
     def test_salutation_without_name_is_unverifiable(self):
         assert (
-            check_message("Hallo John,", None)[0]["code"]
-            == "salutation_unverifiable"
+            check_message("Hallo John,", None)[0]["code"] == "salutation_unverifiable"
         )
 
     def test_no_salutation_no_finding(self):
@@ -298,23 +302,31 @@ class TestPickOwnMessage:
         assert pick_own_message(self.msgs, "zweite")["message"]["index"] == 2
         assert pick_own_message(self.msgs, "Fassung A")["status"] == "ambiguous_match"
         assert (
-            pick_own_message(self.msgs, "Hallo Jane")["status"]
-            == "message_not_found"
+            pick_own_message(self.msgs, "Hallo Jane")["status"] == "message_not_found"
         )
         assert pick_own_message(self.msgs[:1], None)["status"] == "no_own_message"
 
 
 class TestPrecheck:
     def test_subject_required_and_single_line(self):
-        assert precheck_inmail("a", "", "Text")["status"] == "subject_required"
         assert (
-            precheck_inmail("a", "Zeile\nzwei", "Text")["status"] == "invalid_subject"
+            require_value(precheck_inmail("a", "", "Text"))["status"]
+            == "subject_required"
+        )
+        assert (
+            require_value(precheck_inmail("a", "Zeile\nzwei", "Text"))["status"]
+            == "invalid_subject"
         )
 
     def test_body_rules(self):
-        assert precheck_inmail("a", "Betreff", "x\ry")["status"] == "invalid_message"
         assert (
-            precheck_inmail("a", "Betreff", "https://calendly.com/acme")["status"]
+            require_value(precheck_inmail("a", "Betreff", "x\ry"))["status"]
+            == "invalid_message"
+        )
+        assert (
+            require_value(precheck_inmail("a", "Betreff", "https://calendly.com/acme"))[
+                "status"
+            ]
             == "content_check_failed"
         )
         assert precheck_inmail("a", "Betreff", "Hallo Herr Köhler, Text") is None

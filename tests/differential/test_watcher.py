@@ -326,7 +326,7 @@ def test_on_windows_the_watcher_runs_ahead_of_the_row(tmp_path):
     finally:
         records = _stop_watcher(tmp_path, watcher)
     # Windows-only in psutil, so absent from the stubs ty reads on POSIX.
-    assert running == psutil.HIGH_PRIORITY_CLASS  # ty: ignore[unresolved-attribute]
+    assert running == psutil.HIGH_PRIORITY_CLASS
     (summary,) = [r for r in records if r["kind"] == "watcher.summary"]
     assert summary["priority"] == "HIGH_PRIORITY_CLASS"
     assert "priority_error" not in summary

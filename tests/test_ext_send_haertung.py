@@ -4,6 +4,8 @@ characters and DM length. No browser."""
 
 from __future__ import annotations
 
+from value_assertions import require_value
+
 import asyncio
 import json
 
@@ -224,8 +226,14 @@ def test_content_check_lets_ordinary_text_pass(text):
 def test_hidden_format_characters_refused_everywhere(hidden):
     from linkedin_mcp_server.tools.ext import check_invite_note, check_message_content
 
-    assert check_message_content(f"Hallo{hidden}Welt")["status"] == "invalid_message"
-    assert check_invite_note(f"Hallo{hidden}Welt")["status"] == "invalid_note"
+    assert (
+        require_value(check_message_content(f"Hallo{hidden}Welt"))["status"]
+        == "invalid_message"
+    )
+    assert (
+        require_value(check_invite_note(f"Hallo{hidden}Welt"))["status"]
+        == "invalid_note"
+    )
 
 
 def test_dm_length_counted_in_utf16():
@@ -233,7 +241,7 @@ def test_dm_length_counted_in_utf16():
 
     assert check_message_content("a" * MESSAGE_MAX_UTF16) is None
     over = "\U0001f600" * (MESSAGE_MAX_UTF16 // 2 + 1)
-    assert check_message_content(over)["status"] == "message_too_long"
+    assert require_value(check_message_content(over))["status"] == "message_too_long"
 
 
 def test_dry_run_writes_nothing(monkeypatch):

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+
+from value_assertions import require_value
+
 import asyncio
 import re
 
@@ -41,6 +44,7 @@ class TestCreditWordings:
     )
     def test_line_is_read(self, line, expected):
         found = credits_line(f"Kopf\n  {line}  \nRest")
+        assert found is not None
         assert found == line
         assert parse_credits(found)["remaining"] == expected
 
@@ -134,29 +138,32 @@ class TestParseSentItem:
         row = parse_sent_item(
             {"href": "", "lines": ["Max M", "10:42", "Danke, passt."]}
         )
-        assert row["own_last"] is False
-        assert row["subject"] is None
-        assert row["when"] == "10:42"
-        assert row["thread_url"] is None
+        assert require_value(row)["own_last"] is False
+        assert require_value(row)["subject"] is None
+        assert require_value(row)["when"] == "10:42"
+        assert require_value(row)["thread_url"] is None
 
     def test_labelled_subject_and_cap(self):
         row = parse_sent_item(
             {"lines": ["A B", "Gestern", "Betreff: Termin", "You: " + "y" * 500]}
         )
-        assert row["subject"] == "Termin"
-        assert row["subject_source"] == "labelled"
-        assert len(row["text_start"]) == mod.SENT_SNIPPET_MAX
+        assert require_value(row)["subject"] == "Termin"
+        assert require_value(row)["subject_source"] == "labelled"
+        assert len(require_value(row)["text_start"]) == mod.SENT_SNIPPET_MAX
 
     def test_two_time_lines_never_become_subject(self):
         # review 2026-10-13: "Heute" took when, "12:30" became the subject
         row = parse_sent_item({"lines": ["Erika", "Heute", "12:30", "Sie: Hallo"]})
-        assert row["when"] == "Heute 12:30"
-        assert row["subject"] is None
-        assert row["recipient"] == "Erika"
+        assert require_value(row)["when"] == "Heute 12:30"
+        assert require_value(row)["subject"] is None
+        assert require_value(row)["recipient"] == "Erika"
 
     def test_time_first_is_not_recipient(self):
         row = parse_sent_item({"lines": ["10:42", "Max M", "Sie: Hallo 12"]})
-        assert row["recipient"] == "Max M" and row["when"] == "10:42"
+        assert (
+            require_value(row)["recipient"] == "Max M"
+            and require_value(row)["when"] == "10:42"
+        )
 
     def test_garbage(self):
         assert parse_sent_item(None) is None
@@ -171,6 +178,7 @@ class _Loc:
         self.page, self.key = page, key
 
     def filter(self, has_text=None):
+        assert has_text is not None
         return _Loc(self.page, (self.key, has_text.pattern))
 
     @property
@@ -248,17 +256,17 @@ class _Page:
 
 def _reader(page):
     obj = object.__new__(ExtInmail)
-    obj._session = type("S", (), {"page": page})()
-    obj.gotos = []
+    setattr(obj, "_session", type("S", (), {"page": page})())
+    setattr(obj, "gotos", [])
 
     async def goto(url):
-        obj.gotos.append(url)
+        getattr(obj, "gotos").append(url)
 
     async def no_wait(low, high):
         return None
 
-    obj._goto = goto
-    obj._wait = no_wait
+    setattr(obj, "_goto", goto)
+    setattr(obj, "_wait", no_wait)
     return obj
 
 
@@ -392,14 +400,14 @@ def test_activity_suffix_is_not_part_of_the_name(zeile):
             "lines": [zeile, "Mo", "Sie: Hallo Herr Muster, Text"],
         }
     )
-    assert out["recipient"] == "Max Muster"
+    assert require_value(out)["recipient"] == "Max Muster"
 
 
 def test_name_without_suffix_is_unchanged():
     out = mod.parse_sent_item(
         {"href": "/sales/inbox/2-x", "lines": ["Aktiva Werke", "Mo", "Sie: Hallo"]}
     )
-    assert out["recipient"] == "Aktiva Werke"
+    assert require_value(out)["recipient"] == "Aktiva Werke"
 
 
 @pytest.mark.parametrize(

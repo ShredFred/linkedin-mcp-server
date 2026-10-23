@@ -8,10 +8,12 @@ and a client restart per attempt.
 
 from __future__ import annotations
 
+from linkedin_mcp_server.tools.ext import ToolRegistrar
+
 import logging
 from typing import Annotated, Any
 
-from fastmcp import Context, FastMCP
+from fastmcp import Context
 from pydantic import Field
 
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
@@ -33,7 +35,7 @@ def _probe(extractor: Any) -> ExtComposerProbe:
 
 
 def register_ext_composer_probe_tools(
-    mcp: FastMCP,
+    mcp: ToolRegistrar,
     *,
     tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS,
 ) -> None:
@@ -114,7 +116,10 @@ def register_ext_composer_probe_tools(
             ctx,
             "composer_probe",
             lambda ex: _probe(ex).probe(
-                url, click_labels=labels, limit=limit, type_mention=type_mention,
+                url,
+                click_labels=labels,
+                limit=limit,
+                type_mention=type_mention,
                 pick_option=pick_option,
             ),
         )

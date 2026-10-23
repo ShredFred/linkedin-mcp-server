@@ -38,8 +38,12 @@ from typing import Any
 from linkedin_mcp_server.linkedin.ext_composer_labels import words
 from linkedin_mcp_server.linkedin.ext_mentions import MentionWriter, Segment, plain_text
 
-MANAGE_ADMINS_URL = "https://www.linkedin.com/company/{page_id}/admin/settings/manage-admins/"
-ADMIN_POSTS_URL = "https://www.linkedin.com/company/{page_id}/admin/page-posts/published/"
+MANAGE_ADMINS_URL = (
+    "https://www.linkedin.com/company/{page_id}/admin/settings/manage-admins/"
+)
+ADMIN_POSTS_URL = (
+    "https://www.linkedin.com/company/{page_id}/admin/page-posts/published/"
+)
 POST_URL = "https://www.linkedin.com/feed/update/urn:li:activity:{activity}/"
 
 # Roles as the admin table writes them (measured: de). The canonical key is
@@ -63,7 +67,9 @@ REACTIONS = {
     "insightful": ["inspirierend", "insightful"],
     "funny": ["lustig", "funny"],
 }
-_STATUS_PREFIX = re.compile(r"^(status des reaktionsbuttons|reaction button state)\s*:\s*", re.I)
+_STATUS_PREFIX = re.compile(
+    r"^(status des reaktionsbuttons|reaction button state)\s*:\s*", re.I
+)
 _NO_REACTION = {"keine reaktion", "no reaction"}
 
 
@@ -93,7 +99,7 @@ def reaction_state(label: str | None) -> str | None:
     if not label:
         return None
     m = _STATUS_PREFIX.match(label.strip())
-    return label.strip()[m.end():].strip().lower() if m else None
+    return label.strip()[m.end() :].strip().lower() if m else None
 
 
 _TEXT_JS = "() => ((document.querySelector('main') || document.body).innerText || '')"
@@ -121,6 +127,7 @@ _ADMIN_CARD_JS = r"""(arg) => {
           submit_disabled: submit.length === 1 ? (submit[0].disabled === true) : null,
           placeholder};
 }"""
+
 
 def placeholder_names(placeholder: Any, page_name: str) -> bool:
     """True when the comment box placeholder names exactly ``page_name``.
@@ -219,8 +226,13 @@ class ExtCompanyActions:
             role = "admin_unreadable" if offered else "none"
             source = "admin_view"
         acting = role in ACTING_ROLES or role == "admin_unreadable"
-        return {"status": "ok", "page_id": page_id, "role": role,
-                "role_source": source, "can_act_as_page": acting}
+        return {
+            "status": "ok",
+            "page_id": page_id,
+            "role": role,
+            "role_source": source,
+            "can_act_as_page": acting,
+        }
 
     async def _admin_card(self, page_id: str, activity: str) -> dict[str, Any]:
         await self._goto(ADMIN_POSTS_URL.format(page_id=page_id))
@@ -234,13 +246,18 @@ class ExtCompanyActions:
             await asyncio.sleep(self._poll * 2)
 
     async def _admin_card_first(self, activity: str) -> dict[str, Any]:
-        return await self._page.evaluate(
-            _ADMIN_CARD_JS,
-            {"activity": activity,
-             "switch_words": words("switch_identity"),
-             "like_labels": words("page_like"),
-             "submit_words": words("comment_submit")},
-        ) or {}
+        return (
+            await self._page.evaluate(
+                _ADMIN_CARD_JS,
+                {
+                    "activity": activity,
+                    "switch_words": words("switch_identity"),
+                    "like_labels": words("page_like"),
+                    "submit_words": words("comment_submit"),
+                },
+            )
+            or {}
+        )
 
     async def read_identity(self) -> dict[str, Any]:
         """Open the card's identity modal, read the checked identity, close."""
@@ -250,19 +267,28 @@ class ExtCompanyActions:
         closed = await self._page.evaluate(_CLOSE_MODAL_JS, {"close": words("close")})
         await asyncio.sleep(self._poll * 2)
         checked = [r for r in got.get("rows") or [] if r.get("checked")]
-        return {"modal": got.get("modal", False), "closed": closed,
-                "active": checked[0] if len(checked) == 1 else None,
-                "rows": got.get("rows") or []}
+        return {
+            "modal": got.get("modal", False),
+            "closed": closed,
+            "active": checked[0] if len(checked) == 1 else None,
+            "rows": got.get("rows") or [],
+        }
 
     async def _identity_is_page(self, page_name: str) -> dict[str, Any] | None:
         ident = await self.read_identity()
         active = ident.get("active")
         if not ident.get("modal") or active is None:
             return {"status": "identity_unreadable", "identity": ident}
-        if active.get("self") or active.get("name", "").strip().lower() != page_name.strip().lower():
-            return {"status": "identity_not_page", "active": active.get("name"),
-                    "message": "The page's identity switch is not on the page; it is "
-                    "only read here, never changed."}
+        if (
+            active.get("self")
+            or active.get("name", "").strip().lower() != page_name.strip().lower()
+        ):
+            return {
+                "status": "identity_not_page",
+                "active": active.get("name"),
+                "message": "The page's identity switch is not on the page; it is "
+                "only read here, never changed.",
+            }
         if ident.get("closed") != "closed":
             return {"status": "identity_modal_stuck"}
         return None
@@ -270,34 +296,56 @@ class ExtCompanyActions:
     # -- comment as the page --------------------------------------------------
 
     async def comment_as_page(
-        self, page_id: str, page_name: str, activity: str,
-        segments: list[Segment], *, confirm: bool,
+        self,
+        page_id: str,
+        page_name: str,
+        activity: str,
+        segments: list[Segment],
+        *,
+        confirm: bool,
     ) -> dict[str, Any]:
-        base: dict[str, Any] = {"as_company": page_id, "page": page_name, "posted": False}
+        base: dict[str, Any] = {
+            "as_company": page_id,
+            "page": page_name,
+            "posted": False,
+        }
         card = await self._admin_card(page_id, activity)
         if card.get("cards") != 1:
-            return {**base, "status": "post_not_in_admin_view", "cards": card.get("cards"),
-                    "message": "Only posts on the page's own admin list can be "
-                    "commented as the page."}
+            return {
+                **base,
+                "status": "post_not_in_admin_view",
+                "cards": card.get("cards"),
+                "message": "Only posts on the page's own admin list can be "
+                "commented as the page.",
+            }
         # The submit button only appears once text is in the box (measured).
         if card.get("switches") != 1 or card.get("editors") != 1:
             return {**base, "status": "admin_card_controls_unavailable", "found": card}
         if not placeholder_names(card.get("placeholder"), page_name):
-            return {**base, "status": "identity_not_confirmed",
-                    "placeholder": card.get("placeholder")}
+            return {
+                **base,
+                "status": "identity_not_confirmed",
+                "placeholder": card.get("placeholder"),
+            }
         wrong = await self._identity_is_page(page_name)
         if wrong:
             return {**base, **wrong}
-        card = await self._page.evaluate(
-            _ADMIN_CARD_JS,
-            {"activity": activity,
-             "switch_words": words("switch_identity"),
-             "like_labels": [], "submit_words": words("comment_submit")},
-        ) or {}
-        await self._page.click('[data-ext-company-act="editor"]')
-        wrote = await MentionWriter(self._page, '[data-ext-company-act="editor"]').write(
-            segments
+        card = (
+            await self._page.evaluate(
+                _ADMIN_CARD_JS,
+                {
+                    "activity": activity,
+                    "switch_words": words("switch_identity"),
+                    "like_labels": [],
+                    "submit_words": words("comment_submit"),
+                },
+            )
+            or {}
         )
+        await self._page.click('[data-ext-company-act="editor"]')
+        wrote = await MentionWriter(
+            self._page, '[data-ext-company-act="editor"]'
+        ).write(segments)
         if wrote["status"] != "written":
             await self._clear()
             return {**base, **{k: v for k, v in wrote.items() if k != "mentions"}}
@@ -305,11 +353,18 @@ class ExtCompanyActions:
         loop = asyncio.get_running_loop()
         end = loop.time() + 6.0
         while True:
-            card = await self._page.evaluate(
-                _ADMIN_CARD_JS,
-                {"activity": activity, "switch_words": [], "like_labels": [],
-                 "submit_words": words("comment_submit")},
-            ) or {}
+            card = (
+                await self._page.evaluate(
+                    _ADMIN_CARD_JS,
+                    {
+                        "activity": activity,
+                        "switch_words": [],
+                        "like_labels": [],
+                        "submit_words": words("comment_submit"),
+                    },
+                )
+                or {}
+            )
             if card.get("submits") == 1 or loop.time() >= end:
                 break
             await asyncio.sleep(self._poll)
@@ -318,16 +373,25 @@ class ExtCompanyActions:
             return {**base, "status": "no_submit", "submits": card.get("submits")}
         if not confirm:
             await self._clear()
-            return {**base, "status": "dry_run", "would_comment": text,
-                    "identity": page_name, "mentions": wrote.get("mentions")}
+            return {
+                **base,
+                "status": "dry_run",
+                "would_comment": text,
+                "identity": page_name,
+                "mentions": wrote.get("mentions"),
+            }
         before = await self._comment_hits(activity, text, page_name)
         self.clicked = True
         await self._page.click('[data-ext-company-act="submit"]')
         await asyncio.sleep(self._poll * 8)
         after = await self._comment_hits(activity, text, page_name)
         verified = after > before
-        return {**base, "posted": True, "verified": verified,
-                "status": "posted" if verified else "unverified"}
+        return {
+            **base,
+            "posted": True,
+            "verified": verified,
+            "status": "posted" if verified else "unverified",
+        }
 
     async def _comment_hits(self, activity: str, text: str, page_name: str) -> int:
         return await self._page.evaluate(
@@ -357,13 +421,23 @@ class ExtCompanyActions:
     # -- reactions ------------------------------------------------------------
 
     async def react(
-        self, activity: str, reaction: str, *, confirm: bool,
-        page_id: str | None = None, page_name: str | None = None,
+        self,
+        activity: str,
+        reaction: str,
+        *,
+        confirm: bool,
+        page_id: str | None = None,
+        page_name: str | None = None,
     ) -> dict[str, Any]:
-        base: dict[str, Any] = {"activity_id": activity, "reaction": reaction, "reacted": False}
+        base: dict[str, Any] = {
+            "activity_id": activity,
+            "reaction": reaction,
+            "reacted": False,
+        }
         if page_id:
-            return await self._react_as_page(base, page_id, page_name or "", activity,
-                                             reaction, confirm)
+            return await self._react_as_page(
+                base, page_id, page_name or "", activity, reaction, confirm
+            )
         await self._goto(POST_URL.format(activity=activity))
         names = REACTIONS[reaction]
         state = await self._page.evaluate(_REACTION_JS, {"names": names}) or {}
@@ -379,7 +453,11 @@ class ExtCompanyActions:
         state = await self._page.evaluate(_REACTION_JS, {"names": names}) or {}
         if state.get("palette") != 1:
             await self._page.mouse.move(1, 700)
-            return {**base, "status": "reaction_unavailable", "palette": state.get("palette")}
+            return {
+                **base,
+                "status": "reaction_unavailable",
+                "palette": state.get("palette"),
+            }
         if not confirm:
             await self._page.mouse.move(1, 700)
             return {**base, "status": "dry_run", "as": "member"}
@@ -388,21 +466,39 @@ class ExtCompanyActions:
         await asyncio.sleep(self._poll * 6)
         after = await self._page.evaluate(_REACTION_JS, {"names": names}) or {}
         now = reaction_state(after.get("label"))
-        verified = bool(now) and now not in _NO_REACTION and any(now == n for n in names)
-        return {**base, "reacted": True, "state": now,
-                "status": "verified" if verified else "unverified"}
+        verified = (
+            bool(now) and now not in _NO_REACTION and any(now == n for n in names)
+        )
+        return {
+            **base,
+            "reacted": True,
+            "state": now,
+            "status": "verified" if verified else "unverified",
+        }
 
     async def _react_as_page(
-        self, base: dict[str, Any], page_id: str, page_name: str, activity: str,
-        reaction: str, confirm: bool,
+        self,
+        base: dict[str, Any],
+        page_id: str,
+        page_name: str,
+        activity: str,
+        reaction: str,
+        confirm: bool,
     ) -> dict[str, Any]:
         base = {**base, "as_company": page_id}
         if reaction != "like":
-            return {**base, "status": "reaction_unmeasured_as_page",
-                    "message": "Only 'like' was measured on the admin view."}
+            return {
+                **base,
+                "status": "reaction_unmeasured_as_page",
+                "message": "Only 'like' was measured on the admin view.",
+            }
         card = await self._admin_card(page_id, activity)
         if card.get("cards") != 1:
-            return {**base, "status": "post_not_in_admin_view", "cards": card.get("cards")}
+            return {
+                **base,
+                "status": "post_not_in_admin_view",
+                "cards": card.get("cards"),
+            }
         if card.get("switches") != 1:
             return {**base, "status": "admin_card_controls_unavailable", "found": card}
         if card.get("likes") != 1:
@@ -419,25 +515,40 @@ class ExtCompanyActions:
         self.clicked = True
         await self._page.click('[data-ext-company-act="like"]')
         await asyncio.sleep(self._poll * 6)
-        after = await self._page.evaluate(
-            _ADMIN_CARD_JS,
-            {"activity": activity, "switch_words": [],
-             "like_labels": words("page_unlike"), "submit_words": []},
-        ) or {}
+        after = (
+            await self._page.evaluate(
+                _ADMIN_CARD_JS,
+                {
+                    "activity": activity,
+                    "switch_words": [],
+                    "like_labels": words("page_unlike"),
+                    "submit_words": [],
+                },
+            )
+            or {}
+        )
         # Verified only on positive proof: the one card is still there and
         # carries exactly one recognised un-like control. A vanished card or a
         # changed-but-unknown label is not proof.
         verified = after.get("cards") == 1 and after.get("likes") == 1
-        return {**base, "reacted": True,
-                "status": "verified" if verified else "unverified",
-                "label_before": before,
-                "label_after": after.get("like_label")}
+        return {
+            **base,
+            "reacted": True,
+            "status": "verified" if verified else "unverified",
+            "label_before": before,
+            "label_after": after.get("like_label"),
+        }
 
     async def _admin_card_again(self, activity: str) -> dict[str, Any]:
-        return await self._page.evaluate(
-            _ADMIN_CARD_JS,
-            {"activity": activity,
-             "switch_words": words("switch_identity"),
-             "like_labels": words("page_like"),
-             "submit_words": words("comment_submit")},
-        ) or {}
+        return (
+            await self._page.evaluate(
+                _ADMIN_CARD_JS,
+                {
+                    "activity": activity,
+                    "switch_words": words("switch_identity"),
+                    "like_labels": words("page_like"),
+                    "submit_words": words("comment_submit"),
+                },
+            )
+            or {}
+        )

@@ -17,6 +17,12 @@ Three failures would be worse than not posting, and each is tested:
 
 from __future__ import annotations
 
+from linkedin_mcp_server.linkedin.navigation import PageNavigator
+from linkedin_mcp_server.linkedin.session import PageSession
+from typing import cast
+
+from value_assertions import require_value
+
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -50,7 +56,9 @@ class FakePage:
         editor_gone: bool = True,
         write: str = "written",
     ) -> None:
-        self.author_texts = author_texts if author_texts is not None else [f"{PAGE} Auf Alle posten"]
+        self.author_texts = (
+            author_texts if author_texts is not None else [f"{PAGE} Auf Alle posten"]
+        )
         self.author_after_write = author_after_write
         self.mark_counts = mark_counts or {}
         self.schedule_ok = schedule_ok
@@ -82,13 +90,16 @@ class FakePage:
                 texts = self.author_after_write
             want = str(arg["name"]).lower()
             ok = any(
-                t.lower() == want or t.lower().startswith(want + " auf ")
-                for t in texts
+                t.lower() == want or t.lower().startswith(want + " auf ") for t in texts
             )
             return {"ok": ok, "texts": texts}
         if script is mod._MARK_JS:
             tag = arg["tag"]
-            return {"count": self.mark_counts.get(tag, 1), "disabled": False, "seen": []}
+            return {
+                "count": self.mark_counts.get(tag, 1),
+                "disabled": False,
+                "seen": [],
+            }
         if script is mod._SET_SCHEDULE_JS:
             # The dialog learns its format from the pre-filled sample, so the
             # call carries today's and the target's numbers, not strings. The
@@ -118,7 +129,10 @@ class FakePage:
         from linkedin_mcp_server.linkedin import ext_post_outcome as oc
 
         if script is oc.STATE_JS:
-            return {"editor": not self.editor_gone, "editor_chars": 4 if not self.editor_gone else 0}
+            return {
+                "editor": not self.editor_gone,
+                "editor_chars": 4 if not self.editor_gone else 0,
+            }
         if script is oc.CARDS_JS:
             return []
         if script is oc.DISCARD_PROMPT_JS:
@@ -157,7 +171,10 @@ class FakeNavigator:
 
 
 def composer(page: FakePage) -> ExtCompanyPostComposer:
-    return ExtCompanyPostComposer(FakeSession(page), FakeNavigator(page))  # type: ignore[arg-type]
+    return ExtCompanyPostComposer(
+        cast("PageSession", FakeSession(page)),
+        cast("PageNavigator", FakeNavigator(page)),
+    )  # type: ignore[arg-type]
 
 
 async def run(page: FakePage, **kw: Any) -> dict[str, Any]:
@@ -183,19 +200,23 @@ def soon(minutes: int) -> str:
 
 def test_mode_must_be_one_of_the_three() -> None:
     assert check_mode("publish") is None
-    assert check_mode("veroeffentlichen")["status"] == "invalid_input"
+    assert require_value(check_mode("veroeffentlichen"))["status"] == "invalid_input"
 
 
 def test_page_id_must_be_the_numeric_id() -> None:
     assert check_page_id("12345678") is None
-    assert check_page_id("acme-labs")["field"] == "page_id"
+    assert require_value(check_page_id("acme-labs"))["field"] == "page_id"
 
 
 def test_a_schedule_in_the_past_is_refused_rather_than_sent_as_now() -> None:
-    past = (datetime.now().astimezone() - timedelta(hours=1)).replace(
-        minute=0, second=0, microsecond=0
-    ).strftime("%Y-%m-%d %H:%M")
-    assert check_schedule("schedule", past)["status"] == "schedule_too_soon"
+    past = (
+        (datetime.now().astimezone() - timedelta(hours=1))
+        .replace(minute=0, second=0, microsecond=0)
+        .strftime("%Y-%m-%d %H:%M")
+    )
+    assert (
+        require_value(check_schedule("schedule", past))["status"] == "schedule_too_soon"
+    )
 
 
 def test_a_schedule_two_minutes_out_is_refused() -> None:
@@ -203,9 +224,12 @@ def test_a_schedule_two_minutes_out_is_refused() -> None:
         second=0, microsecond=0
     )
     two -= timedelta(minutes=two.minute % 15)
-    assert check_schedule(
-        "schedule", two.strftime("%Y-%m-%d %H:%M")
-    )["status"] == "schedule_too_soon"
+    assert (
+        require_value(check_schedule("schedule", two.strftime("%Y-%m-%d %H:%M")))[
+            "status"
+        ]
+        == "schedule_too_soon"
+    )
 
 
 def test_a_time_off_the_quarter_hour_is_refused() -> None:
@@ -214,9 +238,12 @@ def test_a_time_off_the_quarter_hour_is_refused() -> None:
     off = (datetime.now().astimezone() + timedelta(hours=2)).replace(
         minute=37, second=0, microsecond=0
     )
-    assert check_schedule(
-        "schedule", off.strftime("%Y-%m-%d %H:%M")
-    )["status"] == "schedule_off_grid"
+    assert (
+        require_value(check_schedule("schedule", off.strftime("%Y-%m-%d %H:%M")))[
+            "status"
+        ]
+        == "schedule_off_grid"
+    )
 
 
 def test_a_schedule_an_hour_out_passes() -> None:
@@ -224,9 +251,12 @@ def test_a_schedule_an_hour_out_passes() -> None:
 
 
 def test_schedule_needs_a_time_and_a_time_needs_schedule() -> None:
-    assert check_schedule("schedule", None)["field"] == "scheduled_at"
-    assert check_schedule("publish", soon(60))["field"] == "scheduled_at"
-    assert check_schedule("schedule", "09.10.2026 14:30")["field"] == "scheduled_at"
+    assert require_value(check_schedule("schedule", None))["field"] == "scheduled_at"
+    assert require_value(check_schedule("publish", soon(60)))["field"] == "scheduled_at"
+    assert (
+        require_value(check_schedule("schedule", "09.10.2026 14:30"))["field"]
+        == "scheduled_at"
+    )
 
 
 @pytest.mark.asyncio
@@ -400,14 +430,16 @@ async def test_a_disabled_publish_button_is_not_clicked() -> None:
             return {"count": 1, "disabled": True}
         return await FakePage.evaluate(page, script, arg)
 
-    page.evaluate = evaluate  # type: ignore[method-assign]
+    setattr(page, "evaluate", evaluate)  # type: ignore[method-assign]
     result = await run(page)
     assert result["status"] == "post_button_disabled"
     assert not page.committed
 
 
 @pytest.mark.asyncio
-async def test_a_published_post_that_closed_the_composer_is_reported_unverified() -> None:
+async def test_a_published_post_that_closed_the_composer_is_reported_unverified() -> (
+    None
+):
     page = FakePage(editor_gone=True)
     result = await run(page)
     assert result["status"] == "posted_unverified"
@@ -465,7 +497,9 @@ async def test_a_dry_run_with_media_never_calls_attach(monkeypatch, tmp_path) ->
 
     monkeypatch.setattr(mod.MediaAttacher, "attach", boom)
     page = FakePage()
-    result = await run(page, confirm=False, media=[{"path": str(img), "alt_text": "Alt"}])
+    result = await run(
+        page, confirm=False, media=[{"path": str(img), "alt_text": "Alt"}]
+    )
     assert calls == []
     assert result["status"] == "dry_run"
     assert result["media_step"] == "not_uploaded_dry_run"

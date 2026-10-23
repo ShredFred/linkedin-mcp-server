@@ -420,6 +420,12 @@ class MediaAttacher:
                 return got
             await asyncio.sleep(self._poll)
 
+    async def _video(self, item: dict[str, Any]) -> dict[str, Any]:
+        return await _video(self, item)
+
+    async def _document(self, item: dict[str, Any]) -> dict[str, Any]:
+        return await _document(self, item)
+
     async def attach(
         self, items: list[dict[str, Any]], *, navigate: Any
     ) -> dict[str, Any]:
@@ -838,7 +844,7 @@ async def _document(self: "MediaAttacher", item: dict[str, Any]) -> dict[str, An
     await self._page.click('[data-ext-media="doc-open"]')
     await asyncio.sleep(self._poll * 2)
     dlg = await self._page.evaluate(_DOC_DIALOG_JS, {"editor": self._editor}) or {}
-    if not dlg.get("dialog") or dlg.get("files") < 1:
+    if not dlg.get("dialog") or (dlg.get("files") or 0) < 1:
         return {"status": "document_control_unavailable"}
     await self._page.set_input_files('[data-ext-media="doc-file"]', str(item["path"]))
 
@@ -884,7 +890,3 @@ async def _document(self: "MediaAttacher", item: dict[str, Any]) -> dict[str, An
         "status": "attached",
         "media": [{"file": item["path"].name, "kind": "document", "title": "verified"}],
     }
-
-
-MediaAttacher._video = _video  # type: ignore[attr-defined]
-MediaAttacher._document = _document  # type: ignore[attr-defined]

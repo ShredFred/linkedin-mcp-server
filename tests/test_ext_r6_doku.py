@@ -93,7 +93,9 @@ def _parse(name: str) -> ast.Module:
     return ast.parse((TOOLS / f"{name}.py").read_text(encoding="utf-8"))
 
 
-def _module_functions(tree: ast.Module) -> dict[str, ast.AST]:
+def _module_functions(
+    tree: ast.Module,
+) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
     return {
         node.name: node
         for node in tree.body
@@ -214,7 +216,7 @@ def _called_names(fn: ast.AST) -> set[str]:
     return names
 
 
-def _helpers(module: str) -> dict[str, ast.AST]:
+def _helpers(module: str) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
     helpers = dict(_module_functions(_parse("ext")))
     if module != "ext":
         helpers.update(_module_functions(_parse(module)))

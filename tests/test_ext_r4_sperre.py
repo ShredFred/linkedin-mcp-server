@@ -44,6 +44,7 @@ def test_live_slow_holder_is_never_taken_over(tmp_path):
         [sys.executable, "-c", code], stdout=subprocess.PIPE, text=True
     )
     try:
+        assert child.stdout is not None
         assert child.stdout.readline().strip() == "held"
         _age(lock, 600)
         with pytest.raises(TimeoutError):

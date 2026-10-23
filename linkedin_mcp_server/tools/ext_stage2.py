@@ -6,6 +6,8 @@ tagged ``ext`` like the rest of the fork.
 
 from __future__ import annotations
 
+from linkedin_mcp_server.tools.ext import ToolRegistrar
+
 import asyncio
 import json
 import os
@@ -18,7 +20,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import anyio
-from fastmcp import Context, FastMCP
+from fastmcp import Context
 from pydantic import Field
 
 from linkedin_mcp_server import ext_outreach as outreach
@@ -78,7 +80,7 @@ def _activity(post_url: str) -> tuple[str | None, dict[str, Any] | None]:
 
 
 def register_ext_stage2_tools(
-    mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
+    mcp: ToolRegistrar, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
 ) -> None:
     mcp = _GuardedMcp(mcp)  # type: ignore[assignment]
 
@@ -131,6 +133,7 @@ def register_ext_stage2_tools(
         activity_id, bad = _activity(post_url)
         if bad:
             return bad
+        assert activity_id is not None
         # Worst case: the analytics list plus the post page, which is read even
         # without include_comments when the reactor list is unavailable.
         pages = int(include_reactors) + int(include_comments or include_reactors)
@@ -224,6 +227,7 @@ def register_ext_stage2_tools(
             activity_id, bad = _activity(url)
             if bad:
                 return {**bad, "post_url": url[:300]}
+            assert activity_id is not None
             if activity_id not in ids:
                 ids.append(activity_id)
         refusal = _pace("page_read", max(len(ids), 1), tool="get_post_analytics")
@@ -307,6 +311,7 @@ def register_ext_stage2_tools(
             username, bad = _recipient(raw)
             if bad:
                 return {"event_id": event_id, **bad}
+            assert username is not None
             if username not in targets:
                 targets.append(username)
         state = outreach.Pacer(outreach.Ledger.default()).state("event_invite")
@@ -387,6 +392,7 @@ def register_ext_stage2_tools(
             username, bad = _recipient(raw)
             if bad:
                 return bad
+            assert username is not None
             chosen.add(username)
         if confirm_withdraw and not chosen:
             # Checked before the page read: without names nothing can be picked.
@@ -669,6 +675,7 @@ def register_ext_stage2_tools(
         username, bad = _recipient(linkedin_username)
         if bad:
             return bad
+        assert username is not None
         # UTF-16 units like every other text limit in the fork; bidi and other
         # Cf format characters hide or reorder what follow_up_list shows.
         if note is not None and _utf16_len(note) > NOTE_MAX:
@@ -884,6 +891,8 @@ def register_ext_stage2_tools(
         segments, mention_info, bad = prepare_text(text, mentions, mention_check)
         if bad:
             return {"posted": False, **mention_info, **bad}
+        assert segments is not None
+        assert mention_info is not None
         has_mentions = any(k == "mention" for k, _ in segments)
         if has_mentions and reply_to is not None:
             return {
@@ -911,6 +920,7 @@ def register_ext_stage2_tools(
         activity_id, bad = _activity(post_url)
         if bad:
             return {**bad, "posted": False}
+        assert activity_id is not None
         target: str | None = None
         if reply_to is not None:
             try:
@@ -1178,6 +1188,7 @@ def register_ext_stage2_tools(
         activity_id, bad = _activity(post_url)
         if bad:
             return {**bad, "done": False}
+        assert activity_id is not None
         ledger = outreach.Ledger.default()
         kind = "repost_undo" if undo else "repost"
 
@@ -1338,7 +1349,9 @@ def register_ext_stage2_tools(
             and datetime.now().astimezone() - last < timedelta(days=6)
         ):
             return {"status": "not_due", "last_run": last.isoformat(timespec="minutes")}
-        plan = [dict(s) for s in (searches or DEFAULT_JOB_SEARCHES)]
+        plan: list[dict[str, Any]] = [
+            dict(s) for s in (searches or DEFAULT_JOB_SEARCHES)
+        ]
         plan += [
             {"keywords": c, "location": None, "company": c} for c in companies or []
         ]

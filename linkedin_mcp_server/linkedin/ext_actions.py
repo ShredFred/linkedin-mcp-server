@@ -660,7 +660,9 @@ class ExtActions(ExtNetworkReader):
             # editor (2026-10-09).
             from linkedin_mcp_server.linkedin.ext_mentions import MentionWriter
 
-            await editor.evaluate("el => el.setAttribute('data-ext-comment-editor', '1')")
+            await editor.evaluate(
+                "el => el.setAttribute('data-ext-comment-editor', '1')"
+            )
             wrote = await MentionWriter(
                 self._page, '[data-ext-comment-editor="1"]'
             ).write(segments)

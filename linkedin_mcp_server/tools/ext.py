@@ -21,10 +21,10 @@ import re
 import uuid
 from datetime import date, datetime, timedelta
 from collections.abc import Callable
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Protocol
 
 import anyio
-from fastmcp import Context, FastMCP
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
@@ -51,7 +51,11 @@ from linkedin_mcp_server.linkedin.ext_network import (
     ExtNetworkReader,
     project_attendees,
 )
-from linkedin_mcp_server.linkedin.ext_mentions import has_markup, plain_text, prepare_text
+from linkedin_mcp_server.linkedin.ext_mentions import (
+    has_markup,
+    plain_text,
+    prepare_text,
+)
 from linkedin_mcp_server.linkedin.ext_post import ExtPostComposer
 from linkedin_mcp_server.linkedin.message_sender import (
     _send_budget_deadline as _reply_budget_deadline,
@@ -134,14 +138,20 @@ def _ledger_guard(fn: Any) -> Any:
         except outreach.LedgerCorrupt as exc:
             return ledger_corrupt_status(exc)
 
-    guarded._ext_ledger_guarded = True  # type: ignore[attr-defined]
+    setattr(guarded, "_ext_ledger_guarded", True)
     return guarded
+
+
+class ToolRegistrar(Protocol):
+    """The decorator interface shared by FastMCP, its guard and test registries."""
+
+    def tool(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 class _GuardedMcp:
     """FastMCP proxy whose tool decorator maps LedgerCorrupt to a status."""
 
-    def __init__(self, mcp: FastMCP):
+    def __init__(self, mcp: ToolRegistrar):
         self._mcp = mcp
 
     def tool(self, *args: Any, **kwargs: Any) -> Any:
@@ -191,7 +201,10 @@ def check_invite_note(note: str | None) -> dict[str, Any] | None:
     if has_markup(note):
         # An invitation note has no @-mention entity either: the markup
         # would arrive as literal brackets.
-        return {"status": "mention_not_supported_in_messages", "message": "LinkedIn messages carry no @-mentions; write the name as plain text."}
+        return {
+            "status": "mention_not_supported_in_messages",
+            "message": "LinkedIn messages carry no @-mentions; write the name as plain text.",
+        }
     if not note.strip():
         return {
             "status": "invalid_note",
@@ -469,7 +482,7 @@ async def _send_and_verify(
                 "detail": f"exception before send: {type(exc).__name__}",
             }
         )
-        exc.ext_send_status = "not_sent"  # type: ignore[attr-defined]
+        setattr(exc, "ext_send_status", "not_sent")
         raise
     except BaseException:
         # Cancellation the budget does not own (client cancel, shutdown). The
@@ -694,7 +707,7 @@ def missing_deployment_values() -> list[str]:
 
 
 def register_ext_tools(
-    mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
+    mcp: ToolRegistrar, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
 ) -> None:
     for item in missing_deployment_values():
         logger.warning("fork setting not configured: %s", item)
@@ -787,9 +800,11 @@ def register_ext_tools(
         shortly), monthly_search_limit (LinkedIn's monthly people-search wall: stop
         searching until next month, retrying burns nothing but time).
         """
-        event_id, bad = _event_id(event_id)
+        parsed_event_id, bad = _event_id(event_id)
         if bad:
             return bad
+        assert parsed_event_id is not None
+        event_id = parsed_event_id
         # Validated before the booking: a call the reader rejects must not
         # spend search budget (start_page >= 1, max_pages 1-100 there).
         if not _int_in(start_page, 1, 100):
@@ -843,9 +858,11 @@ def register_ext_tools(
             pace_status), pace_lock_busy (pacer lock held: nothing booked,
             retry shortly).
         """
-        event_id, bad = _event_id(event_id)
+        parsed_event_id, bad = _event_id(event_id)
         if bad:
             return bad
+        assert parsed_event_id is not None
+        event_id = parsed_event_id
         refusal = _pace("page_read", tool="get_event_attendee_count")
         if refusal:
             return refusal
@@ -878,9 +895,11 @@ def register_ext_tools(
             pace_status), pace_lock_busy (pacer lock held: nothing booked,
             retry shortly).
         """
-        event_id, bad = _event_id(event_id)
+        parsed_event_id, bad = _event_id(event_id)
         if bad:
             return bad
+        assert parsed_event_id is not None
+        event_id = parsed_event_id
         refusal = _pace("page_read", tool="get_event_status")
         if refusal:
             return refusal
@@ -985,7 +1004,9 @@ def register_ext_tools(
         return found
 
     @mcp.tool(
-        timeout=POST_TOOL_TIMEOUT_SECONDS if tool_timeout == DEFAULT_TOOL_TIMEOUT_SECONDS else tool_timeout,
+        timeout=POST_TOOL_TIMEOUT_SECONDS
+        if tool_timeout == DEFAULT_TOOL_TIMEOUT_SECONDS
+        else tool_timeout,
         title="Create Post",
         annotations={"destructiveHint": True, "openWorldHint": True},
         tags={TAG, "post", "actions"},
@@ -1092,11 +1113,14 @@ def register_ext_tools(
         segments, mention_info, bad = prepare_text(text, mentions, mention_check)
         if bad:
             return {"posted": False, **mention_info, **bad}
+        assert segments is not None
+        assert mention_info is not None
         from linkedin_mcp_server.linkedin.ext_media import check_media
 
         media_items, bad = check_media(media)
         if bad:
             return {"posted": False, **bad}
+        assert media_items is not None
         if media_items and image_path:
             return {
                 "status": "invalid_input",
@@ -1113,6 +1137,7 @@ def register_ext_tools(
             page_ref, bad = parse_company_ref(as_company)
             if bad:
                 return {"posted": False, **bad}
+            assert page_ref is not None
             if not (company_name or "").strip():
                 return {
                     "status": "invalid_input",
@@ -1309,6 +1334,7 @@ def register_ext_tools(
         username, bad = _recipient(linkedin_username)
         if bad:
             return bad
+        assert username is not None
         if has_markup(message):
             # Documented limit (2026-10-09): a 1:1 message has no @-mention
             # entity; the markup would arrive as literal brackets.
@@ -1413,8 +1439,12 @@ def register_ext_tools(
         canary_key, bad = _recipient(canary)
         if bad:
             return {**bad, "field": "canary"}
+        assert canary_key is not None
         if has_markup(message):
-            return {"status": "mention_not_supported_in_messages", "message": "LinkedIn messages carry no @-mentions; write the name as plain text."}
+            return {
+                "status": "mention_not_supported_in_messages",
+                "message": "LinkedIn messages carry no @-mentions; write the name as plain text.",
+            }
         refusal = refuse_an_invalid_message(canary_key, message)
         if refusal is not None:
             return refusal
@@ -1640,6 +1670,7 @@ def register_ext_tools(
         username, bad = _recipient(linkedin_username)
         if bad:
             return bad
+        assert username is not None
         refusal = check_invite_note(note)
         if refusal:
             return {"recipient": username, **refusal}
@@ -1777,6 +1808,7 @@ def register_ext_tools(
             connect_probe_username, bad = _recipient(connect_probe_username)
             if bad:
                 return {**bad, "field": "connect_probe_username"}
+            assert connect_probe_username is not None
         if not outreach.DEFAULT_CANARY:
             return {
                 "status": "canary_not_configured",

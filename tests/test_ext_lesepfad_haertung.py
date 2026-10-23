@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from linkedin_mcp_server.linkedin.navigation import PageNavigator
+from linkedin_mcp_server.linkedin.session import PageSession
+from typing import cast
+
 import asyncio
 import json
 from datetime import datetime
@@ -40,7 +44,9 @@ class _Nav:
 
 
 def _reader(page):
-    return net.ExtNetworkReader(_Session(page), _Nav())
+    return net.ExtNetworkReader(
+        cast("PageSession", _Session(page)), cast("PageNavigator", _Nav())
+    )
 
 
 # -- network reader ----------------------------------------------------------

@@ -171,9 +171,9 @@ def _msg_ex(phase):
     async def get_inbox(n):
         return {}
 
-    ex.send_message = send_message
-    ex.get_conversation = get_conversation
-    ex.get_inbox = get_inbox
+    setattr(ex, "send_message", send_message)
+    setattr(ex, "get_conversation", get_conversation)
+    setattr(ex, "get_inbox", get_inbox)
     return ex
 
 
@@ -242,9 +242,9 @@ def test_campaign_batch_cancel_keeps_earlier_rows(monkeypatch):
     def message_block():
         return TEXT
 
-    ex.send_message = send_message
-    ex.get_conversation = get_conversation
-    ex.get_inbox = lambda n: {}
+    setattr(ex, "send_message", send_message)
+    setattr(ex, "get_conversation", get_conversation)
+    setattr(ex, "get_inbox", lambda n: {})
     _with_extractor(monkeypatch, ex)
     led = outreach.Ledger.default()
     led.append(
@@ -282,13 +282,13 @@ def test_campaign_batch_cancel_keeps_earlier_rows(monkeypatch):
 )
 def test_connect_with_person(monkeypatch, phase, want):
     ex = _Ex()
-    ex.invite_send_clicked = False
+    setattr(ex, "invite_send_clicked", False)
 
     async def connect_with_person(username, note=None):
-        ex.invite_send_clicked = phase != "a"
+        setattr(ex, "invite_send_clicked", phase != "a")
         raise asyncio.CancelledError()
 
-    ex.connect_with_person = connect_with_person
+    setattr(ex, "connect_with_person", connect_with_person)
     _with_extractor(monkeypatch, ex)
     _cancelled("connect_with_person", linkedin_username="anna", confirm_send=True)
     assert _final("invite") == want
@@ -538,13 +538,13 @@ def test_real_tool_timeout_books_unknown_after_click(monkeypatch):
     import linkedin_mcp_server.tools.ext as m
 
     ex = _Ex()
-    ex.invite_send_clicked = False
+    setattr(ex, "invite_send_clicked", False)
 
     async def connect_with_person(username, note=None):
-        ex.invite_send_clicked = True
+        setattr(ex, "invite_send_clicked", True)
         await asyncio.sleep(30)
 
-    ex.connect_with_person = connect_with_person
+    setattr(ex, "connect_with_person", connect_with_person)
     _with_extractor(monkeypatch, ex)
     mcp = FastMCP("t")
     m.register_ext_tools(mcp, tool_timeout=0.3)

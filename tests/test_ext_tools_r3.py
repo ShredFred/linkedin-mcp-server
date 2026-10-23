@@ -4,6 +4,8 @@ No browser."""
 
 from __future__ import annotations
 
+from value_assertions import require_value
+
 import asyncio
 import json
 
@@ -44,6 +46,7 @@ def _call(name, args, extractor=None, monkeypatch=None):
         async def run(ctx, tool, body):
             return await body(extractor)
 
+        assert monkeypatch is not None
         monkeypatch.setattr(m, "_run", run)
     mcp = FastMCP("t")
     m.register_ext_tools(mcp)
@@ -142,7 +145,10 @@ def test_hidden_chars_refused_by_both_routes(ch):
     from linkedin_mcp_server.tools.ext import check_message_content
 
     assert checks.hidden_format_char(ch)
-    assert check_message_content(f"Hallo{ch}x")["status"] == "invalid_message"
+    assert (
+        require_value(check_message_content(f"Hallo{ch}x"))["status"]
+        == "invalid_message"
+    )
     assert checks.check_outgoing(f"Hallo{ch}x", max_utf16=100)
 
 
@@ -159,8 +165,10 @@ def test_hidden_chars_refused_by_both_routes(ch):
 def test_outgoing_and_message_content_agree_and_refuse(text):
     from linkedin_mcp_server.tools.ext import check_message_content
 
-    assert check_message_content(text)["status"] == "content_check_failed"
-    assert checks.check_outgoing(text, max_utf16=8000)["status"] == (
+    assert (
+        require_value(check_message_content(text))["status"] == "content_check_failed"
+    )
+    assert require_value(checks.check_outgoing(text, max_utf16=8000))["status"] == (
         "content_check_failed"
     )
 

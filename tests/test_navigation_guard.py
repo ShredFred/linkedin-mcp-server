@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from linkedin_mcp_server.linkedin.session import PageSession
+from typing import cast
+
 import json
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -144,7 +147,7 @@ def _navigator(final_url: str, status: int = 200):
     page.url = final_url
     page.goto = AsyncMock(return_value=SimpleNamespace(status=status, headers={}))
     session = SimpleNamespace(page=page)
-    return PageNavigator(session), page
+    return PageNavigator(cast("PageSession", session)), page
 
 
 async def _run(navigator, url=REQ):
@@ -330,7 +333,7 @@ async def test_body_rate_limit_via_session_check_is_recorded(coupled):
         AsyncMock(side_effect=RateLimitError("Rate limit message detected.", 30)),
     ):
         with pytest.raises(RateLimitError):
-            await session_mod.PageSession.check_rate_limit(fake)
+            await session_mod.PageSession.check_rate_limit(cast("PageSession", fake))
     assert coupled.rows()[0]["cooldown_seconds"] == outreach.RATE_LIMIT_MIN_COOLDOWN
 
 

@@ -173,8 +173,8 @@ def test_offsite_navigation_goes_through_navigator():
 
     actions = object.__new__(ea.ExtActions)
     nav = Nav()
-    actions._navigator = nav
-    actions._session = type("S", (), {"page": Page()})()
+    setattr(actions, "_navigator", nav)
+    setattr(actions, "_session", type("S", (), {"page": Page()})())
     with pytest.raises(OffSiteNavigationError):
         asyncio.run(actions.reply(A, CID, "Text", True))
     assert nav.urls == [ea.reply_permalink(A, CID)]
@@ -301,13 +301,17 @@ def _run(dom, html, comment_id=CID, confirm=True, mode="ok"):
         page.evaluate("(m) => { document.body.dataset.mode = m; }", mode)
     )
     actions = object.__new__(ea.ExtActions)
-    actions._session = type("S", (), {"page": page, "delay": staticmethod(_no_delay)})()
+    setattr(
+        actions,
+        "_session",
+        type("S", (), {"page": page, "delay": staticmethod(_no_delay)})(),
+    )
     urls: list[str] = []
 
     async def goto(url):
         urls.append(url)
 
-    actions._goto = goto
+    setattr(actions, "_goto", goto)
     out = loop.run_until_complete(
         actions.reply(A, comment_id, "Danke, sehr hilfreich", confirm)
     )

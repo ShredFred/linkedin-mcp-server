@@ -173,3 +173,6 @@ assets/*
 # exports through `cache-to: type=gha,mode=max`.
 .debug
 CLAUDE.local.md
+
+# Offline tests create raw filename/encoding probes; these are never build inputs.
+.pt/

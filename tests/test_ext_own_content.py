@@ -7,6 +7,8 @@ not a hope.
 
 from __future__ import annotations
 
+from value_assertions import require_value
+
 import asyncio
 
 import pytest
@@ -101,13 +103,13 @@ class _Page:
 
         # The shared write routine (plain text): clear, insert, read back.
         if js is em._PREP_JS:
-            if arg.get("clear"):
+            if require_value(arg).get("clear"):
                 self.typed = ""
             return "ok"
         if js is em._ENGINE_JS:
             return "tiptap"
         if js is em._INSERT_JS:
-            self.typed += arg["text"] if self.type_ok else "verstümmelt"
+            self.typed += require_value(arg)["text"] if self.type_ok else "verstümmelt"
             return "ok"
         if js is em._STATE_JS:
             return {"text": self.typed, "pending": False}
@@ -123,7 +125,9 @@ class _Page:
         if js is oc._MENU_PICK_JS:
             return self.menu
         if js is oc._BUTTON_PICK_JS:
-            return self.buttons.get(arg["tag"], {"count": 1, "disabled": False})
+            return self.buttons.get(
+                require_value(arg)["tag"], {"count": 1, "disabled": False}
+            )
         if js is oc._EDITOR_PICK_JS:
             return self.editor
         if js is oc._PAGE_STATE_JS:
@@ -133,7 +137,7 @@ class _Page:
 
 def _content(page):
     obj = object.__new__(oc.ExtOwnContent)
-    obj._session = type("S", (), {"page": page})()
+    setattr(obj, "_session", type("S", (), {"page": page})())
 
     async def goto(url):
         page.url = (
@@ -143,8 +147,8 @@ def _content(page):
     async def no_wait(low, high):
         return None
 
-    obj._goto = goto
-    obj._wait = no_wait
+    setattr(obj, "_goto", goto)
+    setattr(obj, "_wait", no_wait)
     return obj
 
 
@@ -689,13 +693,18 @@ class TestReviewRegressions:
     def test_invisible_controls_refused(self, code):
         from linkedin_mcp_server.tools.ext_own_content import check_text
 
-        assert check_text("a" + chr(code) + "b", 100)["status"] == "invalid_text"
+        assert (
+            require_value(check_text("a" + chr(code) + "b", 100))["status"]
+            == "invalid_text"
+        )
 
     def test_length_counts_utf16_units(self):
         from linkedin_mcp_server.tools.ext_own_content import check_text
 
         assert check_text(chr(0x1F600) * 3, 6) is None
-        assert check_text(chr(0x1F600) * 4, 6)["status"] == "invalid_text"
+        assert (
+            require_value(check_text(chr(0x1F600) * 4, 6))["status"] == "invalid_text"
+        )
 
 
 def test_post_card_fallback_only_for_a_single_focus_card():
@@ -708,12 +717,12 @@ def test_post_card_fallback_only_for_a_single_focus_card():
 
 # -- Haertung 2026-10-01 --------------------------------------------------------
 def test_lone_surrogate_is_refused_not_raised():
-    assert check_text("Hallo \ud800", 100)["status"] == "invalid_text"
+    assert require_value(check_text("Hallo \ud800", 100))["status"] == "invalid_text"
 
 
 @pytest.mark.parametrize("bad", ["a\u202eb", "a\tb", "a\rb", "a\x85b", "a\u2066b"])
 def test_control_and_bidi_refused(bad):
-    assert check_text(bad, 100)["status"] == "invalid_text"
+    assert require_value(check_text(bad, 100))["status"] == "invalid_text"
 
 
 def test_two_different_comment_urns_refused():
@@ -724,7 +733,7 @@ def test_two_different_comment_urns_refused():
     with pytest.raises(ValueError):
         oc.parse_comment_ref(ref)
     _, _, bad = resolve_target(POST, ref)
-    assert bad["status"] == "invalid_comment"
+    assert require_value(bad)["status"] == "invalid_comment"
 
 
 def test_same_comment_urn_twice_is_fine():

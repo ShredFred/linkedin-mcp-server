@@ -621,3 +621,30 @@ def test_a_stream_that_cannot_be_reconfigured_is_left_alone(
     monkeypatch.setattr(supervisor.sys, "stderr", _Stream())
 
     supervisor._write_frames_without_translation()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows uses module startup inside a Job")
+def test_absolute_supervisor_bootstraps_without_site_or_working_directory(tmp_path):
+    nonce = "0123456789abcdef" * 4
+    target = tmp_path / "must-not-start"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-u",
+            str(Path(supervisor.__file__).resolve()),
+            "--",
+            sys.executable,
+            "-c",
+            f"open({str(target)!r}, 'w').close()",
+        ],
+        input=(nonce + "\n").encode(),
+        cwd=tmp_path,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    assert proc.returncode == 1
+    assert proc.stderr == f"armed {nonce}\n".encode()
+    assert not target.exists()
