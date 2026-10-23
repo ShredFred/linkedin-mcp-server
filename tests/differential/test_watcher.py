@@ -339,7 +339,11 @@ import time
 
 time.sleep(3)
 profile = os.environ["STAND_IN_PROFILE"]
-os.execv(sys.executable, [sys.executable, sys.argv[1], "--user-data-dir=" + profile])
+command = [sys.executable, sys.argv[1], "--user-data-dir=" + profile]
+if os.name == "nt":
+    import subprocess
+    raise SystemExit(subprocess.Popen(command).wait())
+os.execv(sys.executable, command)
 """
 
 # Browser-shaped until the test has seen the watcher record it, so a slow

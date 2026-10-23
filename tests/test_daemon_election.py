@@ -6291,6 +6291,13 @@ class TestBudgets:
         monkeypatch.setattr(spawn_module, "_hand_over_config", hand_over)
         monkeypatch.setattr(spawn_module, "_await_prepared", await_prepared)
 
+        cleanups = []
+
+        def stop_group(pid, *, child, timeout):
+            cleanups.append((pid, child, timeout))
+            return True
+
+        monkeypatch.setattr(spawn_module, "terminate_process_group", stop_group)
         verdict = spawn_module._spawn(
             profile.parent,
             config,
@@ -6301,6 +6308,10 @@ class TestBudgets:
         )
 
         assert verdict is Started.RETRY
+        if platform == "posix":
+            assert len(cleanups) == 1
+            assert cleanups[0][0] == child.pid and cleanups[0][1] is child
+            assert cleanups[0][2] > 0
         assert spawn_kwargs["creationflags"] == (0x7 if platform == "nt" else 0)
         assert timeouts == pytest.approx(
             {

@@ -579,6 +579,9 @@ class TestRotateSourceProfile:
         assert quarantine_dirs(isolate_profile_dir) == []
 
     @requires_symlinks
+    @pytest.mark.skipif(
+        os.name == "nt", reason="POSIX Chromium SingletonLock symlink protocol"
+    )
     def test_refuses_while_another_process_holds_the_profile(self, isolate_profile_dir):
         """Rotating underneath a live Chromium — a second CLI run, or a
         container sharing the mounted auth root — corrupts both sessions."""
@@ -949,6 +952,9 @@ class TestRestoreSourceProfile:
 
 
 @requires_symlinks
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX Chromium SingletonLock symlink protocol"
+)
 def test_rotation_refuses_while_a_container_holds_a_derived_profile(
     isolate_profile_dir,
 ):
@@ -982,6 +988,9 @@ def test_restore_ignores_a_half_written_marker(isolate_profile_dir):
 
 
 @requires_symlinks
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX Chromium SingletonLock symlink protocol"
+)
 def test_lock_from_another_host_counts_as_held(isolate_profile_dir):
     """A container writing into the mounted auth root records its own hostname
     and a pid from its namespace. Probing that pid against this host is
@@ -998,6 +1007,9 @@ def test_lock_from_another_host_counts_as_held(isolate_profile_dir):
 
 
 @requires_symlinks
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX Chromium SingletonLock symlink protocol"
+)
 def test_a_foreign_host_lock_names_what_would_free_the_profile(isolate_profile_dir):
     """Measured on macOS: the host name changed after a crash, so the lock this
     machine left behind read as another host's and refused every login for good.
@@ -1025,6 +1037,9 @@ def test_a_foreign_host_lock_names_what_would_free_the_profile(isolate_profile_d
 
 
 @requires_symlinks
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX Chromium SingletonLock symlink protocol"
+)
 def test_a_live_lock_on_this_host_does_not_suggest_deleting_it(isolate_profile_dir):
     profile_dir = isolate_profile_dir
     _seed_session(profile_dir)

@@ -51,6 +51,16 @@ def test_viewer_url_is_an_exact_token_private_fragment(
     assert unquote(match.group(1)) == f"websockify?token={token}"
 
 
+def _mount_field(path: Path) -> str:
+    return (
+        str(path)
+        .replace("\\", r"\134")
+        .replace(" ", r"\040")
+        .replace("\t", r"\011")
+        .replace("\n", r"\012")
+    )
+
+
 def test_mountinfo_decodes_escaped_mount_paths() -> None:
     text = (
         "36 25 0:31 / / rw,relatime - overlay overlay rw\n"
@@ -66,7 +76,7 @@ def test_mountinfo_decodes_escaped_mount_paths() -> None:
 def test_mount_preflight_accepts_a_distinct_ancestor_mount(tmp_path: Path) -> None:
     profile = tmp_path / "mounted root" / "nested" / "profile"
     mountinfo = tmp_path / "mountinfo"
-    escaped = str(profile.parents[1]).replace(" ", r"\040")
+    escaped = _mount_field(profile.parents[1])
     mountinfo.write_text(
         f"36 25 0:31 / / rw - overlay overlay rw\n"
         f"51 36 8:1 / {escaped} rw - ext4 /dev/sda rw\n",
@@ -81,7 +91,7 @@ def test_mount_preflight_accepts_the_authentication_root_mount(tmp_path: Path) -
     mountinfo = tmp_path / "mountinfo"
     mountinfo.write_text(
         f"36 25 0:31 / / rw - overlay overlay rw\n"
-        f"51 36 8:1 / {profile.parent} rw - ext4 /dev/sda rw\n",
+        f"51 36 8:1 / {_mount_field(profile.parent)} rw - ext4 /dev/sda rw\n",
         encoding="utf-8",
     )
 
@@ -97,8 +107,8 @@ def test_mount_preflight_rejects_mounts_at_or_inside_the_profile(
     mountinfo = tmp_path / "mountinfo"
     mountinfo.write_text(
         f"36 25 0:31 / / rw - overlay overlay rw\n"
-        f"50 36 8:1 / {profile.parent} rw - ext4 /dev/sda rw\n"
-        f"51 50 8:2 / {mount_point} rw - ext4 /dev/sdb rw\n",
+        f"50 36 8:1 / {_mount_field(profile.parent)} rw - ext4 /dev/sda rw\n"
+        f"51 50 8:2 / {_mount_field(mount_point)} rw - ext4 /dev/sdb rw\n",
         encoding="utf-8",
     )
 
@@ -114,8 +124,8 @@ def test_mount_preflight_rejects_a_memory_backed_authentication_root(
     mountinfo = tmp_path / "mountinfo"
     mountinfo.write_text(
         f"36 25 0:31 / / rw - overlay overlay rw\n"
-        f"50 36 8:1 / {profile.parents[1]} rw - ext4 /dev/sda rw\n"
-        f"51 50 0:51 / {profile.parent} rw - {filesystem} {filesystem} rw\n",
+        f"50 36 8:1 / {_mount_field(profile.parents[1])} rw - ext4 /dev/sda rw\n"
+        f"51 50 0:51 / {_mount_field(profile.parent)} rw - {filesystem} {filesystem} rw\n",
         encoding="utf-8",
     )
 
@@ -128,8 +138,8 @@ def test_mount_preflight_uses_the_most_specific_covering_mount(tmp_path: Path) -
     mountinfo = tmp_path / "mountinfo"
     mountinfo.write_text(
         f"36 25 0:31 / / rw - overlay overlay rw\n"
-        f"50 36 0:51 / {profile.parents[2]} rw - tmpfs tmpfs rw\n"
-        f"51 50 8:1 / {profile.parents[1]} rw - ext4 /dev/sda rw\n",
+        f"50 36 0:51 / {_mount_field(profile.parents[2])} rw - tmpfs tmpfs rw\n"
+        f"51 50 8:1 / {_mount_field(profile.parents[1])} rw - ext4 /dev/sda rw\n",
         encoding="utf-8",
     )
 
@@ -146,7 +156,7 @@ def test_mount_preflight_rejects_an_unwritable_authentication_root(
     mountinfo = tmp_path / "mountinfo"
     mountinfo.write_text(
         f"36 25 0:31 / / rw - overlay overlay rw\n"
-        f"51 36 8:1 / {profile.parent} rw - ext4 /dev/sda rw\n",
+        f"51 36 8:1 / {_mount_field(profile.parent)} rw - ext4 /dev/sda rw\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(viewer_module.os, "access", lambda *_args: False)
