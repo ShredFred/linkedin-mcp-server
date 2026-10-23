@@ -798,7 +798,10 @@ def evidence_refusal(identity: dict[str, Any], *, ci: bool) -> str | None:
     )
     installed_from: str | None = None
     if isinstance(url, str) and url.startswith("file:"):
-        installed_from = url2pathname(urlparse(url).path)
+        if sys.version_info >= (3, 13):
+            installed_from = str(Path.from_uri(url))
+        else:
+            installed_from = url2pathname(urlparse(url).path)  # ty: ignore[deprecated]  # Python 3.12 compatibility.
     checkout = identity.get("checkout")
     if not editable or installed_from is None or checkout is None:
         return (

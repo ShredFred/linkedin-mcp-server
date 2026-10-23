@@ -11,6 +11,8 @@ red (XPASS) the moment a fix lands, so the marker has to be removed then.
 
 from __future__ import annotations
 
+from typing import cast
+
 import json
 import random
 import string
@@ -112,11 +114,16 @@ def test_check_outgoing_never_raises_and_returns_known_status():
         if rng.random() < 0.2:
             text = _insert(rng, text, rng.choice(_FORBIDDEN))
         result = check_outgoing(text, max_utf16=MESSAGE_MAX_UTF16)
-        assert result is None or result["status"] in {
-            "invalid_message",
-            "message_too_long",
-            "content_check_failed",
-        } or (result["status"] == MENTION and _mention_markup(text)), (case, text, result)
+        assert (
+            result is None
+            or result["status"]
+            in {
+                "invalid_message",
+                "message_too_long",
+                "content_check_failed",
+            }
+            or (result["status"] == MENTION and _mention_markup(text))
+        ), (case, text, result)
 
 
 def test_forbidden_character_is_refused_wherever_it_stands():
@@ -209,7 +216,7 @@ def test_utf16_len_matches_the_encoding_and_is_additive():
         assert utf16_len(a) == len(a.encode("utf-16-le")) // 2
         assert utf16_len(a) >= len(a)
         assert utf16_len(a + b) == utf16_len(a) + utf16_len(b)
-    assert utf16_len(None) == 0  # type: ignore[arg-type]
+    assert utf16_len(cast("str", None)) == 0  # type: ignore[arg-type]
 
 
 def test_length_limit_is_exact_in_utf16_units():

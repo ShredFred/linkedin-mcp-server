@@ -25,17 +25,25 @@ pytestmark = [
 ]
 
 FIXTURE = json.loads(
-    (Path(__file__).parent / "fixtures" / "company-actions-de-2026-10-09.json").read_text(
-        encoding="utf-8"
-    )
+    (
+        Path(__file__).parent / "fixtures" / "company-actions-de-2026-10-09.json"
+    ).read_text(encoding="utf-8")
 )
 ACT = "7000000000000000001"
 PAGE = "Acme Labs"
 
 
-def _admin_html(*, checked: str = "page", placeholder: str = f"Kommentieren als {PAGE} …",
-                liked: bool = False) -> str:
-    like_label = "Mit „Gefällt mir“ reagieren" if not liked else "Reaktion „Gefällt mir“ entfernen"
+def _admin_html(
+    *,
+    checked: str = "page",
+    placeholder: str = f"Kommentieren als {PAGE} …",
+    liked: bool = False,
+) -> str:
+    like_label = (
+        "Mit „Gefällt mir“ reagieren"
+        if not liked
+        else "Reaktion „Gefällt mir“ entfernen"
+    )
     return f"""<html><body>
 <div role="article" data-urn="urn:li:activity:{ACT}">
   <p>Beitragstext</p>
@@ -134,7 +142,10 @@ def test_role_is_read_from_the_own_row() -> None:
 
 
 def test_reaction_state() -> None:
-    assert ca.reaction_state("Status des Reaktionsbuttons: Keine Reaktion") == "keine reaktion"
+    assert (
+        ca.reaction_state("Status des Reaktionsbuttons: Keine Reaktion")
+        == "keine reaktion"
+    )
     assert ca.reaction_state("Status des Reaktionsbuttons: Applaus") == "applaus"
     assert ca.reaction_state("Mit „Gefällt mir“ reagieren") is None
 
@@ -149,7 +160,9 @@ async def test_comment_as_page_dry_run(page) -> None:
 
 async def test_comment_as_page_confirm_reads_back(page) -> None:
     acts = _actions(page, _admin_html())
-    got = await acts.comment_as_page("1000001", PAGE, ACT, _segs("Danke fürs Teilen!"), confirm=True)
+    got = await acts.comment_as_page(
+        "1000001", PAGE, ACT, _segs("Danke fürs Teilen!"), confirm=True
+    )
     assert got["status"] == "posted" and got["verified"] is True, got
     assert acts.comment_submitted is True
 
@@ -165,9 +178,9 @@ async def test_identity_on_self_stops_before_writing(page) -> None:
 
 
 async def test_placeholder_without_page_stops(page) -> None:
-    got = await _actions(page, _admin_html(placeholder="Kommentar hinzufügen …")).comment_as_page(
-        "1000001", PAGE, ACT, _segs("Danke!"), confirm=False
-    )
+    got = await _actions(
+        page, _admin_html(placeholder="Kommentar hinzufügen …")
+    ).comment_as_page("1000001", PAGE, ACT, _segs("Danke!"), confirm=False)
     assert got["status"] == "identity_not_confirmed", got
 
 
@@ -190,7 +203,9 @@ async def test_react_as_page_refuses_when_identity_is_self(page) -> None:
         ACT, "like", confirm=True, page_id="1000001", page_name=PAGE
     )
     assert got["status"] == "identity_not_page", got
-    assert await page.get_attribute("#like", "aria-label") == "Mit „Gefällt mir“ reagieren"
+    assert (
+        await page.get_attribute("#like", "aria-label") == "Mit „Gefällt mir“ reagieren"
+    )
 
 
 async def test_react_as_member_dry_and_confirm(page) -> None:
@@ -202,7 +217,9 @@ async def test_react_as_member_dry_and_confirm(page) -> None:
 
 
 async def test_react_as_member_already_reacted(page) -> None:
-    got = await _actions(page, _member_html("Gefällt mir")).react(ACT, "like", confirm=True)
+    got = await _actions(page, _member_html("Gefällt mir")).react(
+        ACT, "like", confirm=True
+    )
     assert got["status"] == "already_reacted", got
 
 

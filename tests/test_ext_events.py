@@ -183,7 +183,12 @@ def test_event_summary_drops_person_names_and_extra_fields():
 
 def test_parse_event_card_skips_result_counter():
     card = parse_event_card(
-        ["1 Ergebnis", "Fachkongress 2026", "Di., 13. Okt. bis Do., 15. Okt.", "Köln • Von Beispielverband"]
+        [
+            "1 Ergebnis",
+            "Fachkongress 2026",
+            "Di., 13. Okt. bis Do., 15. Okt.",
+            "Köln • Von Beispielverband",
+        ]
     )
     assert card["title"] == "Fachkongress 2026"
     assert card["date_text"].startswith("Di.")
@@ -202,7 +207,9 @@ def test_place_facts_from_cards():
     assert card["country"] == "DE" and card["is_online"] is False
     s = event_summary({**card, "event_id": "1"})
     assert s["place"].endswith("Musterstadt, DE") and s["country"] == "DE"
-    online = parse_event_card(["Webinar Härten", "Mi., 4. Nov.", "Online • Von Beispielverband"])
+    online = parse_event_card(
+        ["Webinar Härten", "Mi., 4. Nov.", "Online • Von Beispielverband"]
+    )
     assert online["place"] == "Online" and online["is_online"] is True
     assert online["country"] is None
     alone = parse_event_card(["Webinar", "Mi., 4. Nov.", "Online-Event"])
@@ -211,7 +218,9 @@ def test_place_facts_from_cards():
     assert place_facts("Köln") == {"is_online": False, "country": None}
     assert place_facts("Messe Wien, Österreich")["country"] == "AT"
     assert place_facts(None) == {"is_online": None, "country": None}
-    none = parse_event_card(["Fachkongress 2026", "Matthias und 3 weitere Personen nehmen teil"])
+    none = parse_event_card(
+        ["Fachkongress 2026", "Matthias und 3 weitere Personen nehmen teil"]
+    )
     assert none["place"] is None and none["is_online"] is None
 
 

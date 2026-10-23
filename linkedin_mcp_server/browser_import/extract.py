@@ -204,8 +204,8 @@ def _windows_master_key(local_state_path: Path) -> bytes:  # pragma: no cover
     buffer_in = ctypes.create_string_buffer(blob_in, len(blob_in))
     blob_in_struct = DATA_BLOB(len(blob_in), buffer_in)
     blob_out = DATA_BLOB()
-    crypt32 = ctypes.windll.crypt32  # ty: ignore[unresolved-attribute]
-    kernel32 = ctypes.windll.kernel32  # ty: ignore[unresolved-attribute]
+    crypt32 = ctypes.windll.crypt32
+    kernel32 = ctypes.windll.kernel32
     if not crypt32.CryptUnprotectData(
         ctypes.byref(blob_in_struct),
         None,

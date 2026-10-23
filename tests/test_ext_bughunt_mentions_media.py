@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from typing import cast, Any
+
+from value_assertions import require_value
+
 import contextlib
 import os
-from typing import Any
 
 import pytest
 
@@ -15,11 +18,13 @@ from test_ext_post import FakePage, composer
 
 
 def test_mention_matches_whole_words_only() -> None:
-    out, bad = apply_mention_list("Annabelle und Anna", [{"name": "Anna", "target": "anna-x"}])
+    out, bad = apply_mention_list(
+        "Annabelle und Anna", [{"name": "Anna", "target": "anna-x"}]
+    )
     assert bad is None
     assert out == "Annabelle und [[Anna|anna-x]]"
     _, bad = apply_mention_list("Annabelle", [{"name": "Anna", "target": "anna-x"}])
-    assert bad["status"] == "mention_name_not_in_text"
+    assert require_value(bad)["status"] == "mention_name_not_in_text"
 
 
 def test_unicode_slug_short_form_and_url_agree() -> None:
@@ -36,20 +41,43 @@ def test_duplicate_file_by_other_spelling(tmp_path, monkeypatch) -> None:
     img.write_bytes(b"x")
     monkeypatch.chdir(tmp_path)
     variants = [{"path": str(img)}, {"path": "a.png"}]
-    assert check_media(variants)[1]["status"] == "media_invalid"
+    assert require_value(check_media(variants)[1])["status"] == "media_invalid"
     if os.path.normcase("A") == os.path.normcase("a"):
-        assert check_media([{"path": str(img)}, {"path": str(img).upper()}])[1]["status"] == "media_invalid"
+        assert (
+            require_value(
+                check_media([{"path": str(img)}, {"path": str(img).upper()}])[1]
+            )["status"]
+            == "media_invalid"
+        )
 
 
 def test_alt_text_control_chars_and_input_shape(tmp_path) -> None:
     img = tmp_path / "a.png"
     img.write_bytes(b"x")
-    assert check_media([{"path": str(img), "alt_text": "a\rb"}])[1]["status"] == "alt_text_invalid"
-    assert check_media([{"path": str(img), "alt_text": "a\tb"}])[1]["status"] == "alt_text_invalid"
-    assert check_media({"path": str(img)})[1]["status"] == "media_invalid"  # type: ignore[arg-type]
+    assert (
+        require_value(check_media([{"path": str(img), "alt_text": "a\rb"}])[1])[
+            "status"
+        ]
+        == "alt_text_invalid"
+    )
+    assert (
+        require_value(check_media([{"path": str(img), "alt_text": "a\tb"}])[1])[
+            "status"
+        ]
+        == "alt_text_invalid"
+    )
+    assert (
+        require_value(check_media(cast("list[dict[str, Any]]", {"path": str(img)}))[1])[
+            "status"
+        ]
+        == "media_invalid"
+    )  # type: ignore[arg-type]
     txt = tmp_path / "a.txt"
     txt.write_bytes(b"x")
-    assert check_media([{"path": str(txt)}])[1]["status"] == "media_unsupported_type"
+    assert (
+        require_value(check_media([{"path": str(txt)}])[1])["status"]
+        == "media_unsupported_type"
+    )
 
 
 @pytest.mark.asyncio
@@ -106,15 +134,22 @@ class _VideoPage:
 async def test_video_next_disabled_waits_then_reports_incomplete(tmp_path) -> None:
     vid = tmp_path / "v.mp4"
     vid.write_bytes(b"x")
-    att = MediaAttacher(_VideoPage(), editor_selector="#ed", media_words=["m"],
-                        allow_tags=False, kinds=("video",), poll=0.01, timeout=0.1)
+    att = MediaAttacher(
+        _VideoPage(),
+        editor_selector="#ed",
+        media_words=["m"],
+        allow_tags=False,
+        kinds=("video",),
+        poll=0.01,
+        timeout=0.1,
+    )
     calls: list[int] = []
 
     async def disabled(*_: Any, **__: Any) -> dict[str, Any]:
         calls.append(1)
         return {"count": 1, "disabled": True}
 
-    att._click = disabled  # type: ignore[method-assign]
+    setattr(att, "_click", disabled)  # type: ignore[method-assign]
     got = await ext_media._video(att, {"path": vid})
     assert got == {"status": "media_upload_incomplete", "kind": "video"}
     assert len(calls) > 1

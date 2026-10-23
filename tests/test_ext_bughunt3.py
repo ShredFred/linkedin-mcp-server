@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from value_assertions import require_value
+
 import asyncio
 from typing import Any
 
@@ -30,7 +32,7 @@ FORMAT_CHARS = ["؜", "⁠", "⁢", "᠎", "\U000e0001", "­"]
 
 @pytest.mark.parametrize("char", FORMAT_CHARS)
 def test_own_content_text_refuses_format_chars(char):
-    assert check_text(f"a{char}b", 100)["status"] == "invalid_text"
+    assert require_value(check_text(f"a{char}b", 100))["status"] == "invalid_text"
 
 
 class _NeverCalled:
@@ -104,10 +106,12 @@ def test_reply_without_before_root_is_not_verified():
     text = "Danke, sehr hilfreich"
     old = {"roots": 1, "replies": [{"key": "old", "text": text}]}
     actions = object.__new__(ea.ExtActions)
-    actions._session = type(
-        "S", (), {"page": _Page([None, old]), "delay": staticmethod(_nothing)}
-    )()
-    actions._insert_text = _nothing
+    setattr(
+        actions,
+        "_session",
+        type("S", (), {"page": _Page([None, old]), "delay": staticmethod(_nothing)})(),
+    )
+    setattr(actions, "_insert_text", _nothing)
     out = asyncio.run(actions._reply_typed(_Editor(text), text, True, "root"))
     assert out["posted"] is True
     assert out["status"] == "unverified" and out["verified"] is False

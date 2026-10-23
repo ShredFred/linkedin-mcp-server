@@ -6,6 +6,8 @@ Card lines and page texts below are copied from the live pages measured on
 
 from __future__ import annotations
 
+from value_assertions import require_value
+
 from datetime import datetime, timedelta
 
 import pytest
@@ -50,8 +52,7 @@ class TestEngagementParsing:
 
     def test_reaction_kind_icon_before_text(self):
         assert (
-            reaction_kind(["John Smith", "like-consumption-ring-medium"], [])
-            == "like"
+            reaction_kind(["John Smith", "like-consumption-ring-medium"], []) == "like"
         )
         assert reaction_kind(["praise-consumption-ring-medium"], []) == "celebrate"
         assert reaction_kind(["interest-small"], []) == "insightful"
@@ -356,11 +357,11 @@ class TestContactNotes:
         notes.set("Bob", tags=["HK26", "Härterei"], note=None, replace=False)
         notes.set("bob", tags=["Rückruf"], note="will Demo", replace=False)
         entry = notes.get("BOB")
-        assert entry["tags"] == ["HK26", "Härterei", "Rückruf"]
-        assert entry["note"] == "will Demo"
+        assert require_value(entry)["tags"] == ["HK26", "Härterei", "Rückruf"]
+        assert require_value(entry)["note"] == "will Demo"
         notes.set("bob", tags=["neu"], note=None, replace=True)
-        assert notes.get("bob")["tags"] == ["neu"]
-        assert "note" not in notes.get("bob")
+        assert require_value(notes.get("bob"))["tags"] == ["neu"]
+        assert "note" not in require_value(notes.get("bob"))
 
 
 class TestJobWatch:
@@ -413,9 +414,7 @@ class TestReviewFixes:
         assert engager_key("reaction", "x", "like", name="egal") == "reaction:x:like"
 
     def test_person_name_folding(self):
-        assert (
-            outreach.person_name("Jane  Doe  (she/her)") == "Jane Doe"
-        )
+        assert outreach.person_name("Jane  Doe  (she/her)") == "Jane Doe"
 
     def test_reply_ignores_sender_label_variants(self):
         text = (

@@ -9,6 +9,7 @@ import pytest
 from linkedin_mcp_server import ext_outreach as outreach
 from linkedin_mcp_server.linkedin import ext_actions as A
 from linkedin_mcp_server.linkedin import ext_own_content as oc
+
 ACT = "7123456789012345678"
 CID = "7123456789012340001"
 ME = "jane-doe-acme"
@@ -47,7 +48,9 @@ class TestTruncatedReadBack:
 
     def test_cut_other_text_does_not_count(self):
         other = LONG[:45] + " ganz anders weiter …mehr"
-        assert A._matching_comment_keys([{"key": "k", "text": other}], self.probe) == set()
+        assert (
+            A._matching_comment_keys([{"key": "k", "text": other}], self.probe) == set()
+        )
 
     def test_no_marker_needs_full_probe(self):
         comments = [{"key": "k1", "text": LONG[:70]}]
@@ -97,20 +100,25 @@ class _ReadPage:
 
 def _reader(page):
     obj = object.__new__(oc.ExtOwnContent)
-    obj._session = type("S", (), {"page": page})()
-    obj.visits = []
+    setattr(obj, "_session", type("S", (), {"page": page})())
+    setattr(obj, "visits", [])
 
     async def goto(url):
-        obj.visits.append(url)
+        getattr(obj, "visits").append(url)
         page.url = url if page.land else "https://www.linkedin.com/feed/"
 
-    obj._goto = goto
+    setattr(obj, "_goto", goto)
     return obj
 
 
 class TestRereadPermalink:
     def test_reads_via_comment_permalink(self):
-        card = {"count": 1, "actor_href": f"/in/{ME}/", "lines": OWN_LINES, "menu_count": 1}
+        card = {
+            "count": 1,
+            "actor_href": f"/in/{ME}/",
+            "lines": OWN_LINES,
+            "menu_count": 1,
+        }
         r = _reader(_ReadPage(card=card))
         text = asyncio.run(r._reread_text(ACT, CID))
         assert r.visits == [oc.comment_permalink(ACT, CID)]
@@ -145,7 +153,9 @@ async def dom_page():
 
     async with async_playwright() as playwright:
         try:
-            browser = await playwright.chromium.launch(channel="chromium", headless=True)
+            browser = await playwright.chromium.launch(
+                channel="chromium", headless=True
+            )
         except Exception as exc:  # pragma: no cover - local only
             pytest.skip(f"chromium unavailable: {exc}")
         page = await browser.new_page()
@@ -164,6 +174,8 @@ async def test_identical_reply_does_not_erase_own_text(dom_page):
     assert "John Roe" not in card["lines"]
     # The live card is untouched by the read.
     assert (
-        await dom_page.evaluate("() => document.querySelectorAll('[componentkey]').length")
+        await dom_page.evaluate(
+            "() => document.querySelectorAll('[componentkey]').length"
+        )
         == 2
     )

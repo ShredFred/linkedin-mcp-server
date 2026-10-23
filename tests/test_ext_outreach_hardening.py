@@ -540,7 +540,5 @@ async def test_send_refuses_a_redirect_to_another_slug(mock_page) -> None:
             return_value=other,
         ),
     ):
-        result = await sender.send_message(
-            "johnsmith", "Hallo", confirm_send=True
-        )
+        result = await sender.send_message("johnsmith", "Hallo", confirm_send=True)
     assert result["status"] == "recipient_resolution_failed"

@@ -97,6 +97,7 @@ def normalise_cards(raw: list[dict[str, Any]], limit: int) -> list[dict[str, Any
         aid = m.group(2) if m else None
         if not aid or aid in seen:
             continue
+        assert m is not None
         seen.add(aid)
         text = re.sub(r"\n{3,}", "\n\n", str(card.get("text") or "")).strip()
         author = card.get("author_url")

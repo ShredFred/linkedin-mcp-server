@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from linkedin_mcp_server.linkedin.capture import SectionCapture
+from linkedin_mcp_server.linkedin.content import PageContentReader
+from linkedin_mcp_server.linkedin.navigation import PageNavigator
+from linkedin_mcp_server.linkedin.session import PageSession
+from typing import cast
+
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -9,7 +15,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from linkedin_mcp_server.linkedin import capture as capture_module
-from linkedin_mcp_server.linkedin.capture import CaptureMode, SectionCapture
+from linkedin_mcp_server.linkedin.capture import CaptureMode
 from linkedin_mcp_server.linkedin.company import CompanyReader
 
 
@@ -44,7 +50,11 @@ def _capture(page: _ScriptedPeoplePage) -> tuple[SectionCapture, list[float]]:
         delays.append(seconds)
 
     session = SimpleNamespace(page=page, delay=delay)
-    return SectionCapture(session, None, None), delays  # type: ignore[arg-type]
+    return SectionCapture(
+        cast("PageSession", session),
+        cast("PageNavigator", None),
+        cast("PageContentReader", None),
+    ), delays  # type: ignore[arg-type]
 
 
 async def test_clicks_until_button_disappears():
@@ -111,7 +121,7 @@ async def test_reader_forwards_limit():
             return_value=SimpleNamespace(text="", references=[], error=None)
         )
     )
-    reader = CompanyReader(None, cap)  # type: ignore[arg-type]
+    reader = CompanyReader(cast("PageSession", None), cast("SectionCapture", cap))  # type: ignore[arg-type]
     await reader.get_company_employees("example-co", limit=40)
     plan = cap.capture.await_args.args[2]
     assert plan.mode == CaptureMode.COMPANY_PEOPLE and plan.max_rows == 40

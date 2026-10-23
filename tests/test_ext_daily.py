@@ -85,7 +85,7 @@ def test_event_scout_spreads_over_days_within_the_search_budget(tmp_path, monkey
         async def by_organiser(self, o, include_past=False):
             return [{"event_id": "ka", "found_by": f"organiser:{o}", "past": False}]
 
-    c.events = Finder()
+    setattr(c, "events", Finder())
     # Only 2 searches left today.
     ledger = outreach.Ledger(tmp_path / "ledger.jsonl")
     ledger.append(
@@ -166,7 +166,7 @@ def test_employer_lookup_refuses_other_triggers_and_returns_two_fields(
                 "skills": ["y"],
             }
 
-    c.events = Finder()
+    setattr(c, "events", Finder())
     res = asyncio.run(c.employer_lookup())
     assert looked == ["https://www.linkedin.com/in/rea/"]
     assert set(res[0]) == {
@@ -250,8 +250,8 @@ def test_a_failing_part_does_not_stop_the_others(tmp_path, monkeypatch):
     async def ok():
         return {"enabled": True, "total_viewers": 1, "new_viewers": []}
 
-    c.own_posts = boom  # type: ignore[method-assign]
-    c.viewers = ok  # type: ignore[method-assign]
+    setattr(c, "own_posts", boom)  # type: ignore[method-assign]
+    setattr(c, "viewers", ok)  # type: ignore[method-assign]
     report = asyncio.run(c.run())
     assert report["posts"] == []
     assert report["viewers"]["total_viewers"] == 1
@@ -302,7 +302,7 @@ def test_harvest_reads_only_ordered_pages_within_budget(tmp_path, monkeypatch):
                 "next_page": page + pages,
             }
 
-    c.actions = Actions()
+    setattr(c, "actions", Actions())
     res = asyncio.run(c.harvest())
     assert res[0]["error"] == "bad_event_id"
     # One page per call, cap 4 pages in total.

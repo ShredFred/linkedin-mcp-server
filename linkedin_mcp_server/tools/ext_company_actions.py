@@ -8,12 +8,17 @@ account that is follows from the browser profile the server was started with
 
 from __future__ import annotations
 
+from linkedin_mcp_server.tools.ext import ToolRegistrar
+
 from typing import Any
 
-from fastmcp import Context, FastMCP
+from fastmcp import Context
 
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
-from linkedin_mcp_server.linkedin.ext_company_actions import REACTIONS, ExtCompanyActions
+from linkedin_mcp_server.linkedin.ext_company_actions import (
+    REACTIONS,
+    ExtCompanyActions,
+)
 from linkedin_mcp_server.linkedin.ext_engagement import parse_activity_id
 from linkedin_mcp_server.tools.ext import TAG, _pace, _peek, _run
 
@@ -36,7 +41,7 @@ async def require_company_role(ex: Any, page_id: str) -> dict[str, Any] | None:
 
 
 def register_ext_company_actions_tools(
-    mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
+    mcp: ToolRegistrar, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
 ) -> None:
     from linkedin_mcp_server.tools.ext import _GuardedMcp
 
@@ -64,7 +69,9 @@ def register_ext_company_actions_tools(
         if refusal:
             return refusal
         return await _run(
-            ctx, "company_access", lambda ex: _company(ex).read_access(str(page_id).strip())
+            ctx,
+            "company_access",
+            lambda ex: _company(ex).read_access(str(page_id).strip()),
         )
 
     @mcp.tool(
@@ -101,8 +108,11 @@ def register_ext_company_actions_tools(
         pace_budget_spent (like: 40/day), pace_lock_busy.
         """
         if reaction not in REACTIONS:
-            return {"status": "invalid_input", "field": "reaction",
-                    "allowed": sorted(REACTIONS)}
+            return {
+                "status": "invalid_input",
+                "field": "reaction",
+                "allowed": sorted(REACTIONS),
+            }
         try:
             activity = parse_activity_id(post_url)
         except ValueError as bad:
@@ -111,8 +121,11 @@ def register_ext_company_actions_tools(
         if as_company is not None:
             page_id = str(as_company).strip()
             if not page_id.isdigit() or not (company_name or "").strip():
-                return {"status": "invalid_input", "field": "as_company",
-                        "message": "as_company is the numeric page id; company_name is required."}
+                return {
+                    "status": "invalid_input",
+                    "field": "as_company",
+                    "message": "as_company is the numeric page id; company_name is required.",
+                }
         if confirm:
             refusal = _peek("like")
             if refusal:
@@ -133,7 +146,10 @@ def register_ext_company_actions_tools(
                 if spent:
                     return spent
             return await actions.react(
-                activity, reaction, confirm=confirm, page_id=page_id,
+                activity,
+                reaction,
+                confirm=confirm,
+                page_id=page_id,
                 page_name=company_name,
             )
 

@@ -5,6 +5,8 @@ other clients held the profile, read it as a dead session, retired the whole
 profile and exited before any login could finish. Every client was logged out.
 """
 
+from value_assertions import require_value
+
 import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -151,6 +153,7 @@ class TestUnfinishedLoginRestoresTheSession:
         with pytest.raises(AuthenticationStartedError):
             await invalidate_auth_and_trigger_relogin(stale_generation="gen-1")
         task = get_bootstrap_state().login_task
+        assert task is not None
         await asyncio.gather(task, return_exceptions=True)
 
         assert _session_is_in_place(isolate_profile_dir)
@@ -166,6 +169,7 @@ class TestUnfinishedLoginRestoresTheSession:
         with pytest.raises(AuthenticationStartedError):
             await invalidate_auth_and_trigger_relogin(stale_generation="gen-1")
         task = get_bootstrap_state().login_task
+        assert task is not None
         await asyncio.gather(task, return_exceptions=True)
 
         assert _session_is_in_place(isolate_profile_dir)
@@ -191,7 +195,7 @@ class TestUnfinishedLoginRestoresTheSession:
 
         assert _session_is_in_place(isolate_profile_dir)
         assert not list(isolate_profile_dir.parent.glob("invalid-state-*"))
-        get_bootstrap_state().login_task.cancel()
+        require_value(get_bootstrap_state().login_task).cancel()
 
 
 class TestGenuinelyStaleSessionStillRotates:
@@ -209,7 +213,9 @@ class TestGenuinelyStaleSessionStillRotates:
 
         with pytest.raises(AuthenticationStartedError):
             await invalidate_auth_and_trigger_relogin(stale_generation="gen-1")
-        await asyncio.gather(get_bootstrap_state().login_task, return_exceptions=True)
+        await asyncio.gather(
+            require_value(get_bootstrap_state().login_task), return_exceptions=True
+        )
 
         state = json.loads(source_state_path(isolate_profile_dir).read_text())
         assert state["login_generation"] == "gen-2"

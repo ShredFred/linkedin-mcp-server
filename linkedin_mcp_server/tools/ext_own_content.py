@@ -14,11 +14,13 @@ blocks), ``unknown`` when an exception came after the final click.
 
 from __future__ import annotations
 
+from linkedin_mcp_server.tools.ext import ToolRegistrar
+
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastmcp import Context, FastMCP
+from fastmcp import Context
 
 from linkedin_mcp_server import ext_outreach as outreach
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
@@ -172,7 +174,9 @@ async def _operate(
             from linkedin_mcp_server.linkedin.ext_company_post import (
                 ExtCompanyPostComposer,
             )
-            from linkedin_mcp_server.tools.ext_company_actions import require_company_role
+            from linkedin_mcp_server.tools.ext_company_actions import (
+                require_company_role,
+            )
 
             pid = as_company
             if not pid.isdigit():
@@ -195,7 +199,9 @@ async def _operate(
                 extra["segments"] = segments
             if as_company:
                 extra["as_company"] = as_company
-            return await reader.edit(activity, comment, new_text, confirm=confirm, **extra)
+            return await reader.edit(
+                activity, comment, new_text, confirm=confirm, **extra
+            )
 
         if dry_run:
             return {**target, "dry_run": True, **(await act(False))}
@@ -261,6 +267,7 @@ async def _operate(
                 if new_text is None:
                     note.update({"deleted_by": attempt, "deleted_at": _now()})
                 else:
+                    assert new_sha is not None
                     note.update(
                         {
                             "edited_by": attempt,
@@ -278,7 +285,7 @@ async def _operate(
 
 
 def register_ext_own_content_tools(
-    mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
+    mcp: ToolRegistrar, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
 ) -> None:
     from linkedin_mcp_server.tools.ext import _GuardedMcp
 
@@ -318,6 +325,7 @@ def register_ext_own_content_tools(
         activity, _, bad = resolve_target(post_url, None)
         if bad:
             return bad
+        assert activity is not None
         return await _operate(
             ctx,
             kind="post_delete",
@@ -384,6 +392,8 @@ def register_ext_own_content_tools(
         segments, info, bad = prepare_text(new_text, mentions, mention_check)
         if bad:
             return {**info, **bad}
+        assert segments is not None
+        assert info is not None
         new_text = plain_text(segments)
         bad = check_text(new_text, POST_MAX)
         if bad:
@@ -391,6 +401,7 @@ def register_ext_own_content_tools(
         activity, _, bad = resolve_target(post_url, None)
         if bad:
             return bad
+        assert activity is not None
         result = await _operate(
             ctx,
             kind="post_edit",
@@ -439,6 +450,8 @@ def register_ext_own_content_tools(
         activity, cid, bad = resolve_target(post_url, comment_id)
         if bad:
             return bad
+        assert activity is not None
+        assert cid is not None
         return await _operate(
             ctx,
             kind="comment_delete",
@@ -490,6 +503,8 @@ def register_ext_own_content_tools(
         activity, cid, bad = resolve_target(post_url, comment_id)
         if bad:
             return bad
+        assert activity is not None
+        assert cid is not None
         return await _operate(
             ctx,
             kind="comment_edit",

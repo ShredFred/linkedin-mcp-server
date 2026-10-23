@@ -262,7 +262,7 @@ class Collector:
             self._take("page_read")
             r = await self.engagement.read_reactors(aid, 300)
             out["reactors_available"] = r.get("available")
-            found_r = r.get("reactors")
+            found_r = r.get("reactors") or []
             await self.session.delay(random.uniform(2.0, 4.0))
         self._take("page_read")
         page = await self.engagement.read_post_page(aid)

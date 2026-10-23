@@ -11,6 +11,10 @@ composer did not do before 2026-10-01:
 
 from __future__ import annotations
 
+from linkedin_mcp_server.linkedin.navigation import PageNavigator
+from linkedin_mcp_server.linkedin.session import PageSession
+from typing import cast
+
 from typing import Any
 
 import pytest
@@ -89,7 +93,10 @@ class FakeNavigator:
 
 
 def composer(page: FakePage) -> ExtPostComposer:
-    return ExtPostComposer(FakeSession(page), FakeNavigator(page))  # type: ignore[arg-type]
+    return ExtPostComposer(
+        cast("PageSession", FakeSession(page)),
+        cast("PageNavigator", FakeNavigator(page)),
+    )  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -107,7 +114,9 @@ async def test_restored_draft_with_media_stops_before_writing() -> None:
 
 @pytest.mark.asyncio
 async def test_published_post_returns_the_activity_id_for_the_first_comment() -> None:
-    page = FakePage(urn="urn:li:activity:7123456789012345678", body="Erste Zeile zweite")
+    page = FakePage(
+        urn="urn:li:activity:7123456789012345678", body="Erste Zeile zweite"
+    )
     result = await composer(page).create_post(
         "Erste Zeile\n\nzweite", image_path=None, confirm_post=True
     )
@@ -147,7 +156,9 @@ async def test_older_post_with_same_first_line_does_not_verify() -> None:
     # The activity page also lists last week's post that opened with the same
     # line; the newest card does not carry it, so the publish is unverified.
     page = FakePage(
-        urn="urn:li:activity:7000000000000000001", body="Erste Zeile zweite", newest=False
+        urn="urn:li:activity:7000000000000000001",
+        body="Erste Zeile zweite",
+        newest=False,
     )
     result = await composer(page).create_post(
         "Erste Zeile\n\nzweite", image_path=None, confirm_post=True

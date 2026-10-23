@@ -82,8 +82,8 @@ def test_daily_viewers_do_not_remember_anonymous(tmp_path):
     c = Collector.__new__(Collector)
     c.cfg = {}
     c.seen = eng.SeenStore()
-    c.actions = _Actions()
-    c._take = lambda *a, **k: None
+    setattr(c, "actions", _Actions())
+    setattr(c, "_take", lambda *a, **k: None)
     asyncio.run(c.viewers())
     asyncio.run(c.viewers())
     keys = _stored(tmp_path, "profile_viewers")

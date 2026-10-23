@@ -45,8 +45,14 @@ def _descriptor(auth_root: Path, token: str) -> DaemonDescriptor:
 
 def _write_private(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    from linkedin_mcp_server.private_state import (
+        harden_created_directory,
+        harden_created_file,
+    )
+
+    harden_created_directory(path.parent)
     path.write_text(text, encoding="utf-8")
-    path.chmod(0o600)
+    harden_created_file(path)
 
 
 def test_the_candidate_reads_this_checkouts_namespace(tmp_path: Path):

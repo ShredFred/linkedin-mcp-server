@@ -240,7 +240,9 @@ def split_engager_lines(lines: list[str]) -> dict[str, Any]:
     degree = None
     rest = lines[1:]
     if rest and re.match(r"^[·•]\s*\d", rest[0]):
-        degree = int(re.search(r"\d", rest[0]).group(0))
+        match = re.search(r"\d", rest[0])
+        assert match is not None
+        degree = int(match.group(0))
         rest = rest[1:]
     headline = next(
         (
@@ -278,7 +280,9 @@ def split_comment_lines(lines: list[str]) -> dict[str, Any]:
     rest = lines[2:]
     degree = None
     if rest and re.match(r"^[·•]\s*\d", rest[0]):
-        degree = int(re.search(r"\d", rest[0]).group(0))
+        match = re.search(r"\d", rest[0])
+        assert match is not None
+        degree = int(match.group(0))
         rest = rest[1:]
     age_index = next((i for i, ln in enumerate(rest) if _REL_TIME_RE.match(ln)), None)
     headline = rest[0] if rest and age_index not in (None, 0) else None
@@ -309,11 +313,7 @@ def split_comment_lines(lines: list[str]) -> dict[str, Any]:
     # above the action row (a last line "0", measured 2026-10-10); it is
     # not text. Only that one line, and only when the action row follows it:
     # a comment that genuinely ends in "2026" keeps it.
-    if (
-        stopped
-        and text_lines
-        and re.fullmatch(r"\d[\d.,]*", text_lines[-1])
-    ):
+    if stopped and text_lines and re.fullmatch(r"\d[\d.,]*", text_lines[-1]):
         text_lines.pop()
     return {
         "name": name.split("•")[0].strip(),

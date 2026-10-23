@@ -147,3 +147,7 @@ showcontent = true
 directory = "fix"
 name = "Bug Fixes"
 showcontent = true
+
+[tool.ty.environment]
+# Check both platform branches of this Windows/POSIX server on every host.
+python-platform = "all"

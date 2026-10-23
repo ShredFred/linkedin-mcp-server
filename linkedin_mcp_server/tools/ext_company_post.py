@@ -12,6 +12,8 @@ and the page is the louder of the two.
 
 from __future__ import annotations
 
+from linkedin_mcp_server.tools.ext import ToolRegistrar
+
 import logging
 import re
 import uuid
@@ -19,7 +21,7 @@ from datetime import datetime, timedelta
 from typing import Annotated, Any
 from urllib.parse import unquote
 
-from fastmcp import Context, FastMCP
+from fastmcp import Context
 from pydantic import Field
 
 from linkedin_mcp_server import ext_outreach as outreach
@@ -64,7 +66,7 @@ def _composer(extractor: Any) -> ExtCompanyPostComposer:
 
 
 def register_ext_company_post_tools(
-    mcp: FastMCP,
+    mcp: ToolRegistrar,
     *,
     tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS,
 ) -> None:
@@ -187,7 +189,11 @@ def parse_company_ref(value: str) -> tuple[str, dict[str, Any] | None]:
 
 
 def _warn(info: dict[str, Any]) -> dict[str, Any]:
-    return {"plaintext_names": info["plaintext_names"]} if info.get("plaintext_names") else {}
+    return (
+        {"plaintext_names": info["plaintext_names"]}
+        if info.get("plaintext_names")
+        else {}
+    )
 
 
 async def run_company_post(
@@ -207,10 +213,7 @@ async def run_company_post(
 ) -> dict[str, Any]:
     """The company post flow, shared by create_company_post and
     create_post(as_company=...): checks, ledger, pacer, composer."""
-    bad = (
-        check_mode(mode)
-        or check_schedule(mode, scheduled_at)
-    )
+    bad = check_mode(mode) or check_schedule(mode, scheduled_at)
     if bad:
         return {"posted": False, **bad}
     if not page_name.strip():
@@ -222,6 +225,8 @@ async def run_company_post(
     segments, mention_info, bad = prepare_text(text, mentions, mention_check)
     if bad:
         return {"posted": False, **mention_info, **bad}
+    assert segments is not None
+    assert mention_info is not None
     text = plain_text(segments)
     extra: dict[str, Any] = (
         {"segments": segments} if any(k == "mention" for k, _ in segments) else {}
@@ -231,6 +236,7 @@ async def run_company_post(
     media_items, bad = check_media(media)
     if bad:
         return {"posted": False, **bad}
+    assert media_items is not None
     if media_items and image_path:
         return {
             "status": "invalid_input",
@@ -276,7 +282,9 @@ async def run_company_post(
     if previous:
         return {"status": "duplicate_text", "posted": False, "previous": previous}
 
-    async def _page_id(composer: ExtCompanyPostComposer) -> tuple[str | None, dict[str, Any] | None]:
+    async def _page_id(
+        composer: ExtCompanyPostComposer,
+    ) -> tuple[str | None, dict[str, Any] | None]:
         if page_ref.isdigit():
             return page_ref, None
         resolved = await composer.resolve_page_id(page_ref)
@@ -289,6 +297,7 @@ async def run_company_post(
         pid, bad = await _page_id(composer)
         if bad:
             return bad
+        assert pid is not None
         from linkedin_mcp_server.tools.ext_company_actions import require_company_role
 
         denied = await require_company_role(ex, str(pid))
@@ -322,6 +331,7 @@ async def run_company_post(
         page_id, bad = await _page_id(composer)
         if bad:
             return bad
+        assert page_id is not None
         from linkedin_mcp_server.tools.ext_company_actions import require_company_role
 
         denied = await require_company_role(ex, str(page_id))

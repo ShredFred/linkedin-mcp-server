@@ -1,5 +1,8 @@
 """Fork extension: Serverstabilitaet -- toter Browser, Logging auf stderr, cp1252."""
 
+from linkedin_mcp_server.core.browser import BrowserManager
+from typing import cast
+
 import io
 import logging
 import sys
@@ -22,10 +25,11 @@ def _browser(*, page_closed=False, connected=True, page=True, context=True):
     b = MagicMock()
     b._page = MagicMock() if page else None
     if page:
-        b._page.is_closed = MagicMock(return_value=page_closed)
+        setattr(b._page, "is_closed", MagicMock(return_value=page_closed))
     b._context = MagicMock() if context else None
     if context:
-        b._context.browser.is_connected = MagicMock(return_value=connected)
+        assert b._context is not None
+        setattr(b._context.browser, "is_connected", MagicMock(return_value=connected))
     return b
 
 
@@ -110,4 +114,4 @@ def test_emoji_logging_auf_cp1252_stderr_wirft_nicht(monkeypatch):
 
 
 def test_fremdes_objekt_gilt_nicht_als_tot():
-    assert browser_module._browser_is_dead(object()) is False
+    assert browser_module._browser_is_dead(cast("BrowserManager", object())) is False

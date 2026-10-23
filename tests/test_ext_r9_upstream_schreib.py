@@ -7,6 +7,10 @@ every tool name is unique and the plain names belong to the fork module.
 
 from __future__ import annotations
 
+from value_assertions import require_value
+from typing import cast
+from fastmcp.server.middleware import MiddlewareContext
+
 import inspect
 from unittest.mock import AsyncMock, patch
 
@@ -64,8 +68,12 @@ async def test_plain_names_describe_a_dry_run_first(monkeypatch):
     monkeypatch.delenv(ALLOW_ENV, raising=False)
     tools = {t.name: t for t in await create_mcp_server().list_tools()}
     for name in UPSTREAM_WRITE_TOOLS:
-        assert tools[name].description.strip().startswith(
-            "Without confirm_send=true this is a dry run only: nothing is sent."
+        assert (
+            require_value(tools[name].description)
+            .strip()
+            .startswith(
+                "Without confirm_send=true this is a dry run only: nothing is sent."
+            )
         )
         assert "ext" in tools[name].tags
 
@@ -125,8 +133,15 @@ async def test_middleware_refuses_unguarded_names_without_opt_out(monkeypatch):
     for name, replacement in GUARDED_REPLACEMENT.items():
         ctx = type("C", (), {"message": type("M", (), {"name": name})()})()
         with pytest.raises(ToolError, match=replacement):
-            await UpstreamWriteGuardMiddleware().on_call_tool(ctx, AsyncMock())
+            await UpstreamWriteGuardMiddleware().on_call_tool(
+                cast("MiddlewareContext", ctx), AsyncMock()
+            )
     for name in UPSTREAM_WRITE_TOOLS:
         ctx = type("C", (), {"message": type("M", (), {"name": name})()})()
         nxt = AsyncMock(return_value="ok")
-        assert await UpstreamWriteGuardMiddleware().on_call_tool(ctx, nxt) == "ok"
+        assert (
+            await UpstreamWriteGuardMiddleware().on_call_tool(
+                cast("MiddlewareContext", ctx), nxt
+            )
+            == "ok"
+        )

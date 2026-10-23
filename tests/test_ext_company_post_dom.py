@@ -92,12 +92,22 @@ async def set_page(page, *, commit="Posten", schedule=None):
     html = COMPOSER.replace("POSTWORD", commit) + CHAT
     if schedule:
         date_value, time_value = schedule
-        html += SCHEDULE.replace("DATEVALUE", date_value).replace("TIMEVALUE", time_value)
+        html += SCHEDULE.replace("DATEVALUE", date_value).replace(
+            "TIMEVALUE", time_value
+        )
     await page.set_content(f"<main>{html}</main>")
 
 
-async def mark(page, tag, *, words=None, labels=None, scope="dialog",
-               anchor='[role="textbox"]', anchor_words=None):
+async def mark(
+    page,
+    tag,
+    *,
+    words=None,
+    labels=None,
+    scope="dialog",
+    anchor='[role="textbox"]',
+    anchor_words=None,
+):
     return await page.evaluate(
         cp._MARK_JS,
         {
@@ -126,8 +136,12 @@ async def dialog_of(page, tag):
 async def test_the_author_is_read_from_the_composer_not_from_the_chat(page):
     await set_page(page)
     got = await page.evaluate(
-        cp._AUTHOR_JS, {"name": "Acme Labs", "commit_words": cp.COMPOSER_WORDS,
-         "suffix_words": cp.words("author_suffix")}
+        cp._AUTHOR_JS,
+        {
+            "name": "Acme Labs",
+            "commit_words": cp.COMPOSER_WORDS,
+            "suffix_words": cp.words("author_suffix"),
+        },
     )
     assert got["ok"] is True
     assert any("Acme Labs" in t for t in got["texts"])
@@ -138,8 +152,12 @@ async def test_the_author_is_read_from_the_composer_not_from_the_chat(page):
 async def test_a_page_the_composer_does_not_name_is_refused(page):
     await set_page(page)
     got = await page.evaluate(
-        cp._AUTHOR_JS, {"name": "Acme GmbH", "commit_words": cp.COMPOSER_WORDS,
-         "suffix_words": cp.words("author_suffix")}
+        cp._AUTHOR_JS,
+        {
+            "name": "Acme GmbH",
+            "commit_words": cp.COMPOSER_WORDS,
+            "suffix_words": cp.words("author_suffix"),
+        },
     )
     assert got["ok"] is False
 
@@ -164,8 +182,12 @@ async def test_a_composer_whose_button_reads_planen_is_still_the_composer(page):
     # After a time is set the commit button renames itself.
     await set_page(page, commit="Planen")
     got = await page.evaluate(
-        cp._AUTHOR_JS, {"name": "Acme Labs", "commit_words": cp.COMPOSER_WORDS,
-         "suffix_words": cp.words("author_suffix")}
+        cp._AUTHOR_JS,
+        {
+            "name": "Acme Labs",
+            "commit_words": cp.COMPOSER_WORDS,
+            "suffix_words": cp.words("author_suffix"),
+        },
     )
     assert got["ok"] is True
     marked = await mark(page, "post", words=cp._SCHEDULE_COMMIT_WORDS)
@@ -201,8 +223,11 @@ async def write_schedule(page, sample_date, sample_time, target):
     await set_page(page, schedule=(sample_date, sample_time))
     return await page.evaluate(
         cp._SET_SCHEDULE_JS,
-        {"iso": f"{target['y']:04d}-{target['m']:02d}-{target['d']:02d}",
-         "today": TODAY, "target": target},
+        {
+            "iso": f"{target['y']:04d}-{target['m']:02d}-{target['d']:02d}",
+            "today": TODAY,
+            "target": target,
+        },
     )
 
 
@@ -253,9 +278,7 @@ async def test_the_schedule_dialog_is_found_past_the_chat_overlay(page):
     # The chat carries an input as well; only the schedule dialog has a date.
     got = await write_schedule(page, "9.10.2026", "14:00", TARGET_TODAY)
     assert got["ok"] is True
-    where = await page.evaluate(
-        '() => document.querySelector("#schedule input").value'
-    )
+    where = await page.evaluate('() => document.querySelector("#schedule input").value')
     assert where == "9.10.2026"
 
 
@@ -290,7 +313,9 @@ async def test_the_wanted_quarter_hour_is_marked(page):
     await set_page(page, schedule=("9.10.2026", "14:45"))
     got = await page.evaluate(cp._PICK_TIME_JS, {"time": "15:00"})
     assert got["count"] == 1
-    text = await page.evaluate('() => document.querySelector("[data-ext-time]").innerText')
+    text = await page.evaluate(
+        '() => document.querySelector("[data-ext-time]").innerText'
+    )
     assert text.strip() == "15:00"
 
 
@@ -323,8 +348,8 @@ async def test_a_closed_composer_counts_as_gone_even_with_the_chat_open(page):
     # from seeing it.
     await page.set_content(f"<main>{CHAT}</main>")
     gone = await page.evaluate(
-        cp._COMPOSER_GONE_JS, {"commit_words": cp.COMPOSER_WORDS,
-         "suffix_words": cp.words("author_suffix")}
+        cp._COMPOSER_GONE_JS,
+        {"commit_words": cp.COMPOSER_WORDS, "suffix_words": cp.words("author_suffix")},
     )
     assert gone is True
 
@@ -332,8 +357,8 @@ async def test_a_closed_composer_counts_as_gone_even_with_the_chat_open(page):
 async def test_an_open_composer_is_not_gone(page):
     await set_page(page)
     gone = await page.evaluate(
-        cp._COMPOSER_GONE_JS, {"commit_words": cp.COMPOSER_WORDS,
-         "suffix_words": cp.words("author_suffix")}
+        cp._COMPOSER_GONE_JS,
+        {"commit_words": cp.COMPOSER_WORDS, "suffix_words": cp.words("author_suffix")},
     )
     assert gone is False
 
@@ -341,8 +366,8 @@ async def test_an_open_composer_is_not_gone(page):
 async def test_a_composer_showing_planen_is_not_gone_either(page):
     await set_page(page, commit="Planen")
     gone = await page.evaluate(
-        cp._COMPOSER_GONE_JS, {"commit_words": cp.COMPOSER_WORDS,
-         "suffix_words": cp.words("author_suffix")}
+        cp._COMPOSER_GONE_JS,
+        {"commit_words": cp.COMPOSER_WORDS, "suffix_words": cp.words("author_suffix")},
     )
     assert gone is False
 
@@ -352,13 +377,20 @@ async def test_a_composer_showing_planen_is_not_gone_either(page):
 
 async def _author(page, button, name):
     await page.set_content(
-        "<main>" + COMPOSER.replace("Acme Labs Auf Alle posten", button)
-        .replace("POSTWORD", "Posten") + CHAT + "</main>"
+        "<main>"
+        + COMPOSER.replace("Acme Labs Auf Alle posten", button).replace(
+            "POSTWORD", "Posten"
+        )
+        + CHAT
+        + "</main>"
     )
     return await page.evaluate(
         cp._AUTHOR_JS,
-        {"name": name, "commit_words": cp.COMPOSER_WORDS,
-         "suffix_words": cp.words("author_suffix")},
+        {
+            "name": name,
+            "commit_words": cp.COMPOSER_WORDS,
+            "suffix_words": cp.words("author_suffix"),
+        },
     )
 
 

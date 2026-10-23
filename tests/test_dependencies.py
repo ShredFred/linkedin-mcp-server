@@ -225,7 +225,7 @@ class TestGetReadyExtractor:
                 "linkedin_mcp_server.dependencies.invalidate_browser_setup"
             ) as mock_invalidate,
         ):
-            with pytest.raises(ToolError, match="Network error"):
+            with pytest.raises(ToolError, match="Failed to start browser"):
                 await get_ready_extractor(ctx=None, tool_name="test_tool")
 
             mock_invalidate.assert_not_called()

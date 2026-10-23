@@ -329,9 +329,15 @@ def create_mcp_server(
 
         claim_upstream_write_names(mcp)
         register_ext_tools(mcp, tool_timeout=tool_timeout)  # fork extension
-        register_ext_company_post_tools(mcp, tool_timeout=tool_timeout)  # fork extension
-        register_ext_composer_probe_tools(mcp, tool_timeout=tool_timeout)  # fork extension
-        register_ext_company_actions_tools(mcp, tool_timeout=tool_timeout)  # fork extension
+        register_ext_company_post_tools(
+            mcp, tool_timeout=tool_timeout
+        )  # fork extension
+        register_ext_composer_probe_tools(
+            mcp, tool_timeout=tool_timeout
+        )  # fork extension
+        register_ext_company_actions_tools(
+            mcp, tool_timeout=tool_timeout
+        )  # fork extension
 
         # Inside the gate with the rest, and easy to miss because it is the one
         # tool defined here rather than in a `register_*` call. Left out of the

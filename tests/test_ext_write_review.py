@@ -3,6 +3,8 @@ ledger mapping, partial batch report. No browser."""
 
 from __future__ import annotations
 
+from value_assertions import require_value
+
 import asyncio
 
 import pytest
@@ -41,14 +43,19 @@ def _call(name, args, *, extractor=None, monkeypatch=None):
 def test_invite_note_refuses_invisible_controls(bad):
     from linkedin_mcp_server.tools.ext import check_invite_note
 
-    assert check_invite_note(f"Hallo{bad}Welt")["status"] == "invalid_note"
+    assert (
+        require_value(check_invite_note(f"Hallo{bad}Welt"))["status"] == "invalid_note"
+    )
 
 
 def test_invite_note_counts_utf16_units():
     from linkedin_mcp_server.tools.ext import check_invite_note
 
     # 150 emojis are 150 code points but 300 UTF-16 units: over the 200 limit.
-    assert check_invite_note("\U0001f600" * 150)["status"] == "note_too_long"
+    assert (
+        require_value(check_invite_note("\U0001f600" * 150))["status"]
+        == "note_too_long"
+    )
     assert check_invite_note("\U0001f600" * 100) is None
 
 
@@ -97,7 +104,10 @@ def test_connect_send_failed_still_blocks(monkeypatch):
     monkeypatch.setattr(m, "_pace", lambda *a, **k: None)
     args = {"linkedin_username": "dieter", "confirm_send": True}
     _call(
-        "connect_with_person", args, extractor=_Ex("send_failed"), monkeypatch=monkeypatch
+        "connect_with_person",
+        args,
+        extractor=_Ex("send_failed"),
+        monkeypatch=monkeypatch,
     )
     assert outreach.Ledger.default().already_contacted("invite", "dieter", None)
 

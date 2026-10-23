@@ -11,7 +11,7 @@ def test_adds_create_no_window_by_default():
 
 
 def test_keeps_an_explicit_console_choice():
-    detached = subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000008
+    detached = 0x00000200 | 0x00000008
     assert no_console.effective_flags(detached) == detached
     assert no_console.effective_flags(0x00000010) == 0x00000010
 

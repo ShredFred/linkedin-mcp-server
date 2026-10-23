@@ -517,7 +517,7 @@ class TestProfileMessageTargetDom:
             dom_page,
             self._upsell_page(
                 "",
-                '<h2>Ada Lovelace</h2>'
+                "<h2>Ada Lovelace</h2>"
                 f'<a href="/messaging/compose/?recipient=ACoAAB" {label}</a>',
             ),
         )

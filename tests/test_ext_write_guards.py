@@ -6,6 +6,10 @@ No browser: ``_run`` is replaced by a direct call with stub objects.
 
 from __future__ import annotations
 
+from linkedin_mcp_server.linkedin.navigation import PageNavigator
+from linkedin_mcp_server.linkedin.session import PageSession
+from typing import cast
+
 import asyncio
 
 import pytest
@@ -258,12 +262,14 @@ class _Session:
 def _comment_actions(page):
     from linkedin_mcp_server.linkedin.ext_actions import ExtActions
 
-    actions = ExtActions(_Session(page), None)
+    actions = ExtActions(
+        cast("PageSession", _Session(page)), cast("PageNavigator", None)
+    )
 
     async def goto(url):
         return None
 
-    actions._goto = goto
+    setattr(actions, "_goto", goto)
     return actions
 
 

@@ -82,23 +82,24 @@ def _reader(pg: Any, pages: dict[str, str] | None = None) -> ExtInmail:
     async def delay(_s: float) -> None:
         return None
 
-    reader._session = SimpleNamespace(page=pg, delay=delay)  # type: ignore[attr-defined]
+    setattr(reader, "_session", SimpleNamespace(page=pg, delay=delay))  # type: ignore[attr-defined]
 
     async def goto(url: str) -> None:
         if pages and url in pages:
             await pg.set_content(pages[url])
 
-    reader._goto = goto  # type: ignore[method-assign]
+    setattr(reader, "_goto", goto)  # type: ignore[method-assign]
     return reader
 
 
-def _profile(t: dict[str, str], menu: list[str], *, top_extra: str = "",
-             data: str = "") -> str:
+def _profile(
+    t: dict[str, str], menu: list[str], *, top_extra: str = "", data: str = ""
+) -> str:
     items = "".join(menu)
     return f"""<html><head><title>Max Platzhalter | LinkedIn</title></head><body>
 <main><section>
-  <h1>Max Platzhalter</h1><span>{t['degree']}</span>
-  <div><button>{t['more']}</button>{top_extra}</div>
+  <h1>Max Platzhalter</h1><span>{t["degree"]}</span>
+  <div><button>{t["more"]}</button>{top_extra}</div>
   <div role="menu" style="display:block">{items}</div>
 </section>
 <section><a href="/in/jemand-anders/" data-urn="urn:li:fsd_profile:{OTHER}">Andere Person</a></section>
@@ -113,18 +114,23 @@ async def _target(pg: Any, html: str) -> dict[str, Any]:
 
 @pytest.mark.parametrize("t", LOCALES)
 async def test_view_link_still_wins(page, t):
-    html = _profile(t, [f'<a role="menuitem" href="/sales/people/{URN},name,x/">{t["view"]}</a>'])
+    html = _profile(
+        t, [f'<a role="menuitem" href="/sales/people/{URN},name,x/">{t["view"]}</a>']
+    )
     got = await _target(page, html)
     assert got["status"] == "ok" and got["route"] == "view_link"
 
 
 @pytest.mark.parametrize("t", LOCALES)
 async def test_saved_lead_with_compose_link_is_a_route(page, t):
-    html = _profile(t, [
-        f'<a role="menuitem" href="#">{t["unsave"]}</a>',
-        f'<a role="menuitem" href="/messaging/compose/?profileUrn=urn%3Ali%3Afsd_profile%3A{URN}">'
-        f'{t["message"]}</a>',
-    ])
+    html = _profile(
+        t,
+        [
+            f'<a role="menuitem" href="#">{t["unsave"]}</a>',
+            f'<a role="menuitem" href="/messaging/compose/?profileUrn=urn%3Ali%3Afsd_profile%3A{URN}">'
+            f"{t['message']}</a>",
+        ],
+    )
     got = await _target(page, html)
     assert got["status"] == "ok", got
     assert got["saved_lead"] is True
@@ -136,8 +142,11 @@ async def test_saved_button_and_slug_bound_urn(page, t):
     # "Gespeichert"/"Saved" in the top card; the URN comes from the page data
     # next to the own slug, never from the other person's card below.
     data = (
-        '<code style="display:none">{"publicIdentifier":"' + SLUG
-        + '","entityUrn":"urn:li:fsd_profile:' + URN + '"}</code>'
+        '<code style="display:none">{"publicIdentifier":"'
+        + SLUG
+        + '","entityUrn":"urn:li:fsd_profile:'
+        + URN
+        + '"}</code>'
     )
     html = _profile(t, [], top_extra=f"<button>{t['saved']}</button>", data=data)
     got = await _target(page, html)
@@ -150,7 +159,8 @@ async def test_saved_lead_with_url_encoded_urn_only(page, t):
     # 2026-10-09: the message link carries the URN url-encoded; the own-URN
     # scan saw only the plain form and reported no route for saved leads.
     html = _profile(
-        t, [f'<a role="menuitem" href="#">{t["unsave"]}</a>'],
+        t,
+        [f'<a role="menuitem" href="#">{t["unsave"]}</a>'],
         top_extra=f'<img data-a="urn%3Ali%3Afsd_profile%3A{URN}">',
     )
     got = await _target(page, html)
@@ -161,9 +171,12 @@ async def test_saved_lead_with_url_encoded_urn_only(page, t):
 @pytest.mark.parametrize("t", LOCALES)
 async def test_saved_lead_with_two_urns_is_not_guessed(page, t):
     html = _profile(
-        t, [f'<a role="menuitem" href="#">{t["unsave"]}</a>'],
-        top_extra=(f'<img data-a="urn:li:fsd_profile:{URN}">'
-                   f'<img data-b="urn:li:fsd_profile:{OTHER}">'),
+        t,
+        [f'<a role="menuitem" href="#">{t["unsave"]}</a>'],
+        top_extra=(
+            f'<img data-a="urn:li:fsd_profile:{URN}">'
+            f'<img data-b="urn:li:fsd_profile:{OTHER}">'
+        ),
     )
     got = await _target(page, html)
     assert got["status"] == "no_sales_navigator_route"
