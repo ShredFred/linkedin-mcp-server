@@ -24,6 +24,7 @@ from linkedin_mcp_server.common_utils import (
 )
 
 from linkedin_mcp_server.browser_downgrade import refuse_a_downgrade
+from linkedin_mcp_server.profile_cleanup import remove_orphaned_cache_deletions
 from linkedin_mcp_server.exceptions import (
     BrowserDowngradeError,
     BrowserShutdownUnconfirmedError,
@@ -393,6 +394,11 @@ class BrowserManager:
 
             secure_mkdir(Path(self.user_data_dir))
             harden_linkedin_tree(Path(self.user_data_dir))
+            # Leftover `*.CHROME_DELETE` caches make Chromium's own cache purge
+            # after a version switch fail with exit code 33. See profile_cleanup.
+            await asyncio.to_thread(
+                remove_orphaned_cache_deletions, Path(self.user_data_dir)
+            )
 
             context_options: dict[str, Any] = {
                 # Headed wherever a window can exist, in both public modes.
