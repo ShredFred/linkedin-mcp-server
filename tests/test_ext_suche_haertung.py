@@ -149,7 +149,9 @@ async def test_blank_keywords_are_refused_without_a_page_load(
     monkeypatch.setattr(mod, "get_ready_extractor", ready)
     mcp = FastMCP("t")
     getattr(mod, register)(mcp)
-    fn = (await mcp.get_tool(tool)).fn
+    registered = await mcp.get_tool(tool)
+    assert registered is not None
+    fn = getattr(registered, "fn")
     ctx = MagicMock()
     ctx.report_progress = AsyncMock()
     with pytest.raises(ToolError, match="keywords must not be empty"):

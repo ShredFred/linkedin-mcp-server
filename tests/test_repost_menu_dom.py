@@ -8,6 +8,8 @@ a menu entry.
 
 from __future__ import annotations
 
+from value_assertions import require_value
+
 import pytest
 from patchright.async_api import async_playwright
 
@@ -80,10 +82,10 @@ async def test_menu_entries_only_from_the_menu(page):
     items = await _open(page, SHARE_MENU)
     assert [i["text"] for i in items] == ["Mit Kommentar teilen", "Sofort teilen"]
     entry, has_undo = rp.pick_entry(items, "instant")
-    assert entry["text"] == "Sofort teilen" and not has_undo
+    assert require_value(entry)["text"] == "Sofort teilen" and not has_undo
     marked = await page.evaluate(
         '(i) => document.querySelector(`[data-ext-menu="${i}"]`).innerText',
-        entry["index"],
+        require_value(entry)["index"],
     )
     assert marked.strip() == "Sofort teilen"
 
@@ -96,7 +98,7 @@ async def test_stray_undo_in_comment_is_ignored(page):
 async def test_undo_menu_recognised(page):
     items = await _open(page, UNDO_MENU)
     entry, has_undo = rp.pick_entry(items, "undo")
-    assert has_undo and entry["text"] == "Repost rückgängig machen"
+    assert has_undo and require_value(entry)["text"] == "Repost rückgängig machen"
 
 
 async def test_no_share_entry_no_menu(page):
@@ -123,7 +125,7 @@ WRAPPED_UNDO_MENU = (
 async def test_wrapped_entries_keep_the_undo(page):
     items = await _open(page, WRAPPED_UNDO_MENU)
     entry, has_undo = rp.pick_entry(items, "undo")
-    assert has_undo and entry["text"] == "Repost rückgängig machen"
+    assert has_undo and require_value(entry)["text"] == "Repost rückgängig machen"
     assert all("Entfernen" not in i["text"] for i in items)
 
 

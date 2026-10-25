@@ -139,9 +139,12 @@ def test_state_file_plain_next_to_prefixed_is_a_split(tmp_path) -> None:
 
 def test_state_file_plain_alone(tmp_path) -> None:
     (tmp_path / "outreach-ledger.jsonl").write_text("new\n", encoding="utf-8")
-    assert outreach.state_file("outreach-ledger.jsonl", tmp_path).read_text(
-        encoding="utf-8"
-    ) == "new\n"
+    assert (
+        outreach.state_file("outreach-ledger.jsonl", tmp_path).read_text(
+            encoding="utf-8"
+        )
+        == "new\n"
+    )
 
 
 def test_state_file_two_candidates_refuse_a_fresh_ledger(tmp_path) -> None:
@@ -205,7 +208,12 @@ def test_unset_canary_refuses_campaign_and_selftest(monkeypatch, tmp_path) -> No
     monkeypatch.setattr(outreach, "DEFAULT_CANARY", "")
     campaign = _call(
         "send_campaign_batch",
-        {"message": "Hallo", "recipients": ["a"], "campaign": "c", "confirm_send": True},
+        {
+            "message": "Hallo",
+            "recipients": ["a"],
+            "campaign": "c",
+            "confirm_send": True,
+        },
     )
     assert campaign["status"] == "canary_not_configured"
     assert _call("outreach_selftest", {})["status"] == "canary_not_configured"

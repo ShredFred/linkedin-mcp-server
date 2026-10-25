@@ -995,6 +995,7 @@ class TestClassifyLink:
             "search_results",
         )
         assert [r["url"] for r in references] == ["/messaging/thread/2-abc123/"]
+
     @pytest.mark.parametrize("section", ["inbox", "search_results"])
     @pytest.mark.parametrize(
         "path",

@@ -8,6 +8,7 @@ import codecs
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 import contextlib
+import ctypes
 import errno
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -29,7 +30,7 @@ from linkedin_mcp_server.no_console import (
 import tempfile
 import threading
 import time
-from typing import Any, NoReturn, TextIO, TypeVar
+from typing import Any, NoReturn, TextIO, TypeVar, cast
 from urllib.parse import urlsplit
 
 from fastmcp import Context
@@ -2170,10 +2171,10 @@ def _create_installer_temporary_root() -> _InstallerTemporaryRoot:
                 from linkedin_mcp_server.windows_acl import close_directory_pin
 
                 with contextlib.suppress(OSError, PrivateStateError):
-                    close_directory_pin(pin)
+                    close_directory_pin(cast("ctypes.c_void_p", pin))
             else:
                 with contextlib.suppress(OSError):
-                    os.close(pin)
+                    os.close(cast(int, pin))
         # No pinned identity means recursive cleanup cannot be aimed safely.
         # Removing only an empty directory cannot consume substituted contents.
         with contextlib.suppress(OSError):
@@ -2199,10 +2200,10 @@ def _close_installer_temporary_root_pin(
         from linkedin_mcp_server.windows_acl import close_directory_pin
 
         with contextlib.suppress(OSError, PrivateStateError):
-            close_directory_pin(pin)
+            close_directory_pin(cast("ctypes.c_void_p", pin))
     else:
         with contextlib.suppress(OSError):
-            os.close(pin)
+            os.close(cast(int, pin))
 
 
 def _remove_installer_temporary_root(temporary_root: _InstallerTemporaryRoot) -> None:

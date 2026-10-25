@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from value_assertions import require_value
+
 import pytest
 
 from linkedin_mcp_server import ext_outreach as outreach
@@ -22,7 +24,10 @@ def codes(findings):
 
 # (1) allow_repeat only for the canary
 def test_allow_repeat_refused_for_real_person():
-    assert repeat_refusal("max-mustermann", True)["status"] == "repeat_not_allowed"
+    assert (
+        require_value(repeat_refusal("max-mustermann", True))["status"]
+        == "repeat_not_allowed"
+    )
 
 
 def test_allow_repeat_allowed_for_canary_and_irrelevant_without_flag():
@@ -33,13 +38,19 @@ def test_allow_repeat_allowed_for_canary_and_irrelevant_without_flag():
 # (2) edit: length, Cf characters, strict Calendly
 def test_edit_too_long_utf16():
     # 4001 emojis = 8002 UTF-16 units, only 4001 code points.
-    assert precheck_edit("\U0001f600" * 4001)["status"] == "message_too_long"
+    assert (
+        require_value(precheck_edit("\U0001f600" * 4001))["status"]
+        == "message_too_long"
+    )
     assert precheck_edit("\U0001f600" * 4000) is None
 
 
 @pytest.mark.parametrize("cf", ["\u2060", "\u00ad", "\u061c", "\u2062", "\u0085"])
 def test_edit_hidden_format_char(cf):
-    assert precheck_edit(f"Guten Tag{cf} Herr Maier")["status"] == "invalid_message"
+    assert (
+        require_value(precheck_edit(f"Guten Tag{cf} Herr Maier"))["status"]
+        == "invalid_message"
+    )
 
 
 def test_edit_keeps_emoji_joiners():
@@ -58,21 +69,24 @@ def test_edit_keeps_emoji_joiners():
 )
 def test_edit_strict_calendly(url):
     refusal = precheck_edit(f"Termin: {url}")
-    assert refusal["status"] == "content_check_failed"
-    assert "calendly_wrong_account" in codes(refusal["findings"])
+    assert require_value(refusal)["status"] == "content_check_failed"
+    assert "calendly_wrong_account" in codes(require_value(refusal)["findings"])
 
 
 def test_edit_good_calendly_and_bare_www():
     assert precheck_edit(f"Termin: {GOOD_CAL}. Mehr auf www.example.com") is None
-    assert (
-        precheck_edit("Termin: https://www.calendly.com/acme_jane-doe")
-        is None
-    )
+    assert precheck_edit("Termin: https://www.calendly.com/acme_jane-doe") is None
 
 
 def test_edit_bare_shortener_and_bare_calendly():
-    assert precheck_edit("siehe bit.ly/abc")["status"] == "content_check_failed"
-    assert precheck_edit("siehe calendly.com/acme")["status"] == "content_check_failed"
+    assert (
+        require_value(precheck_edit("siehe bit.ly/abc"))["status"]
+        == "content_check_failed"
+    )
+    assert (
+        require_value(precheck_edit("siehe calendly.com/acme"))["status"]
+        == "content_check_failed"
+    )
 
 
 # (3) check_links on host boundaries
@@ -100,27 +114,33 @@ def test_check_links_calendly_strict():
 
 # InMail precheck: subject and body
 def test_inmail_subject_cf_char():
-    assert precheck_inmail("max", "Hallo\u2060", "Text")["status"] == "invalid_subject"
+    assert (
+        require_value(precheck_inmail("max", "Hallo\u2060", "Text"))["status"]
+        == "invalid_subject"
+    )
 
 
 def test_inmail_body_cf_and_bare_shortener():
     assert (
-        precheck_inmail("max", "Betreff", "Text\u2060")["status"] == "invalid_message"
+        require_value(precheck_inmail("max", "Betreff", "Text\u2060"))["status"]
+        == "invalid_message"
     )
     assert (
-        precheck_inmail("max", "Betreff", "siehe t.co/x")["status"]
+        require_value(precheck_inmail("max", "Betreff", "siehe t.co/x"))["status"]
         == "content_check_failed"
     )
 
 
 def test_inmail_subject_link_and_placeholder():
     assert (
-        precheck_inmail("max", "Termin calendly.com/acme", "Text")["status"]
+        require_value(precheck_inmail("max", "Termin calendly.com/acme", "Text"))[
+            "status"
+        ]
         == "content_check_failed"
     )
-    assert precheck_inmail("max", "Hallo {vorname}", "Text")["status"] == (
-        "content_check_failed"
-    )
+    assert require_value(precheck_inmail("max", "Hallo {vorname}", "Text"))[
+        "status"
+    ] == ("content_check_failed")
 
 
 def test_inmail_ok():
@@ -145,6 +165,6 @@ def test_credit_refusal(credits, status):
 
 
 def test_check_outgoing_http_refused():
-    assert check_outgoing("http://example.com", max_utf16=100)["status"] == (
-        "content_check_failed"
-    )
+    assert require_value(check_outgoing("http://example.com", max_utf16=100))[
+        "status"
+    ] == ("content_check_failed")

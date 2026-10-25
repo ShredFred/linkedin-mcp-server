@@ -7,6 +7,10 @@ read-back attempt). Nothing here talks to LinkedIn.
 
 from __future__ import annotations
 
+from linkedin_mcp_server.linkedin.navigation import PageNavigator
+from linkedin_mcp_server.linkedin.session import PageSession
+from typing import cast
+
 from typing import Any
 
 import pytest
@@ -54,7 +58,10 @@ class ScriptPage:
         if script is oc.DISCARD_PROMPT_JS:
             assert "posten" in arg["post"]
             self.prompt_clicks += 1
-            return {"clicked": self.prompt_click, "count": 1 if self.prompt_click else 0}
+            return {
+                "clicked": self.prompt_click,
+                "count": 1 if self.prompt_click else 0,
+            }
         raise AssertionError("unexpected script")
 
 
@@ -122,8 +129,15 @@ def test_short_shared_opening_does_not_match_untruncated_card() -> None:
 
 @pytest.mark.parametrize(
     ("label", "seconds"),
-    [("Gerade eben", 0), ("5 Min.", 300), ("2 Std.", 7200), ("3h", 10800),
-     ("1 Tag", 86400), ("2d", 172800), ("1 Wo.", 604800)],
+    [
+        ("Gerade eben", 0),
+        ("5 Min.", 300),
+        ("2 Std.", 7200),
+        ("3h", 10800),
+        ("1 Tag", 86400),
+        ("2d", 172800),
+        ("1 Wo.", 604800),
+    ],
 )
 def test_card_age(label: str, seconds: int) -> None:
     assert oc.card_age_seconds(card("x", age=label)["text"]) == seconds
@@ -177,7 +191,9 @@ async def test_success_toast_urn_is_kept_when_feed_lags() -> None:
 
 @pytest.mark.asyncio
 async def test_old_identical_post_does_not_verify_a_new_one() -> None:
-    page = ScriptPage([CLOSED], [[card("Kommentar", "urn:li:activity:9"), card(TEXT, age="1 Wo.")]])
+    page = ScriptPage(
+        [CLOSED], [[card("Kommentar", "urn:li:activity:9"), card(TEXT, age="1 Wo.")]]
+    )
     r = await decide(page, Env())
     assert r["status"] == "posted_unverified"
 
@@ -316,7 +332,9 @@ class Nav:
 async def test_identical_live_post_refuses_publish_before_composer() -> None:
     page = ComposerPage([card(TEXT, age="3 Std.")])
     nav = Nav()
-    r = await ExtPostComposer(Session(page), nav).create_post(  # type: ignore[arg-type]
+    r = await ExtPostComposer(
+        cast("PageSession", Session(page)), cast("PageNavigator", nav)
+    ).create_post(  # type: ignore[arg-type]
         TEXT, image_path=None, confirm_post=True
     )
     assert r["status"] == "duplicate_live" and r["posted"] is False
@@ -330,7 +348,9 @@ async def test_identical_live_post_refuses_publish_before_composer() -> None:
 @pytest.mark.asyncio
 async def test_verify_post_finds_and_reports_url() -> None:
     page = ComposerPage([card("anders", "urn:li:activity:1"), card(TEXT, age="2 Tage")])
-    r = await ExtPostComposer(Session(page), Nav()).verify_post(TEXT)  # type: ignore[arg-type]
+    r = await ExtPostComposer(
+        cast("PageSession", Session(page)), cast("PageNavigator", Nav())
+    ).verify_post(TEXT)  # type: ignore[arg-type]
     assert r["status"] == "found"
     assert r["activity_id"] == URN.rsplit(":", 1)[1]
     assert r["age_seconds"] == 172800
@@ -339,7 +359,9 @@ async def test_verify_post_finds_and_reports_url() -> None:
 @pytest.mark.asyncio
 async def test_verify_post_not_found_is_read_only() -> None:
     page = ComposerPage([card("anders")])
-    r = await ExtPostComposer(Session(page), Nav()).verify_post(TEXT, wait=True)  # type: ignore[arg-type]
+    r = await ExtPostComposer(
+        cast("PageSession", Session(page)), cast("PageNavigator", Nav())
+    ).verify_post(TEXT, wait=True)  # type: ignore[arg-type]
     assert r["status"] == "not_found" and r["post_url"] is None
     assert r["attempts"] == len(oc.READBACK_WAITS)
     assert not page.clicked
@@ -347,9 +369,11 @@ async def test_verify_post_not_found_is_read_only() -> None:
 
 # Live 2026-10-12: card text starts with header chrome, the post follows the age.
 def test_card_body_skips_header_chrome():
-    card = ("Feed-Beitrag\nBoosten Sie diesen Beitrag\nErika Muster\n• Sie\n"
-            "Wir helfen Herstellern\nIhre Serviceleistungen anzeigen\n2 Std.\n"
-            "Morgen geht es los: Ab Dienstag bin ich auf dem HärtereiKongress in Köln.")
+    card = (
+        "Feed-Beitrag\nBoosten Sie diesen Beitrag\nErika Muster\n• Sie\n"
+        "Wir helfen Herstellern\nIhre Serviceleistungen anzeigen\n2 Std.\n"
+        "Morgen geht es los: Ab Dienstag bin ich auf dem HärtereiKongress in Köln."
+    )
     assert oc.card_body(card).startswith("Morgen geht es los")
 
 
@@ -368,10 +392,20 @@ def test_cards_js_scans_all_attributes_and_encoded_urns():
     assert "acts(p.outerHTML).size > 1" in js
 
 
-
 async def test_read_activity_waits_for_cards_to_render():
     # Live 2026-10-12: the first evaluate after navigation returned no card.
-    answers = iter([[], [], [{"urn": "urn:li:activity:7515394313292390400", "text": "2 Std.\nHallo Welt Beitrag"}]])
+    answers = iter(
+        [
+            [],
+            [],
+            [
+                {
+                    "urn": "urn:li:activity:7515394313292390400",
+                    "text": "2 Std.\nHallo Welt Beitrag",
+                }
+            ],
+        ]
+    )
 
     class Page:
         async def evaluate(self, js, arg=None):
@@ -385,7 +419,15 @@ async def test_read_activity_waits_for_cards_to_render():
     async def navigate(url):
         return None
 
-    rb = await oc.read_activity(Page(), navigate, sleep, "Hallo Welt Beitrag", "u", waits=(0.0,), want_fresh=False)
+    rb = await oc.read_activity(
+        Page(),
+        navigate,
+        sleep,
+        "Hallo Welt Beitrag",
+        "u",
+        waits=(0.0,),
+        want_fresh=False,
+    )
     assert rb["found"] and rb["urn"].endswith("7515394313292390400")
     assert slept.count(oc.CARD_RENDER_INTERVAL) == 2
 
@@ -400,7 +442,9 @@ async def test_resolve_me_uses_the_redirected_slug() -> None:
     async def navigate(u):
         p.url = "https://www.linkedin.com/in/erika-muster-0001/"
 
-    got = await oc.resolve_me(p, navigate, "https://www.linkedin.com/in/me/recent-activity/all/")
+    got = await oc.resolve_me(
+        p, navigate, "https://www.linkedin.com/in/me/recent-activity/all/"
+    )
     assert got == "https://www.linkedin.com/in/erika-muster-0001/recent-activity/all/"
 
 
@@ -413,7 +457,9 @@ async def test_resolve_me_leaves_page_urls_alone() -> None:
     assert await oc.resolve_me(object(), navigate, u) == u
 
 
-@pytest.mark.parametrize("label", ["2. Okt.", "9. Dez. 2025", "20. Mai", "Oct 2", "Dec 9, 2025"])
+@pytest.mark.parametrize(
+    "label", ["2. Okt.", "9. Dez. 2025", "20. Mai", "Oct 2", "Dec 9, 2025"]
+)
 def test_dated_card_is_older_than_the_duplicate_window(label: str) -> None:
     # Live 2026-10-12: cards older than a week show a date, not "3 Std.".
     age = oc.card_age_seconds(f"Erika Muster\n{label}\nText")
@@ -421,7 +467,10 @@ def test_dated_card_is_older_than_the_duplicate_window(label: str) -> None:
 
 
 def test_card_body_after_a_date() -> None:
-    assert oc.card_body("Feed-Beitrag\nBoosten\n2. Okt.\nIn knapp zwei Wochen") == "In knapp zwei Wochen"
+    assert (
+        oc.card_body("Feed-Beitrag\nBoosten\n2. Okt.\nIn knapp zwei Wochen")
+        == "In knapp zwei Wochen"
+    )
 
 
 def test_halle_number_is_not_a_date() -> None:

@@ -79,7 +79,9 @@ def state_file(name: str, base: Path | None = None) -> Path:
         return path
     if len(legacy) > 1:
         names = ", ".join(p.name for p in legacy)
-        raise RuntimeError(f"{path} is missing and several old state files exist: {names}")
+        raise RuntimeError(
+            f"{path} is missing and several old state files exist: {names}"
+        )
     return legacy[0] if legacy else path
 
 
@@ -412,8 +414,12 @@ PACE_BUDGETS: dict[str, dict[str, int]] = {
 # (local date) inclusive and falls back to PACE_BUDGETS by itself afterwards;
 # nothing needs to be reverted by hand.
 PACE_TEMP_RAISES: dict[str, dict[str, Any]] = {
-    "search": {"day": 200, "week": 1100, "until": "2026-11-03",
-               "reason": "operator 2026-10-21: extended for the event backfill"},
+    "search": {
+        "day": 200,
+        "week": 1100,
+        "until": "2026-11-03",
+        "reason": "operator 2026-10-21: extended for the event backfill",
+    },
 }
 
 
@@ -720,7 +726,7 @@ class Pacer:
                     continue
                 events.append(
                     (
-                        row.get("action"),
+                        str(row.get("action") or ""),
                         counted_time(row),
                         _count(row),
                     )
@@ -1152,7 +1158,7 @@ def sent_messages(
     # A row without a readable timestamp cannot be aged or ordered; it is
     # skipped here (and counted by skipped_undated) instead of crashing the list.
     rows = [r for r in rows if row_time(r) is not None]
-    rows.sort(key=lambda r: row_time(r), reverse=True)  # type: ignore[arg-type,return-value]
+    rows.sort(key=counted_time, reverse=True)
     return rows
 
 

@@ -55,7 +55,9 @@ logger = logging.getLogger(__name__)
 MODES = ("draft", "schedule", "publish")
 
 PAGE_POSTS_URL = "https://www.linkedin.com/company/{page_id}/posts/?feedView=all"
-ADMIN_POSTS_URL = "https://www.linkedin.com/company/{page_id}/admin/page-posts/published/"
+ADMIN_POSTS_URL = (
+    "https://www.linkedin.com/company/{page_id}/admin/page-posts/published/"
+)
 
 # Opens the page composer from the admin view. Text, not aria-label.
 _START_WORDS = words("start_post")
@@ -431,7 +433,11 @@ def _dry_media_check(
         }
     for i, m in enumerate(items):
         if not Path(m["path"]).expanduser().is_file():
-            return [], {"status": "media_invalid_path", "index": i, "path": str(m["path"])}
+            return [], {
+                "status": "media_invalid_path",
+                "index": i,
+                "path": str(m["path"]),
+            }
     return items, None
 
 
@@ -465,7 +471,9 @@ class ExtCompanyPostComposer:
                 "tag": tag,
                 "scope": scope,
                 "anchor": anchor,
-                "anchor_words": COMPOSER_WORDS if anchor_words is None else anchor_words,
+                "anchor_words": COMPOSER_WORDS
+                if anchor_words is None
+                else anchor_words,
             },
         )
 
@@ -477,7 +485,9 @@ class ExtCompanyPostComposer:
                 await self._page.click('[data-ext-company="discard"]')
                 await asyncio.sleep(1.0)
                 # A discard prompt may appear; confirm it, never a post button.
-                again = await self._mark("discard2", words=["verwerfen", "discard"], scope="document")
+                again = await self._mark(
+                    "discard2", words=["verwerfen", "discard"], scope="document"
+                )
                 if again.get("count") == 1:
                     await self._page.click('[data-ext-company="discard2"]')
                 result["cleanup"] = "discarded"
@@ -510,8 +520,12 @@ class ExtCompanyPostComposer:
 
     async def _author_ok(self, page_name: str) -> dict[str, Any]:
         return await self._page.evaluate(
-            _AUTHOR_JS, {"name": page_name, "commit_words": COMPOSER_WORDS,
-             "suffix_words": words("author_suffix")}
+            _AUTHOR_JS,
+            {
+                "name": page_name,
+                "commit_words": COMPOSER_WORDS,
+                "suffix_words": words("author_suffix"),
+            },
         )
 
     async def create_company_post(
@@ -681,7 +695,9 @@ class ExtCompanyPostComposer:
                 # confirm -- that is how a 15:00 request became 14:45.
                 want_time = filled.get("want_time") or clock
                 expand = await self._mark(
-                    "time-expand", labels=_EXPAND_TIME_LABELS, anchor="input",
+                    "time-expand",
+                    labels=_EXPAND_TIME_LABELS,
+                    anchor="input",
                     anchor_words=_SCHEDULE_NEXT_WORDS,
                 )
                 if expand.get("count") != 1:
@@ -784,10 +800,10 @@ class ExtCompanyPostComposer:
         # 5. Image. A dry run never uploads: an attached image cannot be taken
         #    out again and LinkedIn restores it as a draft.
         if image is not None:
-            media = await self._mark("media", labels=_MEDIA_LABELS)
-            if media.get("count") != 1:
+            media_control = await self._mark("media", labels=_MEDIA_LABELS)
+            if media_control.get("count") != 1:
                 result["status"] = "media_button_unavailable"
-                result["found"] = media
+                result["found"] = media_control
                 await self._discard(result)
                 return result
             if not confirm:
@@ -799,7 +815,9 @@ class ExtCompanyPostComposer:
                 chooser = await info.value
                 await chooser.set_files(str(image))
                 await self._session.delay(6.0)
-                nxt = await self._mark("media-next", words=_NEXT_WORDS, scope="document")
+                nxt = await self._mark(
+                    "media-next", words=_NEXT_WORDS, scope="document"
+                )
                 if nxt.get("count") != 1:
                     result["status"] = "image_editor_stuck"
                     result["found"] = nxt

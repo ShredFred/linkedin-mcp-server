@@ -279,7 +279,10 @@ def _test_launches_an_installed_browser(request) -> bool:
     # browser_* marker: a missing install must fail, not skip, so it cannot opt
     # into the DOM skip path. It still needs the account cache after HOME moves.
     path = getattr(request.node, "path", None)
-    return path is not None and path.name == "test_browser_containment.py"
+    return path is not None and path.name in {
+        "test_browser_containment.py",
+        "test_windows_browser_launch_evidence.py",
+    }
 
 
 @pytest.fixture(autouse=True)

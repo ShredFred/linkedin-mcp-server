@@ -220,7 +220,10 @@ def check_outgoing(text: str, *, max_utf16: int) -> dict[str, Any] | None:
     if has_markup(text):
         # Messages, InMails and edits carry no @-mention entity; mention
         # markup would arrive as literal brackets.
-        return {"status": "mention_not_supported_in_messages", "message": "LinkedIn messages carry no @-mentions; write the name as plain text."}
+        return {
+            "status": "mention_not_supported_in_messages",
+            "message": "LinkedIn messages carry no @-mentions; write the name as plain text.",
+        }
     if any(hidden_format_char(c) for c in text or ""):
         return {
             "status": "invalid_message",

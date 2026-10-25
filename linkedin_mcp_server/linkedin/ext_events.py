@@ -127,7 +127,9 @@ def place_facts(place: str | None) -> dict[str, Any]:
     return {"is_online": False, "country": country}
 
 
-_BADGE_RE = re.compile(r"^(Organisiert|Organized|Organised|Veranstalter|Organizer)$", re.I)
+_BADGE_RE = re.compile(
+    r"^(Organisiert|Organized|Organised|Veranstalter|Organizer)$", re.I
+)
 
 
 def parse_event_card(lines: list[str]) -> dict[str, Any]:
@@ -231,9 +233,25 @@ _MONTH_RE = re.compile(r"^([A-Za-zäöüÄÖÜ]+)\s+(\d{4})$")
 
 _DAY_MONTH_RE = re.compile(r"(\d{1,2})\.?\s+([A-Za-zäÄ]{3,9})\.?(?:\s+(\d{4}))?")
 _MONTH_DAY_RE = re.compile(r"\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:,\s*(\d{4}))?")
-_MONTH_ABBR = {"jan": 1, "feb": 2, "mär": 3, "mrz": 3, "mar": 3, "apr": 4, "mai": 5,
-               "may": 5, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "okt": 10, "oct": 10,
-               "nov": 11, "dez": 12, "dec": 12}
+_MONTH_ABBR = {
+    "jan": 1,
+    "feb": 2,
+    "mär": 3,
+    "mrz": 3,
+    "mar": 3,
+    "apr": 4,
+    "mai": 5,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "okt": 10,
+    "oct": 10,
+    "nov": 11,
+    "dez": 12,
+    "dec": 12,
+}
 
 
 def date_text_past(date_text: str | None, today: Any = None) -> bool | None:

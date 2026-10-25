@@ -7,6 +7,9 @@ detection and the LinkedIn host assertion.
 
 from __future__ import annotations
 
+from linkedin_mcp_server.linkedin.session import PageSession
+from typing import cast
+
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -49,7 +52,9 @@ def _page(responses: list[tuple[str, int]]):
 
 def _composer(page):
     session = SimpleNamespace(page=page, check_rate_limit=AsyncMock())
-    return ExtPostComposer(session, PageNavigator(session))  # type: ignore[arg-type]
+    return ExtPostComposer(
+        cast("PageSession", session), PageNavigator(cast("PageSession", session))
+    )  # type: ignore[arg-type]
 
 
 @pytest.fixture

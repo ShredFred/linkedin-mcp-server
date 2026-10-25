@@ -374,7 +374,9 @@ class ExtPostComposer:
         )
         return {**result, **decided}
 
-    async def find_live(self, text: str, *, url: str = RECENT_ACTIVITY_URL) -> dict[str, Any]:
+    async def find_live(
+        self, text: str, *, url: str = RECENT_ACTIVITY_URL
+    ) -> dict[str, Any]:
         """Read-only: is this text in recent activity? (one read, no retries)."""
         rb = await outcome.read_activity(
             self._page,
@@ -405,7 +407,9 @@ class ExtPostComposer:
             "status": "found" if hit else "not_found",
             "found": bool(hit),
             "post_url": (hit or {}).get("post_url"),
-            "activity_id": (hit.get("urn") or "").rsplit(":", 1)[-1] or None if hit else None,
+            "activity_id": (hit.get("urn") or "").rsplit(":", 1)[-1] or None
+            if hit
+            else None,
             "age_seconds": (hit or {}).get("age_seconds"),
             "matches": rb["matches"],
             "attempts": rb["attempts"],

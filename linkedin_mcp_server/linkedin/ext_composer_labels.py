@@ -23,7 +23,10 @@ LABELS: dict[str, dict[str, list[str]]] = {
     },
     "next": {"de": ["weiter", "fertig"], "en": ["next", "done"]},
     "close": {"de": ["schließen", "verwerfen"], "en": ["close", "dismiss", "discard"]},
-    "start_post_media": {"de": ["mediendatei hinzufügen", "medieninhalte", "foto hinzufügen"], "en": ["add media"]},
+    "start_post_media": {
+        "de": ["mediendatei hinzufügen", "medieninhalte", "foto hinzufügen"],
+        "en": ["add media"],
+    },
     "discard": {"de": ["verwerfen", "änderungen verwerfen"], "en": ["discard"]},
     "save": {
         "de": ["speichern", "änderungen speichern"],
@@ -33,7 +36,13 @@ LABELS: dict[str, dict[str, list[str]]] = {
     # measured 2026-10-09 (de): "Mediendatei hinzufügen"
     "media": {
         # measured: "Medieninhalte" (member), "Mediendatei hinzufügen" (page)
-        "de": ["mediendatei hinzufügen", "medieninhalte", "medien", "foto", "foto hinzufügen"],
+        "de": [
+            "mediendatei hinzufügen",
+            "medieninhalte",
+            "medien",
+            "foto",
+            "foto hinzufügen",
+        ],
         "en": ["add media", "media", "photo", "add a photo"],
     },
     "video": {"de": ["video hinzufügen", "video"], "en": ["add a video", "video"]},
@@ -76,7 +85,11 @@ LABELS: dict[str, dict[str, list[str]]] = {
     # Page composer (measured 2026-10-09, de): schedule clock, its commit
     # "Planen", the time list, the draft prompt.
     "schedule": {
-        "de": ["termin für beitrag festlegen", "termin fuer beitrag festlegen", "beitrag planen"],
+        "de": [
+            "termin für beitrag festlegen",
+            "termin fuer beitrag festlegen",
+            "beitrag planen",
+        ],
         "en": ["schedule post"],
     },
     "schedule_commit": {"de": ["planen"], "en": ["schedule"]},
@@ -86,10 +99,22 @@ LABELS: dict[str, dict[str, list[str]]] = {
         "en": ["save as draft", "save draft"],
     },
     # Own posts and comments: menu entries and the delete confirmation.
-    "edit_post": {"de": ["beitrag bearbeiten", "bearbeiten"], "en": ["edit post", "edit"]},
-    "delete_post": {"de": ["beitrag löschen", "löschen"], "en": ["delete post", "delete"]},
-    "edit_comment": {"de": ["kommentar bearbeiten", "bearbeiten"], "en": ["edit comment", "edit"]},
-    "delete_comment": {"de": ["kommentar löschen", "löschen"], "en": ["delete comment", "delete"]},
+    "edit_post": {
+        "de": ["beitrag bearbeiten", "bearbeiten"],
+        "en": ["edit post", "edit"],
+    },
+    "delete_post": {
+        "de": ["beitrag löschen", "löschen"],
+        "en": ["delete post", "delete"],
+    },
+    "edit_comment": {
+        "de": ["kommentar bearbeiten", "bearbeiten"],
+        "en": ["edit comment", "edit"],
+    },
+    "delete_comment": {
+        "de": ["kommentar löschen", "löschen"],
+        "en": ["delete comment", "delete"],
+    },
     "confirm_delete": {
         "de": ["löschen", "beitrag löschen", "kommentar löschen"],
         "en": ["delete", "delete post", "delete comment"],

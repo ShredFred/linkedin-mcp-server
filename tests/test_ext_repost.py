@@ -3,6 +3,12 @@ and the ledger around it. No browser, no network."""
 
 from __future__ import annotations
 
+from linkedin_mcp_server.linkedin.navigation import PageNavigator
+from linkedin_mcp_server.linkedin.session import PageSession
+from typing import cast
+
+from value_assertions import require_value
+
 import asyncio
 
 import pytest
@@ -53,7 +59,7 @@ def test_pick_needs_exactly_one():
     entry, has_undo = rp.pick_entry(
         [{"index": 0, "text": UNDO_DE}, {"index": 1, "text": THOUGHTS_DE}], "undo"
     )
-    assert entry["index"] == 0 and has_undo
+    assert require_value(entry)["index"] == 0 and has_undo
 
 
 @pytest.mark.parametrize("items", [None, "x", [None, 3, "a"], [{"text": None}]])
@@ -117,12 +123,12 @@ class _Session:
 
 
 def _reposter(page):
-    r = rp.ExtReposter(_Session(page), None)
+    r = rp.ExtReposter(cast("PageSession", _Session(page)), cast("PageNavigator", None))
 
     async def goto(url):
         page.clicks.append("goto")
 
-    r._goto = goto
+    setattr(r, "_goto", goto)
     return r
 
 
@@ -225,6 +231,7 @@ def _fake(monkeypatch, result=None, exc=None, clicked=True):
             self.repost_clicked = clicked
             if exc is not None:
                 raise exc
+            assert result is not None
             return dict(result)
 
     async def ready(ctx, tool_name=None):

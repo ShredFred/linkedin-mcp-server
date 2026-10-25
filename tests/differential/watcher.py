@@ -1082,7 +1082,7 @@ class Sampler:
         if os.name != "nt" or self._open is not psutil.Process:
             return None
         try:
-            return dict(psutil._psplatform.ppid_map())
+            return dict(getattr(psutil._psplatform, "ppid_map")())
         except Exception:  # noqa: BLE001 - fall back to asking each process
             return None
 

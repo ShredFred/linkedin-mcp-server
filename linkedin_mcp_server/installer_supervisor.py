@@ -6,9 +6,6 @@ import contextlib
 import os
 import subprocess
 import sys
-from linkedin_mcp_server.no_console import (
-    background_interpreter as _background_interpreter,
-)
 import threading
 from typing import BinaryIO
 
@@ -24,6 +21,10 @@ if not __package__:
     _PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _PACKAGE_ROOT not in sys.path:
         sys.path.append(_PACKAGE_ROOT)
+
+from linkedin_mcp_server.no_console import (  # noqa: E402
+    background_interpreter as _background_interpreter,
+)
 
 from linkedin_mcp_server.process_protocol import (  # noqa: E402
     NONCE_LENGTH,

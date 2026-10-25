@@ -84,7 +84,7 @@ def _collector(tmp_path, monkeypatch, pages):
     monkeypatch.setattr(ext_daily, "read_event_count", count)
     monkeypatch.setattr(c, "_goto", nothing)
     c.session = Session()
-    c.actions = Actions()
+    setattr(c, "actions", Actions())
     return c
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from value_assertions import require_value
+
 import json
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -79,7 +81,9 @@ def test_redirect_unwrap_with_port():
 
 
 def test_userinfo_host_is_external():
-    kind, _ = classify_link("https://www.linkedin.com@ext.example/in/ext-person/")
+    kind, _ = require_value(
+        classify_link("https://www.linkedin.com@ext.example/in/ext-person/")
+    )
     assert kind == "external"
 
 
@@ -114,9 +118,7 @@ def test_json_infinity_parses():
 
 
 def test_geo_name_nfd_resolves():
-    assert resolve_people_geo_ids("Österreich") == resolve_people_geo_ids(
-        "Österreich"
-    )
+    assert resolve_people_geo_ids("Österreich") == resolve_people_geo_ids("Österreich")
 
 
 # -- company people: reaching the target on the last round is "limit" -------

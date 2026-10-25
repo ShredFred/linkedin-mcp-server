@@ -16,6 +16,10 @@ seed. Defects in files owned by other lanes are pinned as
 
 from __future__ import annotations
 
+from linkedin_mcp_server.linkedin.navigation import PageNavigator
+from linkedin_mcp_server.linkedin.session import PageSession
+from typing import cast
+
 import asyncio
 import random
 
@@ -100,7 +104,12 @@ def test_classify_action_tolerates_null_fields_and_entries():
         }
     # one broken entry does not hide the recognisable one behind it
     assert (
-        N.classify_action([None, {"href": None}, {"href": "/messaging/compose"}])
+        N.classify_action(
+            cast(
+                "list[dict[str, str]]",
+                [None, {"href": None}, {"href": "/messaging/compose"}],
+            )
+        )
         == "message"
     )
 
@@ -111,9 +120,9 @@ def test_split_person_lines_keeps_positions_and_never_names_nothing():
         out = N.split_person_lines(lines)
         assert out["name"] is None or (isinstance(out["name"], str) and out["name"])
         assert all(isinstance(ln, str) for ln in out["rest"])
-    out = N.split_person_lines(["Ben • 2.", None, "Berlin"])
+    out = N.split_person_lines(cast("list[str]", ["Ben • 2.", None, "Berlin"]))
     assert out["name"] == "Ben" and out["rest"] == ["", "Berlin"]
-    assert N.split_person_lines([None, "Headline"])["name"] is None
+    assert N.split_person_lines(cast("list[str]", [None, "Headline"]))["name"] is None
 
 
 def _attendee_result(rng):
@@ -289,12 +298,14 @@ class _Page:
 
 def _reader(pages):
     page = _Page(pages)
-    reader = N.ExtNetworkReader(_Session(page), _Nav())
+    reader = N.ExtNetworkReader(
+        cast("PageSession", _Session(page)), cast("PageNavigator", _Nav())
+    )
 
     async def no_wait(*_a, **_k):
         return {"items": 1, "settled": 1}
 
-    reader._wait_for_actions = no_wait
+    setattr(reader, "_wait_for_actions", no_wait)
     return reader
 
 
@@ -362,7 +373,7 @@ def _collector(tmp_path, monkeypatch, reactors, comments):
 
     c = ext_daily.Collector(Ex(), {}, tmp_path)
     c.seen = E.SeenStore(tmp_path / "seen.json")
-    c.engagement = _Engagement(reactors, comments)
+    setattr(c, "engagement", _Engagement(reactors, comments))
     return c
 
 
@@ -406,12 +417,18 @@ def test_engagers_fuzz_never_raise(tmp_path, monkeypatch):
 
 
 def test_reaction_kind_tolerates_null_entries():
-    assert E.reaction_kind([None], [None]) == "unknown"
+    assert (
+        E.reaction_kind(cast("list[str]", [None]), cast("list[str]", [None]))
+        == "unknown"
+    )
 
 
 def test_split_engager_lines_tolerates_null_line():
-    assert E.split_engager_lines([None, "Headline"])["name"] is None
-    assert E.split_engager_lines([None, "Headline"])["headline"] == "Headline"
+    assert E.split_engager_lines(cast("list[str]", [None, "Headline"]))["name"] is None
+    assert (
+        E.split_engager_lines(cast("list[str]", [None, "Headline"]))["headline"]
+        == "Headline"
+    )
 
 
 def test_engager_key_anonymous_entries_never_collide():

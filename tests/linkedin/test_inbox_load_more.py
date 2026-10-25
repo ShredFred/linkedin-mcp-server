@@ -7,7 +7,7 @@ cap, and an answer that is not a count.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NoReturn
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -19,7 +19,7 @@ from linkedin_mcp_server.linkedin.profile_page import ProfilePageReader
 from linkedin_mcp_server.linkedin.session import PageSession
 
 
-async def _no_target() -> None:
+async def _no_target() -> NoReturn:
     raise AssertionError("not used")
 
 

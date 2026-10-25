@@ -9,6 +9,12 @@ that found it.
 
 from __future__ import annotations
 
+from linkedin_mcp_server.linkedin.navigation import PageNavigator
+from linkedin_mcp_server.linkedin.session import PageSession
+from typing import cast
+
+from value_assertions import require_value
+
 from typing import Any
 
 import pytest
@@ -59,7 +65,10 @@ class FakeNavigator:
 
 
 def probe(page: FakePage) -> ExtComposerProbe:
-    return ExtComposerProbe(FakeSession(page), FakeNavigator(page))  # type: ignore[arg-type]
+    return ExtComposerProbe(
+        cast("PageSession", FakeSession(page)),
+        cast("PageNavigator", FakeNavigator(page)),
+    )  # type: ignore[arg-type]
 
 
 # -- only LinkedIn, and only harmless labels ----------------------------------
@@ -67,14 +76,26 @@ def probe(page: FakePage) -> ExtComposerProbe:
 
 def test_only_linkedin_is_probed() -> None:
     assert check_url("https://www.linkedin.com/company/acme-labs/") is None
-    assert check_url("https://evil.example/linkedin.com")["field"] == "url"
-    assert check_url("https://notlinkedin.com/x")["field"] == "url"
+    assert (
+        require_value(check_url("https://evil.example/linkedin.com"))["field"] == "url"
+    )
+    assert require_value(check_url("https://notlinkedin.com/x"))["field"] == "url"
 
 
 def test_a_label_that_could_publish_is_refused() -> None:
-    for label in ["Posten", "veröffentlichen", "Schedule post", "Beitrag planen",
-                  "Senden", "Löschen", "Vernetzen", "Folgen"]:
-        assert check_click_label(label)["status"] == "refused_click", label
+    for label in [
+        "Posten",
+        "veröffentlichen",
+        "Schedule post",
+        "Beitrag planen",
+        "Senden",
+        "Löschen",
+        "Vernetzen",
+        "Folgen",
+    ]:
+        assert require_value(check_click_label(label))["status"] == "refused_click", (
+            label
+        )
 
 
 def test_a_harmless_label_passes() -> None:
@@ -89,7 +110,9 @@ def test_a_harmless_label_passes() -> None:
 async def test_an_element_whose_own_wording_could_publish_is_not_clicked() -> None:
     page = FakePage(mark={"count": 1, "refused": "posten"})
     result = await probe(page).probe(
-        "https://www.linkedin.com/company/acme-labs/", click_labels=["Beitrag erstellen"], limit=10
+        "https://www.linkedin.com/company/acme-labs/",
+        click_labels=["Beitrag erstellen"],
+        limit=10,
     )
     assert result["status"] == "refused_click"
     assert not page.clicked
@@ -101,7 +124,9 @@ async def test_an_element_whose_own_wording_could_publish_is_not_clicked() -> No
 async def test_an_ambiguous_click_target_is_not_guessed_but_still_reported() -> None:
     page = FakePage(mark={"count": 3})
     result = await probe(page).probe(
-        "https://www.linkedin.com/company/acme-labs/", click_labels=["Beitrag erstellen"], limit=10
+        "https://www.linkedin.com/company/acme-labs/",
+        click_labels=["Beitrag erstellen"],
+        limit=10,
     )
     assert result["status"] == "click_target_not_unique"
     assert result["matches"] == 3
@@ -125,7 +150,9 @@ async def test_a_plain_probe_navigates_reports_and_clicks_nothing() -> None:
 async def test_one_click_at_most_and_only_the_marked_element() -> None:
     page = FakePage()
     await probe(page).probe(
-        "https://www.linkedin.com/company/acme-labs/", click_labels=["Beitrag erstellen"], limit=10
+        "https://www.linkedin.com/company/acme-labs/",
+        click_labels=["Beitrag erstellen"],
+        limit=10,
     )
     assert page.clicked == ["[data-ext-probe]"]
 
@@ -143,4 +170,4 @@ def test_type_mention_accepts_an_at_and_a_name(value) -> None:
 def test_type_mention_refuses_anything_but_a_short_name(value) -> None:
     from linkedin_mcp_server.linkedin.ext_composer_probe import check_type_mention
 
-    assert check_type_mention(value)["field"] == "type_mention"
+    assert require_value(check_type_mention(value))["field"] == "type_mention"

@@ -217,7 +217,10 @@ _IDS_JS = r"""
   };
 """
 
-_OPTION_IDS_JS = "() => {" + _IDS_JS + r"""
+_OPTION_IDS_JS = (
+    "() => {"
+    + _IDS_JS
+    + r"""
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   // Options anywhere (the tag picker has no listbox), plus the chips of an
   // already chosen person: unlabelled dialog buttons with a picture.
@@ -228,6 +231,7 @@ _OPTION_IDS_JS = "() => {" + _IDS_JS + r"""
       .slice(0, 16).map(o => ({title: (o.innerText || '').split('\n')[0],
                                role: o.getAttribute('role') || 'chip', ids: mcpIds(o)}));
 }"""
+)
 
 _EDITOR_STATE_JS = r"""() => {
   const editor = document.querySelector('[data-ext-probe-editor]');
@@ -413,12 +417,22 @@ class ExtComposerProbe:
                 arg = {
                     "close": ["schließen", "close", "dismiss", "verwerfen", "discard"],
                     "discard": ["verwerfen", "discard"],
-                    "forbidden": ["posten", "post", "senden", "send", "publish",
-                                  "veröffentlichen", "planen", "schedule"],
+                    "forbidden": [
+                        "posten",
+                        "post",
+                        "senden",
+                        "send",
+                        "publish",
+                        "veröffentlichen",
+                        "planen",
+                        "schedule",
+                    ],
                 }
                 first = await self._page.evaluate(_PROBE_DISCARD_JS, arg)
                 await asyncio.sleep(1.0)
-                out["dialogs_after_close"] = await self._page.evaluate(_DIALOG_BUTTONS_JS)
+                out["dialogs_after_close"] = await self._page.evaluate(
+                    _DIALOG_BUTTONS_JS
+                )
                 second = await self._page.evaluate(_PROBE_DISCARD_JS, arg)
                 out["cleanup"] = f"{first}+{second}"
                 await asyncio.sleep(1.0)
@@ -430,7 +444,18 @@ class ExtComposerProbe:
 
 # -- step mode (2026-10-09): media, alt text, tags, identity switch -----------
 
-STEP_ACTIONS = ("click", "upload", "type", "wait", "report", "page", "text", "html", "focushtml", "clear")
+STEP_ACTIONS = (
+    "click",
+    "upload",
+    "type",
+    "wait",
+    "report",
+    "page",
+    "text",
+    "html",
+    "focushtml",
+    "clear",
+)
 _MAX_STEPS = 12
 
 
@@ -439,8 +464,11 @@ def check_steps(steps: list[dict[str, Any]] | None) -> dict[str, Any] | None:
     if steps is None:
         return None
     if not isinstance(steps, list) or not 1 <= len(steps) <= _MAX_STEPS:
-        return {"status": "invalid_input", "field": "steps",
-                "message": f"1-{_MAX_STEPS} steps."}
+        return {
+            "status": "invalid_input",
+            "field": "steps",
+            "message": f"1-{_MAX_STEPS} steps.",
+        }
     for i, step in enumerate(steps):
         action = step.get("action") if isinstance(step, dict) else None
         if action not in STEP_ACTIONS:
@@ -456,8 +484,11 @@ def check_steps(steps: list[dict[str, Any]] | None) -> dict[str, Any] | None:
         if action == "type":
             text = str(step.get("text") or "")
             if not 1 <= len(text) <= 60 or "\n" in text:
-                return {"status": "invalid_input", "field": f"steps[{i}].text",
-                        "message": "1-60 characters, no line break (no Enter)."}
+                return {
+                    "status": "invalid_input",
+                    "field": f"steps[{i}].text",
+                    "message": "1-60 characters, no line break (no Enter).",
+                }
         if action == "wait" and not 0 < float(step.get("seconds") or 0) <= 30:
             return {"status": "invalid_input", "field": f"steps[{i}].seconds"}
     return None
@@ -554,13 +585,25 @@ async def _report(page: Any) -> Any:
     except Exception:  # noqa: BLE001 - measurement aid only
         ids = None
     if ids:
-        roots.append({"role": "option_ids", "label": "", "heading": "", "buttons": [],
-                      "inputs": [], "images": [], "progress": [], "status": [],
-                      "ids": ids})
+        roots.append(
+            {
+                "role": "option_ids",
+                "label": "",
+                "heading": "",
+                "buttons": [],
+                "inputs": [],
+                "images": [],
+                "progress": [],
+                "status": [],
+                "ids": ids,
+            }
+        )
     return roots
 
 
-async def run_probe_steps(probe: "ExtComposerProbe", url: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
+async def run_probe_steps(
+    probe: "ExtComposerProbe", url: str, steps: list[dict[str, Any]]
+) -> dict[str, Any]:
     """Run a bounded measurement script; always discards at the end."""
     page = probe._page
     out: dict[str, Any] = {"url": url, "steps": []}
@@ -573,7 +616,9 @@ async def run_probe_steps(probe: "ExtComposerProbe", url: str, steps: list[dict[
             rec: dict[str, Any] = {"action": action, "label": step.get("label")}
             if action == "upload" and step.get("input"):
                 # A dialog that shows its file input instead of a button.
-                inputs = page.locator('[role="dialog"] input[type="file"], dialog input[type="file"]')
+                inputs = page.locator(
+                    '[role="dialog"] input[type="file"], dialog input[type="file"]'
+                )
                 rec["matches"] = await inputs.count()
                 if rec["matches"] != 1:
                     rec["stopped"] = "file_input_not_unique"
@@ -588,13 +633,18 @@ async def run_probe_steps(probe: "ExtComposerProbe", url: str, steps: list[dict[
             if action in ("click", "upload"):
                 marked = await page.evaluate(
                     _MARK_NTH_JS,
-                    {"label": step["label"], "nth": int(step.get("nth") or 0),
-                     "prefix": bool(step.get("prefix")),
-                     "in_dialog": bool(step.get("in_dialog")),
-                     "forbidden": list(FORBIDDEN_CLICK)},
+                    {
+                        "label": step["label"],
+                        "nth": int(step.get("nth") or 0),
+                        "prefix": bool(step.get("prefix")),
+                        "in_dialog": bool(step.get("in_dialog")),
+                        "forbidden": list(FORBIDDEN_CLICK),
+                    },
                 )
                 rec["matches"] = marked.get("count")
-                if marked.get("refused") or marked.get("count", 0) <= int(step.get("nth") or 0):
+                if marked.get("refused") or marked.get("count", 0) <= int(
+                    step.get("nth") or 0
+                ):
                     rec["stopped"] = marked.get("refused") or "not_found"
                     rec["report"] = await _report(page)
                     out["steps"].append(rec)
@@ -610,7 +660,9 @@ async def run_probe_steps(probe: "ExtComposerProbe", url: str, steps: list[dict[
                     # Controls revealed on hover (reaction palette): hover
                     # only, never a click on the reaction button itself.
                     try:
-                        await page.locator("[data-ext-probe]").first.scroll_into_view_if_needed()
+                        await page.locator(
+                            "[data-ext-probe]"
+                        ).first.scroll_into_view_if_needed()
                     except Exception:  # noqa: BLE001 - measurement aid
                         pass
                     if step.get("force"):
@@ -668,10 +720,28 @@ async def run_probe_steps(probe: "ExtComposerProbe", url: str, steps: list[dict[
 async def _discard_everything(page: Any) -> list[str]:
     """Close dialogs and confirm the discard prompt; never anything else."""
     arg = {
-        "close": ["schließen", "close", "dismiss", "verwerfen", "discard", "abbrechen", "cancel"],
+        "close": [
+            "schließen",
+            "close",
+            "dismiss",
+            "verwerfen",
+            "discard",
+            "abbrechen",
+            "cancel",
+        ],
         "discard": ["verwerfen", "discard"],
-        "forbidden": ["posten", "post", "senden", "send", "publish", "veröffentlichen",
-                      "planen", "schedule", "speichern", "save"],
+        "forbidden": [
+            "posten",
+            "post",
+            "senden",
+            "send",
+            "publish",
+            "veröffentlichen",
+            "planen",
+            "schedule",
+            "speichern",
+            "save",
+        ],
     }
     done = []
     for _ in range(6):

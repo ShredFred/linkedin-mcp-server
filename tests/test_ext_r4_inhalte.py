@@ -6,6 +6,7 @@ test module by path.
 
 from __future__ import annotations
 
+
 import asyncio
 import importlib.util
 from pathlib import Path
@@ -20,6 +21,7 @@ from linkedin_mcp_server.tools import ext_own_content as tool
 _spec = importlib.util.spec_from_file_location(
     "_r4_own_content_fakes", Path(__file__).with_name("test_ext_own_content.py")
 )
+assert _spec is not None and _spec.loader is not None
 fx = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(fx)
 
@@ -178,10 +180,10 @@ class TestInmailCleanup:
         async def leave():
             calls.append("leave")
 
-        obj._inmail = boom
-        obj._edit = boom
-        obj._close_sn_dialog = close
-        obj._leave_edit_form = leave
+        setattr(obj, "_inmail", boom)
+        setattr(obj, "_edit", boom)
+        setattr(obj, "_close_sn_dialog", close)
+        setattr(obj, "_leave_edit_form", leave)
         return obj, calls
 
     def test_inmail_exception_before_send_closes_composer(self):
@@ -242,9 +244,9 @@ class TestCommentCleanup:
         async def clear(ed):
             cleared.append(True)
 
-        obj._goto = goto
-        obj._comment_typed = typed
-        obj._clear = clear
+        setattr(obj, "_goto", goto)
+        setattr(obj, "_comment_typed", typed)
+        setattr(obj, "_clear", clear)
         return obj, cleared
 
     def test_exception_before_submit_clears_editor(self):

@@ -207,3 +207,5 @@ Use `$env:USERPROFILE\.linkedin-mcp` when constructing the host path outside JSO
 
 - **Source**: <https://github.com/stickerdaniel/linkedin-mcp-server>
 - **License**: Apache 2.0
+
+Build contexts exclude `.pt/` temporary test state as well as local sessions and development files.

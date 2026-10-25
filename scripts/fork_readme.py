@@ -34,6 +34,9 @@ END = "<!-- FORK-EXT:END -->"
 
 # Changes to upstream behaviour that are not a tool of their own.
 BEHAVIOUR_CHANGES = [
+    "The browser-installer supervisor bootstraps its trusted package root "
+    "before importing fork helpers under isolated Python startup. Docker "
+    "builds exclude temporary test state, including filename-encoding probes.",
     "`send_message` text is stricter than upstream: besides tab and other "
     "control characters, CR (also as CRLF) and invisible or bidi control "
     "characters are refused; multi-line text uses upstream's paragraph path.",

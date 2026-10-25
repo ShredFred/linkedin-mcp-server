@@ -173,8 +173,8 @@ def test_offsite_navigation_goes_through_navigator():
 
     actions = object.__new__(ea.ExtActions)
     nav = Nav()
-    actions._navigator = nav
-    actions._session = type("S", (), {"page": Page()})()
+    setattr(actions, "_navigator", nav)
+    setattr(actions, "_session", type("S", (), {"page": Page()})())
     with pytest.raises(OffSiteNavigationError):
         asyncio.run(actions.reply(A, CID, "Text", True))
     assert nav.urls == [ea.reply_permalink(A, CID)]
@@ -301,13 +301,17 @@ def _run(dom, html, comment_id=CID, confirm=True, mode="ok"):
         page.evaluate("(m) => { document.body.dataset.mode = m; }", mode)
     )
     actions = object.__new__(ea.ExtActions)
-    actions._session = type("S", (), {"page": page, "delay": staticmethod(_no_delay)})()
+    setattr(
+        actions,
+        "_session",
+        type("S", (), {"page": page, "delay": staticmethod(_no_delay)})(),
+    )
     urls: list[str] = []
 
     async def goto(url):
         urls.append(url)
 
-    actions._goto = goto
+    setattr(actions, "_goto", goto)
     out = loop.run_until_complete(
         actions.reply(A, comment_id, "Danke, sehr hilfreich", confirm)
     )
@@ -522,3 +526,28 @@ def test_dom_collapsed_thread_cap(dom):
         page.evaluate("() => document.body.dataset.clicks")
     ) == (str(ea.REPLY_MAX_EXPANSIONS))
     assert state["replied"] is None
+
+
+@pytestmark_dom
+def test_dom_submit_excludes_reply_to_navigation_control(dom):
+    loop, page = dom
+    loop.run_until_complete(
+        page.set_content(
+            f'<div componentkey="replaceableComment_urn:li:comment:(activity:{A},{CID})" '
+            'data-ext-reply="root"><div><div id="reply-input" contenteditable="true">Text</div>'
+            '<button aria-label="Reply to Erika">Reply</button>'
+            '<button id="actual-submit">Reply</button></div></div>'
+        )
+    )
+    got = loop.run_until_complete(
+        page.evaluate(
+            "() => ("
+            + ea._REPLY_SUBMIT_JS
+            + ")(document.getElementById('reply-input'))"
+        )
+    )
+    assert got["count"] == 1
+    assert (
+        loop.run_until_complete(page.get_attribute("#actual-submit", "data-ext-reply"))
+        == "reply-submit"
+    )

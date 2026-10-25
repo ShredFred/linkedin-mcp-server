@@ -44,7 +44,7 @@ def report_rate_limit(exc: RateLimitError) -> None:
     if getattr(exc, "_mcp_rate_limit_reported", False):
         return
     try:
-        exc._mcp_rate_limit_reported = True  # type: ignore[attr-defined]
+        setattr(exc, "_mcp_rate_limit_reported", True)
     except Exception:
         pass
     if _rate_limit_recorder is None:

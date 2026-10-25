@@ -185,6 +185,7 @@ _EXCLUDED_SENTINELS = (
     "tests/.env.probe",
     "nested/deeper/.env.secret",
     ".debug/notes.md",
+    ".pt/encoding-probe",
     "CLAUDE.local.md",
     ".agents/notes.md",
     ".claude/settings.json",

@@ -77,6 +77,7 @@
 >
 > **Changed behaviour**
 >
+> - The browser-installer supervisor bootstraps its trusted package root before importing fork helpers under isolated Python startup. Docker builds exclude temporary test state, including filename-encoding probes.
 > - `send_message` text is stricter than upstream: besides tab and other control characters, CR (also as CRLF) and invisible or bidi control characters are refused; multi-line text uses upstream's paragraph path.
 > - Profile URLs are normalised in one place (`linkedin/ext_urls.py`): benign query keys by allowlist (`isSelfProfile=false`, `trk`, ...), no fragment, percent-decoded slug (umlauts), optional locale segment; the recipient stays pinned by its profile URN and anything else fails closed.
 > - `connect_with_person` reads the 2026 More menu: `pending` when the invitation is only shown there, Connect from the menu (`connect_via: more_menu`), and a distinct `follow_only` next to `connect_unavailable`.
@@ -113,6 +114,40 @@
 >
 
 <!-- FORK-EXT:END -->
+
+
+## Fork version and updates
+
+This fork integrates upstream **v4.28.0**, through
+[`7a40310`](https://github.com/stickerdaniel/linkedin-mcp-server/commit/7a40310c6beb77e7e2cea8c649f3411f96b65f94)
+(sync checked 2026-10-23). It retains the fork's guarded posting, native mentions,
+per-image alt text and photo tags, company-page actions and outreach ledger.
+Upstream's login/checkpoint/challenge routes now report authentication errors
+rather than a temporary rate limit; account restrictions remain distinct.
+Waiting for a rate-limit cooldown does not resolve an authentication challenge.
+
+Run a local checkout with its locked dependencies:
+
+```bash
+git clone https://github.com/ShredFred/linkedin-mcp-server.git
+cd linkedin-mcp-server
+uv sync --frozen
+uv run --frozen -m linkedin_mcp_server
+```
+
+Before updating an existing checkout, preserve local edits and follow the
+[upstream sync runbook](docs/upstream-sync.md). GitHub's **Sync fork** updates the
+remote repository; it does not update a local checkout or a running MCP process.
+After pulling the integrated version and syncing dependencies, restart the MCP
+connection to load the new code. The branch name itself does not select a
+package: a source launch runs the files in its configured checkout.
+
+The fork follows upstream's package version and keeps its own Git history.
+Upstream PyPI packages, plugin releases and Docker images do not include these
+fork extensions. Release workflows remain restricted to the upstream publisher;
+updating this fork does not publish a package or image. Commercial sponsor
+panels are removed by the README generator; upstream attribution and licensing
+are retained.
 
 For native mentions, pass the full current display name and the profile URN
 (`urn:li:fsd_profile:ACoA...`). For a person's multiword name followed by a

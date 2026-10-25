@@ -51,8 +51,19 @@ FRESH_SECONDS = 3600
 # The success toast and the draft prompt are recognised by text only where no
 # attribute exists: per-locale table, compared lower-cased (documented
 # exception to the locale rule, see AGENTS.md).
-DRAFT_PROMPT_WORDS = ["als entwurf speichern", "entwurf speichern", "save as draft", "save draft"]
-DISCARD_WORDS = ["verwerfen", "änderungen verwerfen", "discard", "beitrag verwerfen", "discard post"]
+DRAFT_PROMPT_WORDS = [
+    "als entwurf speichern",
+    "entwurf speichern",
+    "save as draft",
+    "save draft",
+]
+DISCARD_WORDS = [
+    "verwerfen",
+    "änderungen verwerfen",
+    "discard",
+    "beitrag verwerfen",
+    "discard post",
+]
 
 _URL_RE = re.compile(r"(https?://\S+|www\.\S+|lnkd\.in/\S+)", re.IGNORECASE)
 _HASHTAG_RE = re.compile(r"\bhashtag\s*#", re.IGNORECASE)
@@ -70,12 +81,28 @@ _DATE_RE = re.compile(
     r"(?<![\w])(?:\d{1,2}\.\s?[A-Za-z\u00c4\u00e4\u00d6\u00f6\u00dc\u00fc]{3,5}\.?(?:\s\d{4})?|[A-Z][a-z]{2}\s\d{1,2}(?:,\s\d{4})?)(?![\w])"
 )
 DATED_CARD_MIN_AGE = 8 * 86400
-_NOW_RE = re.compile(r"(?<![\w])(gerade eben|jetzt|now|just now)(?![\w])", re.IGNORECASE)
+_NOW_RE = re.compile(
+    r"(?<![\w])(gerade eben|jetzt|now|just now)(?![\w])", re.IGNORECASE
+)
 _UNIT_SECONDS = {
-    "s": 1, "sek": 1, "m": 60, "min": 60, "h": 3600, "std": 3600,
-    "d": 86400, "t": 86400, "tg": 86400, "tag": 86400, "tage": 86400,
-    "w": 604800, "wo": 604800, "mo": 2592000, "mon": 2592000,
-    "j": 31536000, "y": 31536000, "yr": 31536000,
+    "s": 1,
+    "sek": 1,
+    "m": 60,
+    "min": 60,
+    "h": 3600,
+    "std": 3600,
+    "d": 86400,
+    "t": 86400,
+    "tg": 86400,
+    "tag": 86400,
+    "tage": 86400,
+    "w": 604800,
+    "wo": 604800,
+    "mo": 2592000,
+    "mon": 2592000,
+    "j": 31536000,
+    "y": 31536000,
+    "yr": 31536000,
 }
 
 
@@ -115,9 +142,14 @@ def card_body(card_text: str, limit: int = 160) -> str:
     headline; a 160-character head of that identifies nothing. Everything
     after the first age token is the post itself."""
     raw = card_text or ""
-    m = _NOW_RE.search(raw[:600]) or _AGE_RE.search(raw[:600]) or _DATE_RE.search(raw[:600])
-    body = raw[m.end():] if m else raw
+    m = (
+        _NOW_RE.search(raw[:600])
+        or _AGE_RE.search(raw[:600])
+        or _DATE_RE.search(raw[:600])
+    )
+    body = raw[m.end() :] if m else raw
     return " ".join(body.split())[:limit]
+
 
 def card_matches(card_text: str, text: str) -> bool:
     """Does an activity card carry this post text (lossy, see module doc)?"""
@@ -331,9 +363,19 @@ async def settle(
         if verdict == "error" and errors < ERROR_POLLS:
             verdict = None
         if verdict:
-            return {**state, "toast_urn": toast_urn, "verdict": verdict, "waited": waited}
+            return {
+                **state,
+                "toast_urn": toast_urn,
+                "verdict": verdict,
+                "waited": waited,
+            }
         if waited >= timeout:
-            return {**state, "toast_urn": toast_urn, "verdict": "open", "waited": waited}
+            return {
+                **state,
+                "toast_urn": toast_urn,
+                "verdict": "open",
+                "waited": waited,
+            }
         await sleep(poll)
         waited += poll
 
@@ -355,6 +397,7 @@ async def _render_cards(page: Any, sleep: Sleep) -> list[dict[str, Any]]:
             await sleep(CARD_RENDER_INTERVAL)
     return cards
 
+
 ME_ALIAS = "/in/me/"
 _SLUG_RE = re.compile(r"/in/([^/?#]+)")
 
@@ -372,6 +415,7 @@ async def resolve_me(page: Any, navigate: Navigate, url: str) -> str:
     m = _SLUG_RE.search(str(getattr(page, "url", "") or ""))
     slug = m.group(1) if m else "me"
     return url if slug == "me" else url.replace(ME_ALIAS, f"/in/{slug}/", 1)
+
 
 async def read_activity(
     page: Any,
@@ -435,7 +479,10 @@ async def decide(
     """
     st = await settle(page, editor, sleep, timeout=settle_timeout)
     out: dict[str, Any] = {
-        "settle": {k: st.get(k) for k in ("verdict", "waited", "editor_chars", "alert", "toast_urn")},
+        "settle": {
+            k: st.get(k)
+            for k in ("verdict", "waited", "editor_chars", "alert", "toast_urn")
+        },
         "retry_safe": False,
     }
     verdict = st["verdict"]

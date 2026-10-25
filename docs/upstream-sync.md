@@ -39,3 +39,24 @@ proxy and authentication documentation stays available.
 Completion means the upstream commit is reachable in the fork history, the
 required features and guards are tested, the README is current and free of
 known promotion blocks, and the active checkout uses the integrated version.
+
+
+The upstream release workflow is bound to its original publisher repository.
+A version bump imported into this fork does not publish to upstream's PyPI or
+Docker namespace. Fork publication needs a separate, explicitly configured
+release identity; ordinary MCP updates use the source checkout and locked wrapper.
+
+
+## Current upstream integration
+
+Checked 2026-10-23: upstream v4.28.0, exact commit
+`7a40310c6beb77e7e2cea8c649f3411f96b65f94`. This integration includes five
+upstream commits after the previous sync: authentication-challenge classification,
+virtualenv/OpenTelemetry updates, attribution-check tooling and release metadata.
+Authentication challenges require the normal login flow; a cooldown is not a fix.
+The fork's independent release restriction and guarded extensions remain in place.
+
+Use a merge commit for upstream synchronization so that exact upstream commit
+remains an ancestor of the fork's main branch. Squashing the upstream merge would
+make GitHub continue to report already-integrated commits as missing. Ordinary
+feature/fix PRs retain the repository's squash workflow.

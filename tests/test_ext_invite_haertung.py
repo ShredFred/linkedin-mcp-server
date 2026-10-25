@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from linkedin_mcp_server.linkedin.session import PageSession
+from typing import cast
+
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +14,6 @@ from linkedin_mcp_server.linkedin.connection import ActionSignals
 from linkedin_mcp_server.linkedin.connection_actions import ConnectionActions
 from linkedin_mcp_server.linkedin.ext_actions import ExtActions
 from linkedin_mcp_server.linkedin.navigation import PageNavigator
-from linkedin_mcp_server.linkedin.session import PageSession
 
 
 def _probe_page(*, click_raises: bool, dialog_left: int) -> MagicMock:
@@ -19,7 +21,9 @@ def _probe_page(*, click_raises: bool, dialog_left: int) -> MagicMock:
     buttons = MagicMock()
     buttons.count = AsyncMock(return_value=3)
     button = MagicMock()
-    button.click = AsyncMock(side_effect=RuntimeError("detached") if click_raises else None)
+    button.click = AsyncMock(
+        side_effect=RuntimeError("detached") if click_raises else None
+    )
     # Upstream #1235 clicks through a handle checked for a LinkedIn document.
     button.evaluate = AsyncMock(return_value="https://www.linkedin.com/in/testuser/")
     button.dispose = AsyncMock()
@@ -48,9 +52,14 @@ def _actions(page) -> ConnectionActions:
 async def _probe(page) -> ConnectionActions:
     actions = _actions(page)
     with (
-        patch.object(actions, "_dialog_is_open", new_callable=AsyncMock, return_value=True),
         patch.object(
-            actions, "_get_premium_upsell_message", new_callable=AsyncMock, return_value=None
+            actions, "_dialog_is_open", new_callable=AsyncMock, return_value=True
+        ),
+        patch.object(
+            actions,
+            "_get_premium_upsell_message",
+            new_callable=AsyncMock,
+            return_value=None,
         ),
         patch.object(actions, "_dismiss_dialog", new_callable=AsyncMock),
     ):
@@ -94,8 +103,15 @@ async def test_follow_only_after_a_probe_that_may_have_sent_is_send_failed():
         return None
 
     with (
-        patch.object(actions, "_read_action_signals", new_callable=AsyncMock, return_value=no_invite),
-        patch.object(actions, "_open_more_menu", new_callable=AsyncMock, return_value=True),
+        patch.object(
+            actions,
+            "_read_action_signals",
+            new_callable=AsyncMock,
+            return_value=no_invite,
+        ),
+        patch.object(
+            actions, "_open_more_menu", new_callable=AsyncMock, return_value=True
+        ),
         patch.object(PageNavigator, "_navigate_to_page", new_callable=AsyncMock),
         patch.object(actions, "_probe_invite_note_limit", side_effect=probe),
     ):
@@ -129,8 +145,10 @@ def _withdraw_page(*, dialog: bool, confirm: bool) -> MagicMock:
 
 async def _withdraw(page, present):
     session = SimpleNamespace(page=page, delay=AsyncMock())
-    actions = ExtActions(session, MagicMock())
-    with patch.object(actions, "_slug_present", new_callable=AsyncMock, return_value=present) as sp:
+    actions = ExtActions(cast("PageSession", session), MagicMock())
+    with patch.object(
+        actions, "_slug_present", new_callable=AsyncMock, return_value=present
+    ) as sp:
         out = await actions.withdraw("Anna", "anna")
     return out, sp
 

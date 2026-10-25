@@ -5,6 +5,8 @@ No browser: ``_run`` is replaced by a direct call with a stub extractor.
 
 from __future__ import annotations
 
+from value_assertions import require_value
+
 import asyncio
 
 import pytest
@@ -111,7 +113,7 @@ def test_inmail_budget_rechecked_at_send(monkeypatch):
         monkeypatch.setitem(outreach.PACE_BUDGETS, "inmail", {"day": 0, "week": 0})
         return reader.target
 
-    reader.inmail_target = target
+    setattr(reader, "inmail_target", target)
     assert _inmail(monkeypatch, reader)["status"] == "pace_budget_spent"
     assert reader.calls == []
     assert not [
@@ -432,7 +434,7 @@ def test_invite_note_limit_default_200_configurable(monkeypatch, env, length, ok
     if ok:
         assert out is None or out["status"] != "note_too_long"
     else:
-        assert out["status"] == "note_too_long"
+        assert require_value(out)["status"] == "note_too_long"
 
 
 # -- 2026-09-30 round 3: every registered ext tool sits behind the guard ----
@@ -597,7 +599,7 @@ def test_connect_unknown_raw_status_blocks(monkeypatch):
     )
     assert out["result"]["status"] == "weird_new_state"
     previous = outreach.Ledger.default().already_contacted("invite", "dieter", None)
-    assert previous["status"] == "unknown"
+    assert require_value(previous)["status"] == "unknown"
 
 
 class _InboxGuess:
@@ -720,8 +722,8 @@ def _fake_inmail_reader(monkeypatch):
     async def fake_first(scope, chain, *, last=False):
         return page.send if last else page.subject
 
-    reader._wait = noop
-    reader._goto = noop
+    setattr(reader, "_wait", noop)
+    setattr(reader, "_goto", noop)
     monkeypatch.setattr(sm.ExtInmail, "_page", property(lambda s: page))
     monkeypatch.setattr(sm, "first_match", fake_first)
     monkeypatch.setattr(sm, "parse_degree", lambda t: 2)
@@ -765,11 +767,11 @@ def test_pace_lock_busy_is_a_status(monkeypatch):
     monkeypatch.setattr(
         outreach, "_file_lock", lambda path, **k: real(path, timeout=0.1)
     )
-    assert m._pace("page_read", tool="t")["status"] == "pace_lock_busy"
+    assert require_value(m._pace("page_read", tool="t"))["status"] == "pace_lock_busy"
     out = m._book_attempt(
         ledger, "message", {"attempt": "a", "kind": "message"}, tool="t"
     )
-    assert out["status"] == "pace_lock_busy"
+    assert require_value(out)["status"] == "pace_lock_busy"
     assert ledger.rows() == []
 
 
@@ -975,7 +977,7 @@ def test_edit_without_visible_menu_item_is_mismatch_not_click(monkeypatch):
     async def none(scope, chain, *, last=False):
         return None
 
-    reader._open_menu = menu
+    setattr(reader, "_open_menu", menu)
     monkeypatch.setattr(sm.ExtInmail, "_page", property(lambda s: _P()))
     monkeypatch.setattr(sm, "first_match", none)
     out = asyncio.run(
@@ -1070,8 +1072,8 @@ def test_edit_prefill_ignores_marker(monkeypatch):
     async def noop(*a, **k):
         return None
 
-    reader._open_menu = menu
-    reader._wait = noop
+    setattr(reader, "_open_menu", menu)
+    setattr(reader, "_wait", noop)
     monkeypatch.setattr(sm.ExtInmail, "_page", property(lambda s: _P()))
     monkeypatch.setattr(sm, "first_match", first)
     out = asyncio.run(
@@ -1135,9 +1137,15 @@ def test_inmail_lengths_in_utf16_units():
 
     assert utf16_len("😀") == 2
     long_subject = "😀" * (SUBJECT_MAX // 2 + 1)
-    assert precheck_inmail("dieter", long_subject, "B")["status"] == "subject_too_long"
+    assert (
+        require_value(precheck_inmail("dieter", long_subject, "B"))["status"]
+        == "subject_too_long"
+    )
     long_body = "😀" * (INMAIL_BODY_MAX // 2 + 1)
-    assert precheck_inmail("dieter", "S", long_body)["status"] == "body_too_long"
+    assert (
+        require_value(precheck_inmail("dieter", "S", long_body))["status"]
+        == "body_too_long"
+    )
 
 
 @pytest.mark.parametrize("ch", ["\x85", "\x9f", " ", " ", "​", "‎", "‏", "﻿"])
@@ -1145,8 +1153,14 @@ def test_invisible_controls_refused(ch):
     from linkedin_mcp_server.linkedin.contracts import refuse_an_invalid_message
     from linkedin_mcp_server.tools.ext_inmail import precheck_inmail
 
-    assert precheck_inmail("dieter", f"Betreff{ch}", "B")["status"] == "invalid_subject"
-    assert precheck_inmail("dieter", "S", f"Text{ch}")["status"] == "invalid_message"
+    assert (
+        require_value(precheck_inmail("dieter", f"Betreff{ch}", "B"))["status"]
+        == "invalid_subject"
+    )
+    assert (
+        require_value(precheck_inmail("dieter", "S", f"Text{ch}"))["status"]
+        == "invalid_message"
+    )
     assert refuse_an_invalid_message("dieter", f"Hallo{ch}") is not None
 
 

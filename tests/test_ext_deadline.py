@@ -18,8 +18,11 @@ No browser, no network. The deadline is applied the way FastMCP applies it
 
 from __future__ import annotations
 
-import asyncio
+from linkedin_mcp_server.linkedin.navigation import PageNavigator
+from linkedin_mcp_server.linkedin.session import PageSession
 from typing import cast
+
+import asyncio
 
 import anyio
 import pytest
@@ -186,8 +189,8 @@ def _check(out, phase, not_done):
 
 def _msg_ex(phase):
     ex = _Ex()
-    ex.message_submit_dispatched = False
-    ex.send_message = _stall(ex, "message_submit_dispatched", phase)
+    setattr(ex, "message_submit_dispatched", False)
+    setattr(ex, "send_message", _stall(ex, "message_submit_dispatched", phase))
     return ex
 
 
@@ -208,17 +211,17 @@ def test_send_message_deadline(monkeypatch, phase):
 
 def test_send_message_readback_cut_is_unverified(monkeypatch):
     ex = _Ex()
-    ex.message_submit_dispatched = False
+    setattr(ex, "message_submit_dispatched", False)
 
     async def send_message(username, message, *, confirm_send):
-        ex.message_submit_dispatched = True
+        setattr(ex, "message_submit_dispatched", True)
         return {"sent": True, "url": "https://www.linkedin.com/messaging/thread/2-a/"}
 
     async def get_conversation(**lookup):
         await anyio.Event().wait()
 
-    ex.send_message = send_message
-    ex.get_conversation = get_conversation
+    setattr(ex, "send_message", send_message)
+    setattr(ex, "get_conversation", get_conversation)
     import linkedin_mcp_server.tools.ext as m
 
     async def no_sleep(_s):
@@ -238,13 +241,13 @@ def test_send_message_readback_cut_is_unverified(monkeypatch):
 @pytest.mark.parametrize("dispatched,want", [(False, "not_sent"), (True, "unknown")])
 def test_send_message_client_cancel_by_marker(monkeypatch, dispatched, want):
     ex = _Ex()
-    ex.message_submit_dispatched = False
+    setattr(ex, "message_submit_dispatched", False)
 
     async def send_message(username, message, *, confirm_send):
-        ex.message_submit_dispatched = dispatched
+        setattr(ex, "message_submit_dispatched", dispatched)
         raise asyncio.CancelledError()
 
-    ex.send_message = send_message
+    setattr(ex, "send_message", send_message)
     _with_extractor(monkeypatch, ex)
     _cancelled(
         "send_message", linkedin_username="anna", message=TEXT, confirm_send=True
@@ -281,7 +284,7 @@ def test_real_message_sender_marker_contract():
     class S:
         page = None
 
-    sender = MessageSender(S(), None)
+    sender = MessageSender(cast("PageSession", S()), cast("PageNavigator", None))
     assert sender.submit_dispatched is False
 
 
@@ -312,8 +315,8 @@ def test_batch_stops_before_a_pause_past_the_deadline(monkeypatch):
         return None
 
     monkeypatch.setattr(m.asyncio, "sleep", no_sleep)
-    ex.send_message = send_message
-    ex.get_conversation = get_conversation
+    setattr(ex, "send_message", send_message)
+    setattr(ex, "get_conversation", get_conversation)
     _with_extractor(monkeypatch, ex)
     outreach.Ledger.default().append(
         {
@@ -344,8 +347,8 @@ def test_batch_stops_before_a_pause_past_the_deadline(monkeypatch):
 @pytest.mark.parametrize("phase", ["pre", "post"])
 def test_connect_deadline(monkeypatch, phase):
     ex = _Ex()
-    ex.invite_send_clicked = False
-    ex.connect_with_person = _stall(ex, "invite_send_clicked", phase)
+    setattr(ex, "invite_send_clicked", False)
+    setattr(ex, "connect_with_person", _stall(ex, "invite_send_clicked", phase))
     _with_extractor(monkeypatch, ex)
     out = _under_deadline(
         "connect_with_person", linkedin_username="anna", confirm_send=True
@@ -366,7 +369,7 @@ def test_create_post_deadline(monkeypatch, phase):
         clicked = False
 
     composer = Composer()
-    composer.create_post = _stall(composer, "clicked", phase)
+    setattr(composer, "create_post", _stall(composer, "clicked", phase))
     monkeypatch.setattr(m, "_composer", lambda ex: composer)
     _with_extractor(monkeypatch, _Ex())
     out = _under_deadline("create_post", text=TEXT, confirm_post=True)
@@ -387,8 +390,8 @@ def test_comment_deadline(monkeypatch, phase, reply):
         comment_submitted = False
 
     actions = Actions()
-    actions.comment = _stall(actions, "comment_submitted", phase)
-    actions.reply = _stall(actions, "comment_submitted", phase)
+    setattr(actions, "comment", _stall(actions, "comment_submitted", phase))
+    setattr(actions, "reply", _stall(actions, "comment_submitted", phase))
     monkeypatch.setattr(s2, "_actions", lambda ex: actions)
     _with_extractor(monkeypatch, _Ex())
     kwargs = {"post_url": "7300000000000000001", "text": TEXT, "confirm": True}
@@ -437,7 +440,7 @@ def test_withdraw_deadline(monkeypatch, phase):
             return [{"slug": "anna", "name": "Anna", "age_days": 30}]
 
     actions = Actions()
-    actions.withdraw = _stall(actions, "withdraw_clicked", phase)
+    setattr(actions, "withdraw", _stall(actions, "withdraw_clicked", phase))
     monkeypatch.setattr(s2, "_actions", lambda ex: actions)
     _with_extractor(monkeypatch, _Ex())
     out = _under_deadline(
@@ -462,7 +465,7 @@ def test_inmail_deadline(monkeypatch, phase):
             return {"status": "ok", "name": "Anna Muster"}
 
     reader = Reader()
-    reader.inmail = _stall(reader, "clicked", phase)
+    setattr(reader, "inmail", _stall(reader, "clicked", phase))
     monkeypatch.setattr(mi, "_reader", lambda ex: reader)
     _with_extractor(monkeypatch, _Ex())
     out = _under_deadline(
@@ -491,7 +494,7 @@ def test_edit_sent_message_deadline(monkeypatch, phase):
             }
 
     reader = Reader()
-    reader.edit = _stall(reader, "clicked", phase)
+    setattr(reader, "edit", _stall(reader, "clicked", phase))
     monkeypatch.setattr(mi, "_reader", lambda ex: reader)
     _with_extractor(monkeypatch, _Ex())
     out = _under_deadline(
@@ -528,8 +531,8 @@ def test_own_content_deadline(monkeypatch, name, kind, extra, phase):
         clicked = False
 
     reader = Reader()
-    reader.delete = _stall(reader, "clicked", phase)
-    reader.edit = _stall(reader, "clicked", phase)
+    setattr(reader, "delete", _stall(reader, "clicked", phase))
+    setattr(reader, "edit", _stall(reader, "clicked", phase))
     monkeypatch.setattr(oc, "_reader", lambda ex: reader)
     _with_extractor(monkeypatch, _Ex())
     out = _under_deadline(name, post_url="7300000000000000001", dry_run=False, **extra)

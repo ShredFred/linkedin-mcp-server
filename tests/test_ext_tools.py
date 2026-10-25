@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from linkedin_mcp_server.linkedin.navigation import PageNavigator
+from linkedin_mcp_server.linkedin.session import PageSession
+from typing import cast
+
+from value_assertions import require_value
+
 import asyncio
 from datetime import date, datetime, timedelta
 
@@ -64,9 +70,7 @@ class TestParsing:
         }
         first = split_person_lines(["Hannelore Reisinger", "• 1.", "Leitung", "Ort"])
         assert (first["degree"], first["rest"]) == (1, ["Leitung", "Ort"])
-        assert (
-            split_person_lines(["Jane Doe", "• Sie", "x"])["is_self"] is True
-        )
+        assert split_person_lines(["Jane Doe", "• Sie", "x"])["is_self"] is True
 
     def test_event_url(self):
         assert "eventAttending=%5B%227457346711301214208%22%5D" in event_attendees_url(
@@ -84,7 +88,8 @@ class TestMultiLineContract:
     @pytest.mark.parametrize("message", ["a\r\nb", "a\rb", "a\tb", "a\x7fb"])
     def test_other_controls_still_refused(self, message):
         assert (
-            refuse_an_invalid_message("alice", message)["status"] == "invalid_message"
+            require_value(refuse_an_invalid_message("alice", message))["status"]
+            == "invalid_message"
         )
 
 
@@ -205,9 +210,7 @@ class TestLedger:
         assert outreach.delivered_in_conversation(
             "Hallo John,\nhier der Link:\nhttps://x.y", conv
         )
-        assert not outreach.delivered_in_conversation(
-            "Hallo John, anderer Text", conv
-        )
+        assert not outreach.delivered_in_conversation("Hallo John, anderer Text", conv)
 
 
 def test_fork_tools_are_registered_and_tagged():
@@ -438,7 +441,9 @@ def test_event_attendee_count_waits_for_the_late_attendee_line():
             assert url == "https://www.linkedin.com/events/7457346711301214208/"
 
     out = asyncio.run(
-        ExtNetworkReader(Session(), Nav()).event_attendee_count("7457346711301214208")
+        ExtNetworkReader(
+            cast("PageSession", Session()), cast("PageNavigator", Nav())
+        ).event_attendee_count("7457346711301214208")
     )
     assert out == {"event_id": "7457346711301214208", "attendee_count": 310}
 
@@ -492,7 +497,9 @@ def test_event_page_flags_gone_and_cancelled():
     from linkedin_mcp_server.linkedin.ext_network import event_page_flags
 
     eid = "7286622235937701888"
-    assert event_page_flags(eid, f"/events/{eid}/", "Fachkongress 2025\n98 Teilnehmer") == {
+    assert event_page_flags(
+        eid, f"/events/{eid}/", "Fachkongress 2025\n98 Teilnehmer"
+    ) == {
         "gone": False,
         "cancelled": False,
     }

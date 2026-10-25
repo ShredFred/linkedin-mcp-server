@@ -589,7 +589,9 @@ class TestPeopleLocationGeoUrn:
 
     def test_multiple_ids_encoded_as_json_list(self):
         url = build_people_search_url("x", location="Germany,103883259")
-        assert url == f"{PEOPLE}keywords=x&geoUrn=%5B%22101282230%22%2C%22103883259%22%5D"
+        assert (
+            url == f"{PEOPLE}keywords=x&geoUrn=%5B%22101282230%22%2C%22103883259%22%5D"
+        )
         assert "location=" not in url
 
     @pytest.mark.parametrize(

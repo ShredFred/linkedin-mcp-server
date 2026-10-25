@@ -277,9 +277,7 @@ class SectionCapture:
             capture_plan_for_url(url, max_scrolls),
         )
 
-    async def _load_more_company_people(
-        self, max_rows: int | None
-    ) -> dict[str, Any]:
+    async def _load_more_company_people(self, max_rows: int | None) -> dict[str, Any]:
         """Click "Show more results" on a company people list, bounded.
 
         Returns ``{rows, rounds, stop}`` where ``stop`` is one of

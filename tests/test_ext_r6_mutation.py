@@ -151,7 +151,8 @@ def _inmail_reader(monkeypatch, send_raises):
     class Page(_Field):
         url = "https://www.linkedin.com/sales/inbox/1"
 
-        def locator(self, css):
+        def locator(self, *args):
+            css = args[0]
             return body if "textarea" in css else other
 
         async def evaluate(self, *_a, **_k):
@@ -159,14 +160,14 @@ def _inmail_reader(monkeypatch, send_raises):
 
     obj = object.__new__(mi.ExtInmail)
     page = Page()
-    obj._session = type("S", (), {"page": page})()
+    setattr(obj, "_session", type("S", (), {"page": page})())
 
     async def nothing(*_a, **_k):
         return None
 
-    obj._goto = nothing
-    obj._wait = nothing
-    obj._close_sn_dialog = nothing
+    setattr(obj, "_goto", nothing)
+    setattr(obj, "_wait", nothing)
+    setattr(obj, "_close_sn_dialog", nothing)
     return obj, send
 
 
@@ -204,7 +205,7 @@ def test_comment_dry_run_never_clicks_submit():
                 async def click():
                     submits.append(selector)
 
-                loc.click = click
+                setattr(loc, "click", click)
             return loc
 
     page = Page(before=[], after=[])

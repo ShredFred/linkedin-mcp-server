@@ -4,6 +4,8 @@ characters and DM length. No browser."""
 
 from __future__ import annotations
 
+from value_assertions import require_value
+
 import asyncio
 import json
 
@@ -211,7 +213,7 @@ def test_content_check_catches_bare_and_disguised_links(text):
         "Termin: https://calendly.com/acme_jane-doe/30min",
         "Termin: calendly.com/acme_jane-doe/30min",
         "Mehr unter www.example.com, z.B. die Fallstudien.",
-        "Familie \U0001f468‍\U0001f469‍\U0001f467 und Flagge \U0001f3f4\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f",
+        "Familie \U0001f468\u200d\U0001f469\u200d\U0001f467 und Flagge \U0001f3f4\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f",
     ],
 )
 def test_content_check_lets_ordinary_text_pass(text):
@@ -220,12 +222,18 @@ def test_content_check_lets_ordinary_text_pass(text):
     assert check_message_content(text) is None
 
 
-@pytest.mark.parametrize("hidden", ["؜", "⁠", "­", "⁤"])
+@pytest.mark.parametrize("hidden", ["\u061c", "\u2060", "\u00ad", "\u2064"])
 def test_hidden_format_characters_refused_everywhere(hidden):
     from linkedin_mcp_server.tools.ext import check_invite_note, check_message_content
 
-    assert check_message_content(f"Hallo{hidden}Welt")["status"] == "invalid_message"
-    assert check_invite_note(f"Hallo{hidden}Welt")["status"] == "invalid_note"
+    assert (
+        require_value(check_message_content(f"Hallo{hidden}Welt"))["status"]
+        == "invalid_message"
+    )
+    assert (
+        require_value(check_invite_note(f"Hallo{hidden}Welt"))["status"]
+        == "invalid_note"
+    )
 
 
 def test_dm_length_counted_in_utf16():
@@ -233,7 +241,7 @@ def test_dm_length_counted_in_utf16():
 
     assert check_message_content("a" * MESSAGE_MAX_UTF16) is None
     over = "\U0001f600" * (MESSAGE_MAX_UTF16 // 2 + 1)
-    assert check_message_content(over)["status"] == "message_too_long"
+    assert require_value(check_message_content(over))["status"] == "message_too_long"
 
 
 def test_dry_run_writes_nothing(monkeypatch):
