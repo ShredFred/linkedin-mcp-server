@@ -612,6 +612,24 @@ def load_from_args(config: AppConfig, argv: Sequence[str]) -> AppConfig:
 
     # Session management
     parser.add_argument(
+        "--account",
+        type=str,
+        default=None,
+        metavar="ALIAS",
+        help=(
+            "Account alias from the multi-account register "
+            "(~/.linkedin-mcp-accounts.json); with --login the account is created"
+        ),
+    )
+    parser.add_argument(
+        "--expected-identity",
+        type=str,
+        default=None,
+        metavar="SLUG_OR_URN",
+        help="With --login --account: the profile slug or URN this account must be",
+    )
+
+    parser.add_argument(
         "--login",
         action="store_true",
         help="Login interactively via browser and save persistent profile",
@@ -817,6 +835,11 @@ def load_from_args(config: AppConfig, argv: Sequence[str]) -> AppConfig:
 
     if args.logout:
         config.server.logout = True
+
+    if getattr(args, "account", None):
+        config.server.account = args.account
+    if getattr(args, "expected_identity", None):
+        config.server.expected_identity = args.expected_identity
 
     if args.user_data_dir:
         config.browser.user_data_dir = args.user_data_dir

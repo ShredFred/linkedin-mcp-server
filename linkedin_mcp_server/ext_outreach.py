@@ -64,7 +64,12 @@ def state_file(name: str, base: Path | None = None) -> Path:
     ledger after an upgrade would lift every block as well, so two candidates
     are an error, not a fresh start -- and so is a plain file next to a
     prefixed one: that is a split already, and neither half is the truth."""
-    path = (base or Path.home() / ".linkedin-mcp") / name
+    if base is None:
+        # Multi-account: each account keeps its own ledgers and budgets.
+        from linkedin_mcp_server.account_context import current_state_dir
+
+        base = current_state_dir() or Path.home() / ".linkedin-mcp"
+    path = base / name
     try:
         legacy = sorted(p for p in path.parent.glob(f"*-{name}") if p.is_file())
     except OSError:

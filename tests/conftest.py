@@ -744,3 +744,10 @@ def pytest_runtest_makereport(item, call):
         result = report.get_result()
         result.outcome = "failed"
         result.longrepr = written
+
+
+@pytest.fixture(autouse=True)
+def _no_developer_account_register(monkeypatch):
+    """A developer's real multi-account register must never reach a test."""
+    monkeypatch.delenv("LINKEDIN_MCP_ACCOUNTS_FILE", raising=False)
+    monkeypatch.delenv("LINKEDIN_MCP_ACCOUNTS_STATE_DIR", raising=False)

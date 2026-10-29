@@ -797,6 +797,47 @@ def _preflight_login_viewer(config: AppConfig) -> None:
         raise ConfigurationError(str(exc)) from exc
 
 
+def _bind_cli_account(config: AppConfig) -> None:
+    """Point USER_DATA_DIR at the account's own directory, or refuse.
+
+    ``--login --account`` creates the entry; every other mode needs it to
+    exist. A missing alias is an error, never the default profile: a logout
+    that fell back would delete the wrong account's session.
+    """
+    from linkedin_mcp_server.accounts import (
+        AccountError,
+        load_registry,
+        registry_path,
+        upsert_account,
+    )
+
+    alias = config.server.account
+    assert alias is not None
+    try:
+        if config.server.login:
+            account = upsert_account(
+                registry_path(),
+                alias,
+                expected_identity=config.server.expected_identity,
+            )
+        else:
+            registry = load_registry()
+            if registry is None:
+                raise AccountError("account_unknown", "no account register exists")
+            account = registry.resolve(alias)
+    except (AccountError, ValueError, OSError) as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+    account.user_data_dir.parent.mkdir(parents=True, exist_ok=True)
+    config.browser.user_data_dir = str(account.user_data_dir)
+    if account.expected_identity is None:
+        print(
+            f"⚠️  Account '{alias}' has no expected identity; its tools stay "
+            "refused until it is set (--login --account ALIAS "
+            "--expected-identity SLUG)."
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     """Main application entry point."""
     try:
@@ -828,6 +869,10 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     try:
         configure_browser_environment()
+
+        # Fork extension: --account binds the CLI to one register entry.
+        if config.server.account:
+            _bind_cli_account(config)
 
         # Establish, once, that this process may move and delete what
         # USER_DATA_DIR names. Before everything: the logout below deletes the

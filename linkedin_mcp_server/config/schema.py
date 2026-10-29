@@ -407,6 +407,10 @@ class ServerConfig:
     login_viewer: bool = False
     status: bool = False  # Check session validity and exit
     logout: bool = False
+    # Fork extension: select (and with --login create) an account from the
+    # multi-account register instead of USER_DATA_DIR.
+    account: str | None = None
+    expected_identity: str | None = None
     # Take over a USER_DATA_DIR that is neither the default nor already ours.
     # Not in SHARED_CONFIG_FIELDS and deliberately so: it changes nothing about
     # the browser a client would be served, only whether this process is allowed

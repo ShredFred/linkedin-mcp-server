@@ -287,6 +287,14 @@ def create_mcp_server(
     # only forwards calls must not take the lease: it would either block itself
     # until its own timeout, or take the lease and leave the process that
     # actually needs it waiting for one held by a caller that never uses it.
+    # Fork extension: multi-account routing. Outside the serializing layer, so
+    # the profile is bound to one account before the lease of that profile is
+    # taken, and stays bound until the call is over. Without a register this
+    # adds nothing.
+    if role.drives_browser:
+        from linkedin_mcp_server.account_tools import install_accounts
+
+        install_accounts(mcp)
     if role.drives_browser:
         mcp.add_middleware(SequentialToolExecutionMiddleware(silent_owner=silent_owner))
     # The notice is appended to one tool result per process, so it belongs

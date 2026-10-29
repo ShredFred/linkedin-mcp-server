@@ -822,6 +822,57 @@ belongs behind something that provides it.
 <br/>
 
 
+## Mehrere Konten
+
+Ohne Register läuft der Server wie bisher mit einem Profil (`USER_DATA_DIR`).
+Mit einem Register außerhalb des Repos (Standard `~/.linkedin-mcp-accounts.json`,
+anderer Pfad über `LINKEDIN_MCP_ACCOUNTS_FILE`) bedient ein Server mehrere Konten.
+
+```json
+{
+  "version": 1,
+  "default": "main",
+  "accounts": [
+    {
+      "alias": "main",
+      "user_data_dir": "~/.linkedin-mcp-accounts.d/main/profile",
+      "expected_identity": "example-slug",
+      "allowed_tools": ["read", "send_message"]
+    },
+    {
+      "alias": "research",
+      "user_data_dir": "~/.linkedin-mcp-accounts.d/research/profile",
+      "expected_identity": "urn:li:fsd_profile:EXAMPLE123",
+      "allowed_tools": ["read"]
+    }
+  ]
+}
+```
+
+- **Anlegen:** `uv run -m linkedin_mcp_server --login --account research --expected-identity example-slug`
+  erstellt den Eintrag (eigener Elternordner) und meldet an. `--logout --account <alias>`
+  löscht nur dieses Konto; ein unbekannter Alias bricht ab statt auf das Standardkonto zu fallen.
+- **Aufruf:** Jedes Tool nimmt optional `account`; ohne Angabe gilt `default`. Ergebnisse
+  tragen `account`. `list_accounts` zeigt Alias, Sitzungsstatus und ob die Identität in
+  diesem Lauf geprüft wurde – sonst nichts.
+- **Identität, fail-closed:** Vor dem ersten Aufruf eines Kontos, vor jedem Schreib-/Sende-Tool
+  und nach jedem Browser-Neustart oder Login-Wechsel wird das angemeldete Profil mit
+  `expected_identity` verglichen. Abweichung → `account_identity_mismatch`, keine Daten.
+  Ein Slug ist der stärkere Schlüssel; eine URN zählt nur, wenn sie auf der eigenen
+  Profilseite eindeutig dominiert.
+- **Rechte:** `allowed_tools` enthält Toolnamen, `read` (alle mit `readOnlyHint`) oder `*`.
+  Ein Tool ohne `readOnlyHint` gilt als Schreib-Tool. Standard ist `["read"]`. Die
+  bestehenden Sendeschutz-Mechanismen (Ledger, Pacer, Canary) bleiben unverändert aktiv.
+- **Trennung:** Jedes Konto hat Profil, Sperre und Browser für sich; pro Prozess ist ein
+  Browser offen, ein Kontowechsel schließt den vorigen, Aufrufe zweier Konten laufen
+  nacheinander. Ledger, Tagesbudgets und ein Audit-Log (`audit.jsonl`: Zeit, Alias, Tool,
+  Status – keine Inhalte) liegen je Konto unter `~/.linkedin-mcp/accounts/<alias>/`
+  (`LINKEDIN_MCP_ACCOUNTS_STATE_DIR`), außerhalb des Profils, damit ein Reset sie nicht löscht.
+- **Register-Prüfung:** Unbekannte Felder, doppelte Aliase, gleiche oder verschachtelte
+  Profilpfade, Home- oder Wurzelordner als Elternordner werden abgelehnt – ein Reset
+  löscht Profil und Elternordner-Artefakte. Ein ungültiges Register stoppt den Start.
+  Unter POSIX warnt der Server, wenn die Datei für Gruppe/Andere lesbar ist (`chmod 600`).
+
 ## Using a proxy
 
 LinkedIn scores the address a session signs in from. Your account's usual IP address is the safe one. You should use a proxy in your country when the server cannot use it: a VPS, another country, or a second account that must not share the first one's address.
