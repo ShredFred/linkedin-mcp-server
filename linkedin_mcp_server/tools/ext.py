@@ -56,6 +56,7 @@ from linkedin_mcp_server.linkedin.ext_mentions import (
     plain_text,
     prepare_text,
 )
+from linkedin_mcp_server.linkedin import ext_urls
 from linkedin_mcp_server.linkedin.ext_post import ExtPostComposer
 from linkedin_mcp_server.linkedin.message_sender import (
     _send_budget_deadline as _reply_budget_deadline,
@@ -585,48 +586,76 @@ async def _read_back(
     # The send result carries the compose URL; the page itself has moved on to
     # the thread by now. Failing both, the newest inbox thread is the one just
     # written to.
-    thread = _THREAD_RE.search(str(sent.get("url", ""))) or _THREAD_RE.search(
-        str(getattr(extractor.ext_session.page, "url", ""))
-    )
-    lookups: list[dict[str, str]] = []
+    # Known threads first: the sender's own confirmed thread_id (since
+    # 2026-10-22 the read-back ignored it and answered "unverified" with
+    # thread null for a message that had landed), then the send URL and the
+    # current page URL.
+    known: list[str] = []
+    sent_thread = sent.get("thread_id")
+    if isinstance(sent_thread, str) and re.fullmatch(r"[A-Za-z0-9_=-]+", sent_thread):
+        known.append(sent_thread)
+    for source in (sent.get("url", ""), getattr(extractor.ext_session.page, "url", "")):
+        match = _THREAD_RE.search(str(source))
+        if match and match.group(1) not in known:
+            known.append(match.group(1))
+    lookups: list[dict[str, str]] = [{"thread_id": t} for t in known]
     # A thread taken from the inbox is a guess: the newest thread may belong to
     # someone who just wrote to us. It only counts when checked (see below).
     guessed: set[str] = set()
-    if thread:
-        lookups.append({"thread_id": thread.group(1)})
-    else:
-        try:
-            inbox = await extractor.get_inbox(3)
-            for ref in (inbox.get("references") or {}).get("inbox", []):
-                match = _THREAD_RE.search(str(ref.get("url", "")))
-                if ref.get("kind") == "conversation" and match:
-                    thread = match
-                    lookups.append({"thread_id": match.group(1)})
-                    guessed.add(match.group(1))
-                    break
-        except Exception:
-            logger.warning("inbox read for read-back failed", exc_info=True)
-    lookups.append({"linkedin_username": username})
-    for lookup in lookups:
+    found_thread: str | None = None
+
+    async def _try(lookup: dict[str, str]) -> bool:
         try:
             conversation = await extractor.get_conversation(**lookup)
         except Exception:
             logger.warning("read-back via %s failed", lookup, exc_info=True)
-            continue
-        verified = outreach.delivered_in_conversation(message, conversation)
-        if verified and lookup.get("thread_id") in guessed:
-            verified = _thread_belongs_to(conversation, username, message)
-        if verified:
+            return False
+        ok = outreach.delivered_in_conversation(message, conversation)
+        if ok and lookup.get("thread_id") in guessed:
+            ok = _thread_belongs_to(conversation, username, message)
+        return ok
+
+    for lookup in lookups:
+        if await _try(lookup):
+            verified, found_thread = True, lookup["thread_id"]
             break
+    if not verified:
+        # The newest few inbox threads, each checked for partner and text.
+        try:
+            inbox = await extractor.get_inbox(5)
+            refs = (inbox.get("references") or {}).get("inbox", [])
+        except Exception:
+            logger.warning("inbox read for read-back failed", exc_info=True)
+            refs = []
+        for ref in refs[:5]:
+            match = _THREAD_RE.search(str(ref.get("url", "")))
+            if ref.get("kind") != "conversation" or not match:
+                continue
+            tid = match.group(1)
+            if tid in known:
+                continue
+            guessed.add(tid)
+            if await _try({"thread_id": tid}):
+                verified, found_thread = True, tid
+                break
+    if not verified and await _try({"linkedin_username": username}):
+        verified = True
+    thread_id = found_thread or (known[0] if known else None)
     status = "verified" if verified else "unverified"
     ledger.append(
         {
             "attempt": attempt,
             "status": status,
-            "thread": thread.group(1) if thread else None,
+            "thread": thread_id,
         }
     )
-    return {"recipient": username, "status": status, "send": sent, "verified": verified}
+    return {
+        "recipient": username,
+        "status": status,
+        "send": sent,
+        "verified": verified,
+        "thread_id": thread_id,
+    }
 
 
 # _send_and_verify outcomes after which nothing reached the recipient.
@@ -663,6 +692,20 @@ def _book_attempt(
     return None
 
 
+def _ref_names(url: str, key: str) -> bool:
+    """True when a reference URL is the profile ``key`` (slug or URN).
+
+    Slugs are compared percent-decoded (LinkedIn emits ``%C3%BC`` for an
+    umlaut); a URN key matches a ``/in/<urn>/`` link or the id in the URL.
+    """
+    match = re.search(r"/in/([^/?#]+)", url)
+    if match:
+        slug = ext_urls.profile_key(match.group(1))
+        if slug is not None and slug == ext_urls.profile_key(key):
+            return True
+    return key.startswith("aco") and key in url.lower()
+
+
 def _thread_belongs_to(
     conversation: dict[str, Any], username: str, message: str
 ) -> bool:
@@ -674,7 +717,7 @@ def _thread_belongs_to(
     """
     key = outreach.recipient_key(username)
     partner = any(
-        f"/in/{key}/" in str(ref.get("url", "")).lower() + "/"
+        _ref_names(str(ref.get("url", "")), key)
         for refs in (conversation.get("references") or {}).values()
         for ref in (refs or [])
         if isinstance(ref, dict)

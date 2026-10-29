@@ -1229,8 +1229,17 @@ def last_block_sender(conversation_text: str) -> str | None:
 def delivered_in_conversation(message: str, conversation: dict[str, Any]) -> bool:
     """True when the read-back conversation text contains the whole message."""
     sections = conversation.get("sections") or {}
-    haystack = canonical_text(" ".join(str(v) for v in sections.values()))
-    return canonical_text(message) in haystack
+    haystack = _readback_text(" ".join(str(v) for v in sections.values()))
+    return _readback_text(message) in haystack
+
+
+# Zero-width characters and the soft hyphen LinkedIn's renderer may insert
+# into a rendered message; read-back only, the ledger hash stays unchanged.
+_INVISIBLE_RE = re.compile("[\u00ad\u200b\u200c\u200d\u2060\ufeff]")
+
+
+def _readback_text(text: str) -> str:
+    return canonical_text(_INVISIBLE_RE.sub("", unicodedata.normalize("NFC", text)))
 
 
 def pace_report() -> dict[str, Any]:

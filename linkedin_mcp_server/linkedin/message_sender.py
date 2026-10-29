@@ -1381,6 +1381,21 @@ def _normalize_profile_urn(value: str | None) -> str | None:
     return candidate.removeprefix(_PROFILE_URN_PREFIX)
 
 
+_REQUESTED_URN_RE = re.compile(r"ACo[A-Za-z0-9_-]{20,}")
+
+
+def _requested_profile_urn(identifier: str) -> str | None:
+    """The bare profile id when the caller named the recipient by URN, else None.
+
+    Member URNs start with ``ACo`` and are long; a vanity slug of that shape
+    would still have to equal the landed page's URN, so the test fails closed.
+    """
+    candidate = _normalize_profile_urn(identifier)
+    if candidate is None or _REQUESTED_URN_RE.fullmatch(candidate) is None:
+        return None
+    return candidate
+
+
 # The 2026 profile page lands on /in/<name>/?isSelfProfile=false. That flag is
 # the only query a profile route may carry; any other still refuses.
 _BENIGN_PROFILE_QUERIES = {"", "isSelfProfile=false"}
@@ -1944,9 +1959,17 @@ class MessageSender:
         # Fork extension: the landed page must be the requested person. The URL
         # normaliser accepts benign query keys; a redirect to another slug
         # must not carry the send to someone else.
-        if ext_urls.profile_key(
-            unquote(target.profile_path[len("/in/") : -1])
-        ) != ext_urls.profile_key(linkedin_username):
+        # A requested profile URN (ACoAA...) is redirected by LinkedIn to the
+        # vanity slug, so the slugs never match; the landed page's URN is the
+        # identity then (observed 2026-10-22).
+        requested_urn = _requested_profile_urn(linkedin_username)
+        if requested_urn is not None:
+            landed_is_requested = requested_urn == target.profile_urn
+        else:
+            landed_is_requested = ext_urls.profile_key(
+                unquote(target.profile_path[len("/in/") : -1])
+            ) == ext_urls.profile_key(linkedin_username)
+        if not landed_is_requested:
             return contracts.message_action_result(
                 profile_url,
                 "recipient_resolution_failed",
