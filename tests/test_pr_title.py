@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -362,24 +363,37 @@ def _label_workflow_script() -> str:
     return "\n".join(script)
 
 
-def _probe_posix_bash() -> bool:
-    """Whether ``bash`` as this process resolves it runs a script.
+def _workflow_bash() -> str:
+    if os.name != "nt":
+        return "bash"
+    # These fakes use this Windows interpreter and Windows paths. System32's
+    # WSL launcher can pass `printf ok` while being the wrong execution host.
+    git = shutil.which("git")
+    if git:
+        for parent in list(Path(git).resolve().parents)[:3]:
+            candidate = parent / "bin" / "bash.exe"
+            if candidate.is_file():
+                return str(candidate)
+    return ""
 
-    On Windows the name can resolve to the WSL launcher in System32, which
-    fails with no distribution installed; that says nothing about the
-    workflow under test, which runs on a Linux runner.
-    """
+
+_WORKFLOW_BASH = _workflow_bash()
+
+
+def _probe_posix_bash() -> bool:
+    """Whether the selected shell runs byte-fed script input on this host."""
     try:
         probe = subprocess.run(
-            ["bash", "-c", "printf ok"],
+            [_WORKFLOW_BASH, "-e"],
+            input=b"printf ok\n",
             capture_output=True,
-            text=True,
             timeout=30,
             check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
-    return probe.returncode == 0 and probe.stdout == "ok"
+    return probe.returncode == 0 and probe.stdout == b"ok"
 
 
 _POSIX_BASH = _probe_posix_bash()
@@ -437,25 +451,43 @@ else:
         encoding="utf-8",
     )
     gh_path.chmod(0o755)
+    # The workflow and fake gh both call python3. Reuse the release-workflow
+    # harness pattern so native Git Bash uses this test environment.
+    python3 = bin_path / "python3"
+    python3.write_text(
+        f'#!/bin/sh\nexec "{Path(sys.executable).as_posix()}" "$@"\n',
+        encoding="utf-8",
+    )
+    python3.chmod(0o755)
     env = os.environ.copy()
     env.update(
         {
-            "FAKE_GH_CALLS": str(calls_path),
-            "FAKE_GH_STATE": str(state_path),
+            "FAKE_GH_CALLS": calls_path.as_posix(),
+            "FAKE_GH_STATE": state_path.as_posix(),
             "GH_TOKEN": "fixed-test-token",
             "PATH": f"{bin_path}{os.pathsep}{env['PATH']}",
             "PR_NUMBER": "900",
+            "PYTHONUTF8": "1",
             "REPO": "stickerdaniel/linkedin-mcp-server",
-            "RUNNER_TEMP": str(tmp_path),
+            "RUNNER_TEMP": tmp_path.as_posix(),
         }
     )
-    result = subprocess.run(
-        ["bash", "-c", _label_workflow_script()],
+    completed = subprocess.run(
+        # Like the release workflow harness, feed trusted script bytes through
+        # stdin: Windows command-line quoting corrupts Python heredocs in -c.
+        [_WORKFLOW_BASH, "-e"],
+        input=_label_workflow_script().encode("utf-8"),
         cwd=_REPO_ROOT,
         env=env,
         capture_output=True,
-        text=True,
         check=False,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+    )
+    result = subprocess.CompletedProcess(
+        completed.args,
+        completed.returncode,
+        completed.stdout.decode("utf-8", errors="replace"),
+        completed.stderr.decode("utf-8", errors="replace"),
     )
     state = json.loads(state_path.read_text(encoding="utf-8"))
     calls = (
