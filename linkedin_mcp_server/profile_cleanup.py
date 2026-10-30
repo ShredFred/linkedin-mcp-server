@@ -14,6 +14,7 @@ The directories carry nothing the session needs: they are caches Chromium has
 already decided to throw away. Removing them is best effort -- a directory
 that is still locked stays and is reported, the launch proceeds as before.
 """
+
 from __future__ import annotations
 
 import logging
@@ -48,7 +49,12 @@ def remove_orphaned_cache_deletions(profile_dir: Path) -> dict[str, list[str]]:
             removed.append(entry.name)
         except OSError as exc:
             kept.append(entry.name)
-            logger.warning("Could not remove %s before launch: %s", entry.name, type(exc).__name__)
+            logger.warning(
+                "Could not remove %s before launch: %s", entry.name, type(exc).__name__
+            )
     if removed:
-        logger.info("Removed leftover cache deletions before launch: %s", ", ".join(sorted(removed)))
+        logger.info(
+            "Removed leftover cache deletions before launch: %s",
+            ", ".join(sorted(removed)),
+        )
     return {"removed": removed, "kept": kept}
