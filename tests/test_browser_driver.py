@@ -46,6 +46,15 @@ def _mock_config(monkeypatch, tmp_path):
     )
 
 
+def test_runtime_browser_keeps_its_source_root_separate_from_its_target(tmp_path):
+    source = tmp_path / "profile"
+    runtime = runtime_profile_dir("synthetic-runtime", source)
+    with patch("linkedin_mcp_server.drivers.browser.BrowserManager") as constructor:
+        browser_module._make_browser(runtime, launch_options={}, viewport={})
+    assert constructor.call_args.kwargs["user_data_dir"] == runtime
+    assert constructor.call_args.kwargs["source_profile_dir"] == source
+
+
 def _make_mock_browser() -> MagicMock:
     browser = MagicMock()
     browser.start = AsyncMock()

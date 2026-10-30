@@ -28,6 +28,7 @@ from linkedin_mcp_server.profile_cleanup import remove_orphaned_cache_deletions
 from linkedin_mcp_server.exceptions import (
     BrowserDowngradeError,
     BrowserShutdownUnconfirmedError,
+    ProfileRootRefusedError,
 )
 from linkedin_mcp_server.hidden_target import (
     attaching_to_other_targets,
@@ -93,6 +94,7 @@ class BrowserManager:
         headless: bool = True,
         slow_mo: int = 0,
         viewport: dict[str, int] | None = None,
+        source_profile_dir: str | Path | None = None,
         **launch_options: Any,
     ):
         # ``launch_options`` is spread straight into the context options, so a
@@ -122,6 +124,9 @@ class BrowserManager:
             )
 
         self.user_data_dir = str(Path(user_data_dir).expanduser())
+        self.source_profile_dir = (
+            Path(source_profile_dir) if source_profile_dir is not None else None
+        )
         self.headless = headless
         self.slow_mo = slow_mo
         # Kept as passed, including ``None``. The old ``viewport or {...}``
@@ -396,9 +401,16 @@ class BrowserManager:
             harden_linkedin_tree(Path(self.user_data_dir))
             # Leftover `*.CHROME_DELETE` caches make Chromium's own cache purge
             # after a version switch fail with exit code 33. See profile_cleanup.
-            await asyncio.to_thread(
-                remove_orphaned_cache_deletions, Path(self.user_data_dir)
-            )
+            try:
+                await asyncio.to_thread(
+                    remove_orphaned_cache_deletions,
+                    Path(self.user_data_dir),
+                    source_profile_dir=self.source_profile_dir,
+                )
+            except ProfileRootRefusedError as exc:
+                # Cache recovery is optional. A direct BrowserManager caller
+                # without an owned source must never gain deletion authority.
+                logger.warning("Skipped unowned cache cleanup: %s", exc)
 
             context_options: dict[str, Any] = {
                 # Headed wherever a window can exist, in both public modes.

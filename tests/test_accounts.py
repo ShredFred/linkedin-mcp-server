@@ -149,9 +149,13 @@ def test_invalid_json_is_an_error_not_legacy_mode(tmp_path):
 def test_permission_warning(tmp_path):
     path = _write(tmp_path, _reg(tmp_path))
     path.chmod(0o644)
-    assert accounts.load_registry(path).warnings
+    reg = accounts.load_registry(path)
+    assert reg is not None
+    assert reg.warnings
     path.chmod(0o600)
-    assert not accounts.load_registry(path).warnings
+    reg = accounts.load_registry(path)
+    assert reg is not None
+    assert not reg.warnings
 
 
 def test_upsert_creates_and_refuses_overlap(tmp_path):
@@ -166,6 +170,7 @@ def test_upsert_creates_and_refuses_overlap(tmp_path):
     with pytest.raises(AccountError):
         accounts.upsert_account(path, "beta", user_data_dir=tmp_path / "a" / "p2")
     reg = accounts.load_registry(path)
+    assert reg is not None
     assert set(reg.accounts) == {"alpha"}  # file untouched by the refusal
 
 
@@ -200,7 +205,8 @@ class FakeSwitcher:
         self.signed = {"alpha": True, "beta": True}
 
     def current_dir(self) -> Path:
-        return self.dir  # type: ignore[return-value]
+        assert self.dir is not None, "fake switcher has no active profile"
+        return self.dir
 
     async def activate(self, account) -> None:
         self.activations.append(account.alias)
@@ -250,8 +256,8 @@ class Harness:
         message = mt.CallToolRequestParams(name=name, arguments=args)
         ctx = MiddlewareContext(message=message)
 
-        async def call_next(c):
-            assert "account" not in (c.message.arguments or {})
+        async def call_next(context):
+            assert "account" not in (context.message.arguments or {})
             if body is not None:
                 return await body()
             return ToolResult(
@@ -391,8 +397,10 @@ async def test_parallel_calls_of_two_accounts_never_interleave(tmp_path, state_r
             active.append(alias)
             assert len(active) == 1, "two accounts inside the browser at once"
             start = h.switcher.dir
+            assert start is not None
             state = account_context.current_state_dir()
             await asyncio.sleep(0.01)
+            assert h.switcher.dir is not None
             seen.append((alias, start, h.switcher.dir, state))
             active.remove(alias)
             return ToolResult(structured_content={"v": alias})
@@ -550,6 +558,7 @@ def test_cli_login_creates_account(tmp_path, monkeypatch):
     cfg.server.expected_identity = "example-alpha"
     _bind_cli_account(cfg)
     reg = accounts.load_registry(path)
+    assert reg is not None
     assert reg.accounts["alpha"].expected_identity == "example-alpha"
     assert Path(cfg.browser.user_data_dir) == reg.accounts["alpha"].user_data_dir
 
