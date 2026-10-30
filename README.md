@@ -868,6 +868,10 @@ anderer Pfad über `LINKEDIN_MCP_ACCOUNTS_FILE`) bedient ein Server mehrere Kont
   nacheinander. Ledger, Tagesbudgets und ein Audit-Log (`audit.jsonl`: Zeit, Alias, Tool,
   Status – keine Inhalte) liegen je Konto unter `~/.linkedin-mcp/accounts/<alias>/`
   (`LINKEDIN_MCP_ACCOUNTS_STATE_DIR`), außerhalb des Profils, damit ein Reset sie nicht löscht.
+- **Cache-Bereinigung:** Übrig gebliebene `*.CHROME_DELETE` werden nur im nachweislich
+  eigenen Quellprofil oder dessen abgeleitetem Runtime-Profil entfernt. Verknüpfungen,
+  Junctions und während des Laufs ersetzte Profilordner geben keine Löschberechtigung.
+  Fehlt der Eigentumsnachweis, wird die optionale Bereinigung übersprungen.
 - **Register-Prüfung:** Unbekannte Felder, doppelte Aliase, gleiche oder verschachtelte
   Profilpfade, Home- oder Wurzelordner als Elternordner werden abgelehnt – ein Reset
   löscht Profil und Elternordner-Artefakte. Ein ungültiges Register stoppt den Start.

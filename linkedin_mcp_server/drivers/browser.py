@@ -378,6 +378,7 @@ def _make_browser(
     config = get_config()
     return BrowserManager(
         user_data_dir=profile_dir,
+        source_profile_dir=get_source_profile_dir(),
         headless=_headless,
         slow_mo=config.browser.slow_mo,
         viewport=viewport,
