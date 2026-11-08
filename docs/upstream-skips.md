@@ -16,3 +16,4 @@ it and remove its line.
 | 2026-11-08 | `3043e66c72c2` | feat(messaging): Add archive_conversation tool (#1354) | resolver gave no verdict (exit 1) |
 | 2026-11-08 | `67453826ccc3` | feat(jobs): Add dismiss_job tool (#1326) | resolver gave no verdict (exit 1) |
 | 2026-11-08 | `b8922f39a010` | feat(jobs): Add get_easy_apply_form tool (#1343) | resolver gave no verdict (exit 1) |
+| 2026-11-08 | `d8a02a366793` | feat(messaging): Add reply_to_conversation tool (#1342) | resolver gave no verdict (exit 1) |
