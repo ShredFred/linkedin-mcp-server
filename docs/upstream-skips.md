@@ -13,3 +13,4 @@ it and remove its line.
 | 2026-11-08 | `0ed4d80c5491` | fix(search): Filter people search by geo URN (#722) | resolver gave no verdict (exit 1) |
 | 2026-11-08 | `4bc291e37827` | feat(errors): Name a stable code on failed calls (#1390) | resolver gave no verdict (exit 1) |
 | 2026-11-08 | `c8c2a0daf1e3` | docs(readme): Drop the error code table (#1419) | resolver gave no verdict (exit 1) |
+| 2026-11-08 | `3043e66c72c2` | feat(messaging): Add archive_conversation tool (#1354) | resolver gave no verdict (exit 1) |
