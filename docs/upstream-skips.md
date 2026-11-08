@@ -20,3 +20,4 @@ it and remove its line.
 | 2026-11-08 | `fbe81cece9ab` | test(jobs): Hold the dialog until the read is cancelled (#1443) | resolver gave no verdict (exit 1) |
 | 2026-11-08 | `c0cc8bd1df2b` | test(jobs): Keep a discarded Easy Apply dialog closed (#1441) | resolver gave no verdict (exit 1) |
 | 2026-11-08 | `b1f18e9371e7` | test(jobs): Expire the read deadline after Next (#1444) | resolver gave no verdict (exit 1) |
+| 2026-11-08 | `7787ece951f6` | test(jobs): Cover the Easy Apply close shield (#1445) | resolver gave no verdict (exit 1) |
