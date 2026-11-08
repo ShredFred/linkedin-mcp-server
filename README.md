@@ -144,23 +144,27 @@ Give your AI agents access to LinkedIn through your own browser session. Read pr
 
 | Tool | Description |
 |------|-------------|
-| `get_person_profile` | Read profile sections such as experience, education, skills, projects, and posts. |
+| `get_person_profile` | Read profile sections: experience, education, skills, projects, volunteering, posts. |
 | `get_my_profile` | Read your own profile, with the same section selection as other profiles. |
 | `connect_with_person` | Send a connection request with an optional note, or accept an incoming one. |
 | `get_sidebar_profiles` | Find recommended profile links, including people you may know. |
 | `get_inbox` | List recent inbox conversations, with links to open individual threads. |
 | `get_conversation` | Read a conversation's messages using a LinkedIn username or thread ID. |
 | `search_conversations` | Search messages by keyword and return links to matching conversation threads. |
+| `archive_conversation` | Archive a conversation by thread ID; a repeat call reports it already archived. |
 | `send_message` | Send after confirmation; profile targets may open a new DM ([#483](https://github.com/stickerdaniel/linkedin-mcp-server/issues/483)). |
+| `reply_to_conversation` | Reply inside an existing thread or InMail by thread ID. Sends after confirmation. |
 | `get_company_profile` | Read company information, with optional sections for posts and open jobs. |
 | `get_company_posts` | Read recent posts from a company's feed, with links to the original posts. |
 | `search_companies` | Find companies by keyword and return links to their LinkedIn profiles. |
 | `get_company_employees` | Find company employees, optionally filtered by name, title, or skill. |
 | `search_jobs` | Find job postings by keyword and location, with job IDs for reading details. |
 | `get_saved_jobs` | List your saved job postings, with job IDs for looking up their details. |
+| `dismiss_job` | Dismiss a job from job search so later searches no longer show it. Irreversible. |
 | `search_people` | Find people by keyword, location, connection degree, and current company. |
 | `get_job_details` | Read a job posting's description, requirements, and company details. |
 | `get_job_apply_url` | Check whether a job uses Easy Apply or links to an employer's application. |
+| `get_easy_apply_form` | Read an Easy Apply form's fields, options and prefilled values. Never submits. |
 | `get_feed` | Read recent posts from your home feed, with links to the original posts. |
 | `search_posts` | Search posts by keyword, optionally filtered by recency or content type. |
 | `get_session_status` | Check your saved login and browser state without opening a browser. |
