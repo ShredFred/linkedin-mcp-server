@@ -162,7 +162,7 @@ Give your AI agents access to LinkedIn through your own browser session. Read pr
 | `get_job_details` | Read a job posting's description, requirements, and company details. |
 | `get_job_apply_url` | Check whether a job uses Easy Apply or links to an employer's application. |
 | `get_feed` | Read recent posts from your home feed, with links to the original posts. |
-| `search_posts` | Search posts by keyword, optionally limited to the past day, week, or month. |
+| `search_posts` | Search posts by keyword, optionally filtered by recency or content type. |
 | `get_session_status` | Check your saved login and browser state without opening a browser. |
 | `close_session` | Close the shared browser session without deleting your saved login. |
 

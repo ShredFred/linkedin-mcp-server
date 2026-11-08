@@ -828,6 +828,18 @@
           "minimum": 1,
           "type": "integer",
           "description": "Scroll depth as result \"pages\" of ~5 scrolls each\n(1-10, default 3). Content search is an infinite scroll, so\nthis caps how far the page is scrolled rather than fetching\ndiscrete pages."
+        },
+        "content_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional \"Content type\" filter. One of\n\"documents\" (PDFs and slide decks people upload), \"images\",\n\"videos\", \"live_videos\", \"job_posts\". Omit for all posts."
         }
       },
       "required": [
