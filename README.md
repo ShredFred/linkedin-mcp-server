@@ -115,47 +115,6 @@
 
 <!-- FORK-EXT:END -->
 
-
-## Fork version and updates
-
-This fork integrates upstream **v4.28.0**, through
-[`7a40310`](https://github.com/stickerdaniel/linkedin-mcp-server/commit/7a40310c6beb77e7e2cea8c649f3411f96b65f94)
-(sync checked 2026-10-23). It retains the fork's guarded posting, native mentions,
-per-image alt text and photo tags, company-page actions and outreach ledger.
-Upstream's login/checkpoint/challenge routes now report authentication errors
-rather than a temporary rate limit; account restrictions remain distinct.
-Waiting for a rate-limit cooldown does not resolve an authentication challenge.
-
-Run a local checkout with its locked dependencies:
-
-```bash
-git clone https://github.com/ShredFred/linkedin-mcp-server.git
-cd linkedin-mcp-server
-uv sync --frozen
-uv run --frozen -m linkedin_mcp_server
-```
-
-Before updating an existing checkout, preserve local edits and follow the
-[upstream sync runbook](docs/upstream-sync.md). GitHub's **Sync fork** updates the
-remote repository; it does not update a local checkout or a running MCP process.
-After pulling the integrated version and syncing dependencies, restart the MCP
-connection to load the new code. The branch name itself does not select a
-package: a source launch runs the files in its configured checkout.
-
-The fork follows upstream's package version and keeps its own Git history.
-Upstream PyPI packages, plugin releases and Docker images do not include these
-fork extensions. Release workflows remain restricted to the upstream publisher;
-updating this fork does not publish a package or image. Commercial sponsor
-panels are removed by the README generator; upstream attribution and licensing
-are retained.
-
-For native mentions, pass the full current display name and the profile URN
-(`urn:li:fsd_profile:ACoA...`). For a person's multiword name followed by a
-spaced dash or pipe suffix, the writer searches the core name, but still
-requires the full display name and target ID to match and reads the inserted
-ID back. A shortened query is returned as `query`; it never authorizes a
-different name or a name-only match. Use `confirm_post=false` to verify first.
-
 <p align="left">
   <a href="https://pypi.org/project/mcp-server-linkedin/" target="_blank"><img src="https://img.shields.io/pypi/v/mcp-server-linkedin?color=blue" alt="PyPI"></a>
   <a href="https://github.com/stickerdaniel/linkedin-mcp-server/actions/workflows/ci.yml" target="_blank"><img src="https://github.com/stickerdaniel/linkedin-mcp-server/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI Status"></a>
@@ -204,6 +163,7 @@ Give your AI agents access to LinkedIn through your own browser session. Read pr
 | `get_job_apply_url` | Check whether a job uses Easy Apply or links to an employer's application. |
 | `get_feed` | Read recent posts from your home feed, with links to the original posts. |
 | `search_posts` | Search posts by keyword, optionally limited to the past day, week, or month. |
+| `get_session_status` | Check your saved login and browser state without opening a browser. |
 | `close_session` | Close the shared browser session without deleting your saved login. |
 
 <br/>
@@ -581,7 +541,7 @@ docker run -it --rm `
   --login --login-viewer
 ```
 
-Open the full URL the command prints (it carries the access token) and sign in. The viewer closes itself afterwards; let the command exit on its own so the session is stored completely. It gives up after 30 minutes.
+Open the full URL the command prints (it carries the access token) and sign in. Ctrl+V (Cmd+V on a Mac) pastes plain ASCII text, such as a password from your password manager, into the login browser. The viewer closes itself afterwards; let the command exit on its own so the session is stored completely. It gives up after 30 minutes.
 
 Keep the same host directory mounted at `/home/pwuser/.linkedin-mcp` on every later `docker run`, otherwise the server cannot find the session.
 
