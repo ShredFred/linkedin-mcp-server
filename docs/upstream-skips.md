@@ -11,3 +11,4 @@ it and remove its line.
 | 2026-11-08 | `e00e74e6d9ca` | feat(session): Add a session status tool (#1392) | resolver gave no verdict (exit 1) |
 | 2026-11-08 | `aa9ee814456c` | feat(person): Add volunteering section (#1357) | resolver gave no verdict (exit 1) |
 | 2026-11-08 | `0ed4d80c5491` | fix(search): Filter people search by geo URN (#722) | resolver gave no verdict (exit 1) |
+| 2026-11-08 | `4bc291e37827` | feat(errors): Name a stable code on failed calls (#1390) | resolver gave no verdict (exit 1) |
