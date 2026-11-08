@@ -675,6 +675,7 @@ def semantic_program_id(program: str) -> str:
         ("companyPeopleClickMore", "company_people_click_more"),
         ("element.ownerDocument.location.href", "owner_document_address"),
         ("MAX_HEADING_CONTAINERS", "root_content"),
+        ("collectPostBoundaries", "feed_post_boundaries"),
         ("SIDEBAR_SECTIONS", "sidebar_profiles"),
         ("showAllUrls", "sidebar_profiles"),
         ("hasInvite", "connection_action_signals"),
