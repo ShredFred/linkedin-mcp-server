@@ -94,6 +94,23 @@ def parse_own_role(text: str) -> str | None:
     return None
 
 
+# A bot-protection interstitial served instead of the admin view (measured
+# 2026-11-09: Cloudflare "Sorry, you have been blocked" on /company/<id>/admin/
+# while the member was still an admin). It says nothing about the role, so it
+# must not be read as "none" -- that sent the search to the role list.
+_BLOCK_MARKERS = (
+    "sorry, you have been blocked",
+    "you are unable to access linkedin.com",
+    "cloudflare ray id",
+)
+
+
+def blocked_page(text: str | None) -> bool:
+    """True when the page text is a bot-protection block, not LinkedIn's UI."""
+    low = (text or "").lower()
+    return any(m in low for m in _BLOCK_MARKERS)
+
+
 def reaction_state(label: str | None) -> str | None:
     """The state part of "Status des Reaktionsbuttons: <state>"."""
     if not label:
@@ -215,13 +232,18 @@ class ExtCompanyActions:
     async def read_access(self, page_id: str) -> dict[str, Any]:
         """Role of the signed-in member on the page, and what that allows."""
         await self._goto(MANAGE_ADMINS_URL.format(page_id=page_id))
-        role = parse_own_role(await self._page.evaluate(_TEXT_JS))
+        text = await self._page.evaluate(_TEXT_JS)
+        if blocked_page(text):
+            return self._blocked(page_id, "manage_admins")
+        role = parse_own_role(text)
         source = "manage_admins"
         if role is None:
             # Not readable (no right to manage admins, or not an admin): the
             # admin post list decides whether posting is offered at all.
             await self._goto(ADMIN_POSTS_URL.format(page_id=page_id))
             text = (await self._page.evaluate(_TEXT_JS)).lower()
+            if blocked_page(text):
+                return self._blocked(page_id, "admin_view")
             offered = any(w in text for w in words("start_post"))
             role = "admin_unreadable" if offered else "none"
             source = "admin_view"
@@ -232,6 +254,19 @@ class ExtCompanyActions:
             "role": role,
             "role_source": source,
             "can_act_as_page": acting,
+        }
+
+    @staticmethod
+    def _blocked(page_id: str, source: str) -> dict[str, Any]:
+        # Fail closed: the role is unknown, so nothing may act as the page.
+        return {
+            "status": "admin_view_blocked",
+            "page_id": page_id,
+            "role": "unknown",
+            "role_source": source,
+            "can_act_as_page": False,
+            "message": "LinkedIn served a bot-protection block page instead of "
+            "the admin view; the role was not read.",
         }
 
     async def _admin_card(self, page_id: str, activity: str) -> dict[str, Any]:

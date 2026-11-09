@@ -1029,6 +1029,8 @@ def register_ext_stage2_tools(
             async def write(actions: Any, go: bool) -> dict[str, Any]:
                 if as_company is not None:
                     access = await actions.read_access(str(as_company).strip())
+                    if access.get("status") == "admin_view_blocked":
+                        return dict(access, posted=False)
                     if not access.get("can_act_as_page"):
                         return {
                             "status": "company_role_insufficient",
