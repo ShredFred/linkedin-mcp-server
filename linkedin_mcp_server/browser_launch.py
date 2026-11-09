@@ -57,6 +57,7 @@ _WEBRTC_STAYS_ON_THE_PROXY = (
 #: produced no context. SwiftShader worked, and stays excluded: Patchright
 #: strips its unsafe fallback deliberately because that renderer string is an
 #: automation signal in its own right.
+HIDDEN_WINDOW_ARGS = ("--window-position=-32000,-32000",)
 _DOCKER_WEBGL = ("--enable-webgl", "--ignore-gpu-blocklist")
 
 
@@ -109,6 +110,11 @@ def build_launch_options(
         # coherent. Under Xvfb, measured, they are what lets the existing Mesa
         # llvmpipe path create WebGL1 and WebGL2 contexts at all.
         args.extend(_DOCKER_WEBGL)
+
+    if browser.hidden_window:
+        # Headed, but nowhere on the desktop. Only the window position; the
+        # browser's identity stays exactly that of the headed mode.
+        args.extend(HIDDEN_WINDOW_ARGS)
 
     proxy = browser.proxy_settings()
     if proxy:

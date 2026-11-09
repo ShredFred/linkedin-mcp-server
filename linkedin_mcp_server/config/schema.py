@@ -135,6 +135,12 @@ class BrowserConfig:
     """Configuration for browser settings."""
 
     headless: bool = True
+    # Fork extension: run headed with the window placed off-screen. Bot
+    # protection answers the headless mode on some pages (measured: company
+    # admin views) while the headed browser on the same profile passes; this
+    # keeps the headed mode without a window on the visible desktop. No user
+    # agent or fingerprint change -- only where the window sits.
+    hidden_window: bool = False
     slow_mo: int = 0  # Milliseconds between browser actions (debugging)
     viewport_width: int = 1280
     viewport_height: int = 720

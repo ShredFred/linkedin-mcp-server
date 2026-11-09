@@ -249,6 +249,7 @@ AI agent? Get a quick confirmation from the user before enabling automatic updat
 **Browser:**
 
 - `--no-headless` - Show the browser window (useful for debugging)
+- `--hidden-window` - Run headed with the window off-screen (`HIDDEN_WINDOW=1`); for pages that refuse the headless mode, without a visible window
 - `--chrome-path PATH` - Path to a Chrome/Chromium executable
 - `--proxy-server URL` - Route browser traffic through a proxy, as `scheme://host:port`. Set it up **before** `--login`; see [Using a proxy](#using-a-proxy).
 
@@ -893,6 +894,7 @@ uv run -m linkedin_mcp_server
 **Browser:**
 
 - `--no-headless` - Show the browser window (useful for debugging)
+- `--hidden-window` - Run headed with the window off-screen (`HIDDEN_WINDOW=1`); for pages that refuse the headless mode, without a visible window
 - `--slow-mo MS` - Delay between browser actions (default: 0, useful for debugging)
 - `--viewport WxH` - Viewport size (default: 1280x720). Applies to windowless mode only; a headed launch uses the real window size.
 - `--chrome-path PATH` - Path to a Chrome/Chromium executable

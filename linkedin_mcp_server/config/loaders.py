@@ -119,6 +119,7 @@ class EnvironmentKeys:
     """Environment variable names used by the application."""
 
     HEADLESS = "HEADLESS"
+    HIDDEN_WINDOW = "HIDDEN_WINDOW"
     LOG_LEVEL = "LOG_LEVEL"
     TRANSPORT = "TRANSPORT"
     TIMEOUT = "TIMEOUT"
@@ -231,6 +232,12 @@ def load_from_env(config: AppConfig) -> AppConfig:
             config.browser.headless = False
         elif headless_value in TRUTHY_VALUES:
             config.browser.headless = True
+
+    # Hidden window (fork): headed, window off-screen
+    if hidden_env := os.environ.get(EnvironmentKeys.HIDDEN_WINDOW):
+        if _normalize_env(hidden_env) in TRUTHY_VALUES:
+            config.browser.hidden_window = True
+            config.browser.headless = False
 
     # Transport mode
     if transport_env := os.environ.get(EnvironmentKeys.TRANSPORT):
@@ -440,6 +447,13 @@ def load_from_args(config: AppConfig, argv: Sequence[str]) -> AppConfig:
         "--no-headless",
         action="store_true",
         help="Run browser with a visible window (useful for login and debugging)",
+    )
+
+    parser.add_argument(
+        "--hidden-window",
+        action="store_true",
+        help="Run the browser headed with its window off-screen (no visible "
+        "window; for pages that refuse the headless mode)",
     )
 
     parser.add_argument(
@@ -736,6 +750,10 @@ def load_from_args(config: AppConfig, argv: Sequence[str]) -> AppConfig:
 
     # Update configuration with parsed arguments
     if args.no_headless:
+        config.browser.headless = False
+
+    if args.hidden_window:
+        config.browser.hidden_window = True
         config.browser.headless = False
 
     if args.log_level:

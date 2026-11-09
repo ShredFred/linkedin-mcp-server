@@ -103,3 +103,27 @@ def test_container_webgl_and_proxy_containment_share_one_argument_list(monkeypat
         "--webrtc-ip-handling-policy=disable_non_proxied_udp",
         "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
     ]
+
+
+def test_hidden_window_only_moves_the_window():
+    """`--hidden-window` adds the off-screen position and nothing else."""
+    options, _ = build_launch_options(BrowserConfig(headless=False, hidden_window=True))
+    plain, _ = build_launch_options(BrowserConfig(headless=False))
+
+    assert options["args"] == ["--window-position=-32000,-32000"]
+    assert {k: v for k, v in options.items() if k != "args"} == plain
+    assert "args" not in plain
+
+
+def test_hidden_window_flag_runs_headed(monkeypatch):
+    from linkedin_mcp_server.config.loaders import load_from_args, load_from_env
+    from linkedin_mcp_server.config.schema import AppConfig
+
+    cfg = load_from_args(AppConfig(), ["--hidden-window"])
+    assert cfg.browser.hidden_window is True
+    assert cfg.browser.headless is False
+
+    monkeypatch.setenv("HIDDEN_WINDOW", "1")
+    env = load_from_env(AppConfig())
+    assert env.browser.hidden_window is True
+    assert env.browser.headless is False
