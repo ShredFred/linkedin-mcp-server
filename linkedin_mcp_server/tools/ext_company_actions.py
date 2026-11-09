@@ -32,6 +32,8 @@ async def require_company_role(ex: Any, page_id: str) -> dict[str, Any] | None:
     access = await _company(ex).read_access(page_id)
     if access.get("can_act_as_page"):
         return None
+    if access.get("status") == "admin_view_blocked":
+        return dict(access, posted=False)
     return {
         "status": "company_role_insufficient",
         "role": access.get("role"),
@@ -59,9 +61,12 @@ def register_ext_company_actions_tools(
         Read the signed-in session's role on a company page (numeric page id):
         super_admin, content_admin, analyst, curator, admin_unreadable (the
         admin list is not readable but the admin view offers posting), or
-        none. can_act_as_page says whether as_company paths may run. Read
+        none; role unknown with status admin_view_blocked when LinkedIn serves
+        a bot-protection block page instead of the admin view.
+        can_act_as_page says whether as_company paths may run. Read
         from the page's "Admins verwalten" table; nothing is changed.
-        Statuses: ok, invalid_input, pace_budget_spent, pace_lock_busy.
+        Statuses: ok, admin_view_blocked, invalid_input, pace_budget_spent,
+        pace_lock_busy.
         """
         if not str(page_id).strip().isdigit():
             return {"status": "invalid_input", "field": "page_id"}

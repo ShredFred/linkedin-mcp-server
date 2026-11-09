@@ -141,6 +141,31 @@ def test_role_is_read_from_the_own_row() -> None:
     assert ca.parse_own_role("Admins verwalten\nKeine Liste") is None
 
 
+_BLOCK_HTML = """<html><body><main><h1>Sorry, you have been blocked</h1>
+<h2>You are unable to access linkedin.com</h2>
+<p>Cloudflare Ray ID: 0000000000000000 &bull; Your IP: <button>Click to reveal</button></p>
+</main></body></html>"""
+
+
+def test_blocked_page_is_recognised() -> None:
+    assert ca.blocked_page(
+        "Sorry, you have been blocked\nYou are unable to access linkedin.com"
+    )
+    assert ca.blocked_page("... Cloudflare Ray ID: abc ...")
+    assert not ca.blocked_page("Admins verwalten\nSuper-Admin")
+    assert not ca.blocked_page(None)
+
+
+async def test_block_page_is_not_role_none(page) -> None:
+    # 2026-11-09: the block page was read as role "none" while the member was
+    # still an admin. It must say "blocked, role unknown" and stay closed.
+    got = await _actions(page, _BLOCK_HTML).read_access("1000001")
+    assert got["status"] == "admin_view_blocked", got
+    assert got["role"] == "unknown"
+    assert got["role_source"] == "manage_admins"
+    assert got["can_act_as_page"] is False
+
+
 def test_reaction_state() -> None:
     assert (
         ca.reaction_state("Status des Reaktionsbuttons: Keine Reaktion")
