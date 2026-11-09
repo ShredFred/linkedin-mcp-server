@@ -24,7 +24,7 @@ a page-owning collaborator.
 | `contracts` | `ExtractedSection`, `FilterValidationError`, `RATE_LIMITED_SECTION_TEXT`, `SEND_INTERRUPTED_WARNING`, `before_the_reply_deadline()`, `is_invisible_control()`, `message_action_result()`, `normalize_message_text()`, `rate_limited_section_error()`, `refuse_an_invalid_message()` | `browser-free` |
 | `conversations` | `ConversationReader`, `strip_select_conversation_prefix()` | `page-owning` |
 | `ext_actions` | `ExtActions`, `GROUPS_URL`, `PROFILE_VIEWS_URL`, `REPLY_EDITOR_POLL_S`, `REPLY_EDITOR_TIMEOUT_S`, `REPLY_MAX_EXPANSIONS`, `group_member_lines()`, `parse_group_id()`, `reply_permalink()`, `sent_age_days()` | `browser-free` |
-| `ext_company_actions` | `ACTING_ROLES`, `ADMIN_POSTS_URL`, `ExtCompanyActions`, `MANAGE_ADMINS_URL`, `POST_URL`, `REACTIONS`, `ROLE_WORDS`, `SELF_MARKERS`, `parse_own_role()`, `placeholder_names()`, `reaction_state()` | `browser-free` |
+| `ext_company_actions` | `ACTING_ROLES`, `ADMIN_POSTS_URL`, `ExtCompanyActions`, `MANAGE_ADMINS_URL`, `POST_URL`, `REACTIONS`, `ROLE_WORDS`, `SELF_MARKERS`, `blocked_page()`, `parse_own_role()`, `placeholder_names()`, `reaction_state()` | `browser-free` |
 | `ext_company_post` | `ADMIN_POSTS_URL`, `COMPOSER_WORDS`, `ExtCompanyPostComposer`, `MODES`, `PAGE_POSTS_URL`, `check_mode()`, `check_page_id()`, `check_schedule()` | `browser-free` |
 | `ext_composer_labels` | `LABELS`, `words()` | `browser-free` |
 | `ext_composer_probe` | `ExtComposerProbe`, `FORBIDDEN_CLICK`, `STEP_ACTIONS`, `check_click_label()`, `check_steps()`, `check_type_mention()`, `check_url()`, `run_probe_steps()` | `browser-free` |

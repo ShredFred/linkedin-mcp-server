@@ -32,7 +32,7 @@
 > **Added tools**
 >
 > - `comment_on_post` — Comment on a post.
-> - `company_access` — Read the signed-in session's role on a company page (numeric page id): super_admin, content_admin, analyst, curator, admin_unreadable (the admin list is not readable but the admin view offers posting), or none.
+> - `company_access` — Read the signed-in session's role on a company page (numeric page id): super_admin, content_admin, analyst, curator, admin_unreadable (the admin list is not readable but the admin view offers posting), or none; role unknown with status admin_view_blocked when LinkedIn serves a bot-protection block page instead of the admin view.
 > - `composer_probe` — Report the visible interactive controls of a LinkedIn page: tag, role, aria-label, text, componentkey, disabled state and whether the element sits inside a dialog.
 > - `connect_with_person` — Without confirm_send=true this is a dry run only: nothing is sent.
 > - `create_company_post` — Compose a post authored by a company page the signed-in member administers.
