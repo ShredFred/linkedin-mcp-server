@@ -38,6 +38,10 @@ SHARE_URL = "https://www.linkedin.com/feed/?shareActive=true"
 FEED_URL = "https://www.linkedin.com/feed/"
 RECENT_ACTIVITY_URL = "https://www.linkedin.com/in/me/recent-activity/all/"
 _EDITOR = '[componentkey="ShareBox_textEditor"][contenteditable="true"]'
+_EDITOR_TEXT_JS = r"""(selector) => {
+  const ed = document.querySelector(selector);
+  return ed ? (ed.innerText || '').trim().length : 0;
+}"""
 # Labels come from the one bilingual table (ext_composer_labels).
 _POST_WORDS = words("post")
 _MEDIA_LABELS = words("media")
@@ -243,6 +247,16 @@ class ExtPostComposer:
                 "message": "The share composer already carries attached media "
                 "(a restored draft). Remove it in the browser before posting; "
                 "nothing was written.",
+            }
+
+        # A restored text draft is kept: the dry run's clear would wipe it.
+        if await self._page.evaluate(_EDITOR_TEXT_JS, _EDITOR):
+            await self._navigator._navigate_to_page(FEED_URL)
+            return {
+                **result,
+                "status": "composer_has_draft",
+                "message": "The share composer opened with text in it (a restored "
+                "draft). It is kept, not discarded; nothing was written.",
             }
 
         if media:

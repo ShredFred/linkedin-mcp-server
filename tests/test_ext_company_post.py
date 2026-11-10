@@ -55,7 +55,9 @@ class FakePage:
         leftover: int = 0,
         editor_gone: bool = True,
         write: str = "written",
+        draft_chars: int = 0,
     ) -> None:
+        self.draft_chars = draft_chars
         self.author_texts = (
             author_texts if author_texts is not None else [f"{PAGE} Auf Alle posten"]
         )
@@ -83,6 +85,8 @@ class FakePage:
     async def evaluate(self, script: str, arg: Any = None, **_: Any) -> Any:
         if script is mod._MEDIA_PRESENT_JS:
             return self.leftover
+        if script is mod._EDITOR_TEXT_JS:
+            return self.draft_chars
         if script is mod._AUTHOR_JS:
             self._author_reads += 1
             texts = self.author_texts
@@ -350,6 +354,20 @@ async def test_a_restored_draft_with_media_stops_before_writing() -> None:
     assert result["status"] == "editor_has_media"
     assert page.text == ""
     assert not page.committed
+
+
+@pytest.mark.asyncio
+async def test_a_restored_draft_is_kept_never_discarded() -> None:
+    # 2026-11-10: a dry run discarded a saved page draft. Text or media in the
+    # composer when it opens: stop, close, keep the draft -- never "discard".
+    for page in (FakePage(draft_chars=40), FakePage(leftover=1)):
+        result = await run(page, confirm=False)
+        assert result["status"] in ("composer_has_draft", "editor_has_media")
+        assert result.get("cleanup") == "kept_draft", result
+        assert not any("discard" in s for s in page.clicked), page.clicked
+        assert any(s.endswith('"keep"]') for s in page.clicked)
+        assert page.text == ""
+        assert not page.committed
 
 
 @pytest.mark.asyncio

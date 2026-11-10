@@ -145,7 +145,7 @@ def register_ext_company_post_tools(
         schedule_control_unavailable, schedule_not_filled,
         schedule_confirm_unavailable, schedule_not_confirmed,
         post_button_unavailable, post_button_disabled, close_unavailable,
-        draft_prompt_unavailable, composer_unavailable, editor_has_media,
+        draft_prompt_unavailable, composer_unavailable, editor_has_media, composer_has_draft,
         invalid_image. Refusals before anything is booked: invalid_input,
         invalid_text, schedule_too_soon, schedule_too_far, duplicate_text,
         pace_budget_spent, pace_lock_busy.

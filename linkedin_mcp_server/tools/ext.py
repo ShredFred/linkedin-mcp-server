@@ -1201,7 +1201,7 @@ def register_ext_tools(
         repost, call verify_post), media_upload_pending (upload still running
         after 60 s; discarded), duplicate_live (an identical post is live
         within 24 h; nothing written), dry_run, or a stop before the
-        publish click (composer_unavailable, editor_has_media, invalid_image,
+        publish click (composer_unavailable, editor_has_media, composer_has_draft, invalid_image,
         post_button_disabled, post_button_unavailable: safe to fix and retry).
         Refusals before anything is booked: not_supported (as_company),
         invalid_text (empty, control characters or > 3000 chars),

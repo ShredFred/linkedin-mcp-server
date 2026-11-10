@@ -84,6 +84,19 @@ _NEXT_WORDS = words("next")
 # The editor of the page composer. Dialog-scoped and locale-independent: the
 # aria-label is German here and would not survive a locale switch.
 _EDITOR_IN_DIALOG = '[role="dialog"] [role="textbox"], dialog [role="textbox"]'
+# Text already in the composer when it opens: a restored draft (2026-11-10: a
+# dry run discarded a saved page draft). Never discarded, never overwritten.
+_EDITOR_TEXT_JS = r"""(selector) => {
+  const ed = document.querySelector(selector);
+  return ed ? (ed.innerText || '').trim().length : 0;
+}"""
+# The keep-the-draft choice of the close prompt (exact wording).
+_KEEP_DRAFT_WORDS = [
+    "als entwurf speichern",
+    "entwurf speichern",
+    "save as draft",
+    "save draft",
+]
 
 
 def check_mode(mode: str) -> dict[str, Any] | None:
@@ -496,6 +509,24 @@ class ExtCompanyPostComposer:
         except Exception as exc:  # noqa: BLE001 - cleanup must not raise
             result["cleanup_error"] = f"{type(exc).__name__}: {exc}"[:200]
 
+    async def _leave_keeping_draft(self, result: dict[str, Any]) -> None:
+        """Close the composer without discarding: keep a restored draft."""
+        try:
+            found = await self._mark("close", labels=_DISCARD_LABELS)
+            if found.get("count") != 1:
+                result["cleanup"] = "left_open"
+                return
+            await self._page.click('[data-ext-company="close"]')
+            await asyncio.sleep(1.0)
+            keep = await self._mark("keep", words=_KEEP_DRAFT_WORDS, scope="document")
+            if keep.get("count") == 1:
+                await self._page.click('[data-ext-company="keep"]')
+                result["cleanup"] = "kept_draft"
+            else:
+                result["cleanup"] = "closed"
+        except Exception as exc:  # noqa: BLE001 - cleanup must not raise
+            result["cleanup_error"] = f"{type(exc).__name__}: {exc}"[:200]
+
     async def resolve_page_id(self, slug: str) -> dict[str, Any]:
         """Numeric page id of a company slug, read on the company page.
 
@@ -644,7 +675,15 @@ class ExtCompanyPostComposer:
                 "The composer already carries attached media (a restored draft). "
                 "Remove it in the browser first; nothing was written."
             )
-            await self._discard(result)
+            await self._leave_keeping_draft(result)
+            return result
+        if await self._page.evaluate(_EDITOR_TEXT_JS, _EDITOR_IN_DIALOG):
+            result["status"] = "composer_has_draft"
+            result["message"] = (
+                "The composer opened with text in it (a restored draft). It is "
+                "kept, not discarded; nothing was written."
+            )
+            await self._leave_keeping_draft(result)
             return result
 
         # 4. Schedule -- before the image and before the text. The image

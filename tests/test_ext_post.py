@@ -52,6 +52,8 @@ class FakePage:
     async def evaluate(self, script: str, arg: Any = None, **_: Any) -> Any:
         if script is ext_post._MEDIA_PRESENT_JS:
             return self.leftover
+        if script is ext_post._EDITOR_TEXT_JS:
+            return getattr(self, "draft_chars", 0)
         from linkedin_mcp_server.linkedin import ext_post_outcome as oc
 
         if script is oc.STATE_JS:
@@ -302,3 +304,16 @@ def mention_writer_script(page: Any, script: str, arg: Any) -> tuple[bool, Any]:
     if script is em._ENTITIES_JS:
         return True, []
     return False, None
+
+
+@pytest.mark.asyncio
+async def test_restored_text_draft_is_kept_not_cleared() -> None:
+    # 2026-11-10: a dry run must never wipe a restored draft.
+    page = FakePage(urn=None)
+    page.draft_chars = 25
+    result = await composer(page).create_post(
+        "Erste Zeile\n\nzweite", image_path=None, confirm_post=False
+    )
+    assert result["status"] == "composer_has_draft"
+    assert result["posted"] is False
+    assert not page.clicked
