@@ -592,6 +592,13 @@ class MentionWriter:
             )
             if ready and candidate:
                 return {"status": "ok", **snap}
+            # 2026-11-10: the page composer also renders the older typeahead
+            # tray, whose live region does not name the query. A list that
+            # stays unchanged for twice the settle time and offers the target
+            # (by id or exact name) is final without it: the inserted entity
+            # is read back against the target id before anything is saved.
+            if snap.get("listbox") and same >= 2 * self._settle + 2 and candidate:
+                return {"status": "ok", **snap}
             if loop.time() >= end:
                 if ready:
                     return {"status": "ok", **snap}

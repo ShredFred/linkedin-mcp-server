@@ -370,15 +370,29 @@ async def test_list_that_never_settles_is_not_loaded(page, t) -> None:
 
 
 @pytest.mark.parametrize("t", LOCALES)
-async def test_quill_list_without_announcement_is_not_loaded(page, t) -> None:
-    # Same stable list, but the live region never names the query.
+async def test_quill_list_without_announcement_waits_then_verifies(page, t) -> None:
+    # The live region never names the query (2026-11-10: the page composer's
+    # older tray). A list that stays unchanged long enough and offers the
+    # target is taken -- and the inserted entity is still read back.
     html = _html("quill", t, PEOPLE[2:]).replace(
         "status.setAttribute('aria-label', announce",
         "status.setAttribute('aria-label', false",
     )
     await page.set_content(html)
     got = await _writer(page).write(_segments(f"Gruß an [[Maxi Beispiel|{ERIKA}]]!"))
-    assert got["status"] == "mention_list_not_loaded", got
+    assert got["status"] == "written", got
+    assert got["mentions"][0]["picked_by"] == "verified_after_insert"
+
+
+@pytest.mark.parametrize("t", LOCALES)
+async def test_quill_unannounced_wrong_target_is_still_refused(page, t) -> None:
+    html = _html("quill", t, PEOPLE[2:], link_as=MAX_A).replace(
+        "status.setAttribute('aria-label', announce",
+        "status.setAttribute('aria-label', false",
+    )
+    await page.set_content(html)
+    got = await _writer(page).write(_segments(f"Gruß an [[Maxi Beispiel|{ERIKA}]]!"))
+    assert got["status"] == "mention_wrong_entity", got
 
 
 async def test_unknown_editor_refuses_mentions(page) -> None:
