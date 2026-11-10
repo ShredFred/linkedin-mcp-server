@@ -329,12 +329,9 @@ async def _hidden_window_retry(
         _reset_pages(extractor)
         result = await body(extractor)
     except CloudflareBlock as again:
-        return {
-            "status": "cloudflare_block",
-            "reason": again.reason,
-            "url": again.url,
-            "retried": "hidden_window",
-        }
+        raise ToolError(
+            f"{again.reason} after the hidden-window retry: {again.url}"
+        ) from again
     finally:
         await close_browser()
         browser_cfg.hidden_window = prev_hidden
@@ -365,7 +362,8 @@ async def _run(ctx: Context, name: str, body: Any) -> dict[str, Any]:
             except Exception as e:
                 raise_tool_error(e, name)
         # A block after a page already loaded may follow a click: never repeat.
-        return {"status": "cloudflare_block", "reason": block.reason, "url": block.url}
+        # An error, not a status: no tool books it as an outcome.
+        raise ToolError(f"{block.reason}: {block.url}") from block
     except (ToolError, outreach.LedgerCorrupt):
         raise
     except AuthenticationError as e:

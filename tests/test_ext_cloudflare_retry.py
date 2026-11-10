@@ -11,6 +11,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from linkedin_mcp_server.linkedin import ext_cloudflare as cf
 from linkedin_mcp_server.tools import ext
@@ -23,7 +24,7 @@ def test_block_page_is_recognised() -> None:
         "Sorry, you have been blocked\nYou are unable to access linkedin.com\nCloudflare Ray ID: x",
     )
     assert not cf.is_block("Feed | LinkedIn", "Sorry, you have been blocked")
-    assert not cf.is_block("MiViA | LinkedIn", "Admins verwalten")
+    assert not cf.is_block("Acme Labs | LinkedIn", "Admins verwalten")
     assert not cf.is_block(None, None)
 
 
@@ -81,9 +82,8 @@ async def test_block_after_a_loaded_page_is_not_repeated(browser_state) -> None:
         extractor.ext_navigator.ext_pages_loaded = 1
         raise cf.CloudflareBlock("https://www.linkedin.com/feed/", headless=True)
 
-    got = await ext._run(None, "create_post", body)
-    assert got["status"] == "cloudflare_block"
-    assert got["reason"] == "cloudflare_headless_block"
+    with pytest.raises(ToolError, match="cloudflare_headless_block"):
+        await ext._run(None, "create_post", body)
     assert calls == [1]
     assert browser_state["closed"] == 0
 
@@ -94,7 +94,6 @@ async def test_block_in_the_hidden_window_is_reported(browser_state) -> None:
             "https://www.linkedin.com/company/1/", headless=browser_state["headless"]
         )
 
-    got = await ext._run(None, "company_access", body)
-    assert got["status"] == "cloudflare_block"
-    assert got["retried"] == "hidden_window"
+    with pytest.raises(ToolError, match="hidden-window retry"):
+        await ext._run(None, "company_access", body)
     assert browser_state["headless"] is True
