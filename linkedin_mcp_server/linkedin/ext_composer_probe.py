@@ -265,12 +265,28 @@ _PROBE_CLEAR_JS = r"""() => {
   return (editor.innerText || '').trim() ? 'not_cleared' : 'cleared';
 }"""
 
-# Close the composer: only close/discard wording, never anything else.
+# Exact wording of the prompt's keep-the-draft button (de measured, en LinkedIn's).
+KEEP_DRAFT_WORDS = [
+    "als entwurf speichern",
+    "entwurf speichern",
+    "save as draft",
+    "save draft",
+]
+
+# Close the composer: only close/discard wording, never anything else; a
+# keep-the-draft choice wins over discard (2026-11-10: the cleanup discarded a
+# saved page draft that the composer had reopened).
 _PROBE_DISCARD_JS = r"""(arg) => {
   const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
   const buttons = [...document.querySelectorAll('[role="dialog"] button, [role="alertdialog"] button, dialog button')].filter(visible);
   const own = b => norm(b.getAttribute('aria-label')) + ' ' + norm(b.innerText);
+  // A saved draft is never thrown away: when the prompt offers to keep it, keep
+  // it (exact wording only). The probe clears its own typing first, so a
+  // keep/discard prompt means content that was there before the probe.
+  const keep = buttons.filter(b => (arg.keep || []).includes(norm(b.innerText))
+      || (arg.keep || []).includes(norm(b.getAttribute('aria-label'))));
+  if (keep.length) { keep[keep.length - 1].click(); return 'kept_draft'; }
   const safe = b => !arg.forbidden.some(w => own(b).split(/\s+/).includes(w));
   const hit = buttons.filter(b => safe(b) && (arg.close.includes(norm(b.getAttribute('aria-label')))
       || arg.discard.includes(norm(b.innerText))));
@@ -417,6 +433,7 @@ class ExtComposerProbe:
                 arg = {
                     "close": ["schließen", "close", "dismiss", "verwerfen", "discard"],
                     "discard": ["verwerfen", "discard"],
+                    "keep": KEEP_DRAFT_WORDS,
                     "forbidden": [
                         "posten",
                         "post",
@@ -730,6 +747,7 @@ async def _discard_everything(page: Any) -> list[str]:
             "cancel",
         ],
         "discard": ["verwerfen", "discard"],
+        "keep": KEEP_DRAFT_WORDS,
         "forbidden": [
             "posten",
             "post",
@@ -751,7 +769,7 @@ async def _discard_everything(page: Any) -> list[str]:
             done.append(f"error:{type(exc).__name__}")
             break
         done.append(got)
-        if got == "nothing":
+        if got in ("nothing", "kept_draft"):
             break
         await asyncio.sleep(1.2)
     return done
