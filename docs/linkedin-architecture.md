@@ -24,10 +24,11 @@ a page-owning collaborator.
 | `contracts` | `ExtractedSection`, `FilterValidationError`, `RATE_LIMITED_SECTION_TEXT`, `SEND_INTERRUPTED_WARNING`, `before_the_reply_deadline()`, `is_invisible_control()`, `message_action_result()`, `normalize_message_text()`, `rate_limited_section_error()`, `refuse_an_invalid_message()` | `browser-free` |
 | `conversations` | `ConversationReader`, `strip_select_conversation_prefix()` | `page-owning` |
 | `ext_actions` | `ExtActions`, `GROUPS_URL`, `PROFILE_VIEWS_URL`, `REPLY_EDITOR_POLL_S`, `REPLY_EDITOR_TIMEOUT_S`, `REPLY_MAX_EXPANSIONS`, `group_member_lines()`, `parse_group_id()`, `reply_permalink()`, `sent_age_days()` | `browser-free` |
+| `ext_cloudflare` | `CloudflareBlock`, `REASON`, `is_block()`, `raise_if_blocked()` | `browser-free` |
 | `ext_company_actions` | `ACTING_ROLES`, `ADMIN_POSTS_URL`, `ExtCompanyActions`, `MANAGE_ADMINS_URL`, `POST_URL`, `REACTIONS`, `ROLE_WORDS`, `SELF_MARKERS`, `blocked_page()`, `parse_own_role()`, `placeholder_names()`, `reaction_state()` | `browser-free` |
 | `ext_company_post` | `ADMIN_POSTS_URL`, `COMPOSER_WORDS`, `ExtCompanyPostComposer`, `MODES`, `PAGE_POSTS_URL`, `check_mode()`, `check_page_id()`, `check_schedule()` | `browser-free` |
 | `ext_composer_labels` | `LABELS`, `words()` | `browser-free` |
-| `ext_composer_probe` | `ExtComposerProbe`, `FORBIDDEN_CLICK`, `STEP_ACTIONS`, `check_click_label()`, `check_steps()`, `check_type_mention()`, `check_url()`, `run_probe_steps()` | `browser-free` |
+| `ext_composer_probe` | `ExtComposerProbe`, `FORBIDDEN_CLICK`, `KEEP_DRAFT_WORDS`, `STEP_ACTIONS`, `check_click_label()`, `check_steps()`, `check_type_mention()`, `check_url()`, `run_probe_steps()` | `browser-free` |
 | `ext_engagement` | `ExtEngagementReader`, `REACTION_ICONS`, `REACTION_TEXT`, `SEEN_ENV`, `SeenStore`, `engager_key()`, `parse_activity_id()`, `parse_person_ref()`, `parse_post_summary()`, `reaction_kind()`, `seen_path()`, `split_comment_lines()`, `split_engager_lines()` | `browser-free` |
 | `ext_events` | `ExtEventFinder`, `UnconfirmedEmpty`, `attendee_count()`, `date_text_past()`, `event_id()`, `event_summary()`, `keyword_url()`, `organiser_url()`, `parse_current_position()`, `parse_event_card()`, `parse_follower_lines()`, `place_facts()` | `page-owning` |
 | `ext_inmail` | `CREDITS_LINE_MAX`, `ExtInmail`, `SENT_SNIPPET_MAX`, `SN_INBOX_URL`, `canon()`, `credit_mentions()`, `credit_refusal()`, `credits_line()`, `credits_lines()`, `diagnose_credits_page()`, `edit_landed()`, `first_match()`, `mark_edited()`, `parse_credits()`, `parse_degree()`, `parse_sent_item()`, `pick_own_message()`, `strip_edit_marker()`, `thread_url()` | `browser-free` |
@@ -70,6 +71,7 @@ a page-owning collaborator.
 - `contracts` -> `identifiers`, `link_metadata`
 - `conversations` -> `content`, `identifiers`, `link_metadata`, `navigation`, `profile_page`, `session`, `text`
 - `ext_actions` -> `ext_mentions`, `ext_network`
+- `ext_cloudflare` -> _(none)_
 - `ext_company_actions` -> `ext_composer_labels`, `ext_mentions`
 - `ext_company_post` -> `ext_composer_labels`, `ext_media`, `ext_mentions`, `ext_post`, `ext_post_outcome`, `navigation`, `session`
 - `ext_composer_labels` -> _(none)_
@@ -97,7 +99,7 @@ a page-owning collaborator.
 - `jobs` -> `capture`, `contracts`, `identifiers`, `job_pages`, `job_policy`, `link_metadata`, `navigation`, `search_urls`, `session`, `text`
 - `link_metadata` -> _(none)_
 - `message_sender` -> `contracts`, `ext_urls`, `identifiers`, `navigation`, `session`
-- `navigation` -> `session`
+- `navigation` -> `ext_cloudflare`, `session`
 - `person` -> `capture`, `contracts`, `ext_post_outcome`, `fields`, `identifiers`, `link_metadata`, `navigation`, `profile_page`, `search_urls`, `session`, `text`
 - `posts` -> `capture`, `contracts`, `link_metadata`, `search_urls`
 - `profile_page` -> `session`

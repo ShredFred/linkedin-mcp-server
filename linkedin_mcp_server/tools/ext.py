@@ -57,6 +57,7 @@ from linkedin_mcp_server.linkedin.ext_mentions import (
     prepare_text,
 )
 from linkedin_mcp_server.linkedin import ext_urls
+from linkedin_mcp_server.linkedin.ext_cloudflare import CloudflareBlock
 from linkedin_mcp_server.linkedin.ext_post import ExtPostComposer
 from linkedin_mcp_server.linkedin.message_sender import (
     _send_budget_deadline as _reply_budget_deadline,
@@ -296,10 +297,75 @@ def _composer(extractor: Any) -> ExtPostComposer:
     return ExtPostComposer(extractor.ext_session, extractor.ext_navigator)
 
 
-async def _run(ctx: Context, name: str, body: Any) -> dict[str, Any]:
+def _reset_pages(extractor: Any) -> None:
+    nav = getattr(extractor, "ext_navigator", None)
+    if nav is not None:
+        nav.ext_pages_loaded = 0
+
+
+async def _hidden_window_retry(
+    ctx: Context, name: str, body: Any, block: CloudflareBlock
+) -> dict[str, Any]:
+    """Repeat one tool call once with the headed, off-screen window.
+
+    Headless stays the default: the headless browser is closed first (one
+    profile, one browser), the call runs once headed off-screen, and that
+    browser is closed again so the next call starts headless as before.
+    """
+    from linkedin_mcp_server.config import get_config
+    from linkedin_mcp_server.drivers.browser import (
+        close_browser,
+        current_headless,
+        set_headless,
+    )
+
+    browser_cfg = get_config().browser
+    prev_headless, prev_hidden = current_headless(), browser_cfg.hidden_window
+    await close_browser()
+    browser_cfg.hidden_window = True
+    set_headless(False)
     try:
         extractor = await get_ready_extractor(ctx, tool_name=name)
+        _reset_pages(extractor)
+        result = await body(extractor)
+    except CloudflareBlock as again:
+        return {
+            "status": "cloudflare_block",
+            "reason": again.reason,
+            "url": again.url,
+            "retried": "hidden_window",
+        }
+    finally:
+        await close_browser()
+        browser_cfg.hidden_window = prev_hidden
+        set_headless(prev_headless)
+    if isinstance(result, dict):
+        result = {**result, "browser_retry": block.reason}
+    return result
+
+
+async def _run(ctx: Context, name: str, body: Any) -> dict[str, Any]:
+    extractor = None
+    try:
+        extractor = await get_ready_extractor(ctx, tool_name=name)
+        _reset_pages(extractor)
         return await body(extractor)
+    except CloudflareBlock as block:
+        from linkedin_mcp_server.drivers.browser import current_headless
+
+        block = CloudflareBlock(block.url, headless=current_headless())
+        loaded = getattr(
+            getattr(extractor, "ext_navigator", None), "ext_pages_loaded", 1
+        )
+        if block.headless and loaded == 0:
+            try:
+                return await _hidden_window_retry(ctx, name, body, block)
+            except (ToolError, outreach.LedgerCorrupt):
+                raise
+            except Exception as e:
+                raise_tool_error(e, name)
+        # A block after a page already loaded may follow a click: never repeat.
+        return {"status": "cloudflare_block", "reason": block.reason, "url": block.url}
     except (ToolError, outreach.LedgerCorrupt):
         raise
     except AuthenticationError as e:

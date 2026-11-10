@@ -436,6 +436,15 @@ class PageNavigator:
         except RateLimitError as exc:
             report_rate_limit(exc)
             raise
+        # Fork: Cloudflare's block page is not LinkedIn content. Recognise it
+        # instead of reading it as an empty page (2026-11-09: a company admin
+        # view read as "role none").
+        from linkedin_mcp_server.linkedin.ext_cloudflare import raise_if_blocked
+
+        await raise_if_blocked(self._session.page, url)
+        # Pages that loaded in this tool call; a retry is only safe before the
+        # first one (nothing can have been clicked yet).
+        self.ext_pages_loaded = getattr(self, "ext_pages_loaded", 0) + 1
 
     @contextmanager
     def _watching_navigations(self) -> Generator[list[str]]:
