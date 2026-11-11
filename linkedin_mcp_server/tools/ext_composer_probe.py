@@ -56,8 +56,10 @@ def register_ext_composer_probe_tools(
     ) -> dict[str, Any]:
         """
         Report the visible interactive controls of a LinkedIn page: tag, role,
-        aria-label, text, componentkey, disabled state and whether the element
-        sits inside a dialog. Read-only except for one optional mention probe.
+        aria-label, text, componentkey, disabled state, whether the element
+        sits inside a dialog and its link target (href), plus a separate
+        "links" list of the page's LinkedIn anchors (edit forms are reached
+        through anchors). Read-only except for one optional mention probe.
 
         Optionally opens things first: each entry of click_labels is matched
         as the exact aria-label or exact text of one visible control and

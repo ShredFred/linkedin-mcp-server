@@ -98,6 +98,8 @@ async def _operate(
     target: dict[str, Any],
     dry_run: bool,
     action: Any,
+    kind: str = KIND,
+    editor_cls: Any = None,
 ) -> dict[str, Any]:
     from linkedin_mcp_server.linkedin.ext_profile import ExtProfileEditor
     from linkedin_mcp_server.tools.ext import (
@@ -118,7 +120,7 @@ async def _operate(
             (
                 r
                 for r in ledger.latest_by_attempt().values()
-                if r.get("kind") == KIND
+                if r.get("kind") == kind
                 and r.get("change") == key
                 and r.get("status") in _REPEAT_BLOCKING
             ),
@@ -129,7 +131,7 @@ async def _operate(
         previous = repeat()
         if previous:
             return {**target, "status": "already_attempted", "previous": previous}
-        spent = _peek(KIND)
+        spent = _peek(kind)
         if spent:
             return {**target, **spent}
 
@@ -137,7 +139,7 @@ async def _operate(
         spent = _pace("page_read", 3, tool=tool)
         if spent:
             return {**target, **spent}
-        editor = ExtProfileEditor(ex.ext_session, ex.ext_navigator)
+        editor = (editor_cls or ExtProfileEditor)(ex.ext_session, ex.ext_navigator)
         denied = await editor.check_identity(target["expected_slug"])
         if denied:
             return {**target, **denied}
@@ -146,13 +148,13 @@ async def _operate(
         attempt = uuid.uuid4().hex
         row = {
             "attempt": attempt,
-            "kind": KIND,
+            "kind": kind,
             "tool": tool,
             "change": key,
             "status": "attempted",
             "started_at": _now(),
         }
-        refused = _book_attempt(ledger, KIND, row, tool=tool, duplicate=repeat)
+        refused = _book_attempt(ledger, kind, row, tool=tool, duplicate=repeat)
         if refused:
             if refused["status"] == "duplicate":
                 refused = {**refused, "status": "already_attempted"}

@@ -1957,3 +1957,7 @@ def register_ext_tools(
     from linkedin_mcp_server.tools.ext_profile import register_ext_profile_tools
 
     register_ext_profile_tools(raw_mcp, tool_timeout=tool_timeout)
+
+    from linkedin_mcp_server.tools.ext_profile_cv import register_ext_profile_cv_tools
+
+    register_ext_profile_cv_tools(raw_mcp, tool_timeout=tool_timeout)

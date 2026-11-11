@@ -411,6 +411,14 @@ PACE_BUDGETS: dict[str, dict[str, int]] = {
     # Editing the signed-in member's own profile (2026-11-11): intro fields,
     # custom button, featured links. Visible to everyone, rare by design.
     "profile_edit": {"day": 6, "week": 20},
+    # One CV item (position, education, certificate, language, project, ...)
+    # created, changed or deleted through apply_profile_cv or
+    # edit_profile_section (2026-11-11). Separate from profile_edit because a
+    # CV is many small items: building one from a file is 15-30 writes, which
+    # at 6/day would spread one coherent change over a week and leave the
+    # profile half migrated in between. The network-notify switch is held
+    # off, so an item is not broadcast; the cap still bounds a runaway loop.
+    "profile_cv_edit": {"day": 30, "week": 60},
 }
 # Dated temporary raises (operator, 2026-10-13: full event search; raised again
 # 2026-10-14 to finish sooner). Each entry applies through its "until" day
@@ -459,6 +467,7 @@ PACE_WRITE_KINDS = {
     "repost",
     "repost_undo",
     "profile_edit",
+    "profile_cv_edit",
 }
 PACE_WRITE_TOTAL_PER_DAY = 150
 # LinkedIn's own event-invitation ceiling per organiser account and week.
@@ -480,6 +489,7 @@ _LEDGER_KINDS = {
     "repost",
     "repost_undo",
     "profile_edit",
+    "profile_cv_edit",
 }
 
 

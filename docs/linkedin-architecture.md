@@ -38,6 +38,8 @@ a page-owning collaborator.
 | `ext_own_content` | `CANCEL_WORDS`, `CONFIRM_DELETE_WORDS`, `DELETE_COMMENT_WORDS`, `DELETE_POST_WORDS`, `DISCARD_WORDS`, `EDIT_COMMENT_WORDS`, `EDIT_POST_WORDS`, `ExtOwnContent`, `ME_URL`, `SAVE_WORDS`, `comment_permalink()`, `company_of()`, `parse_comment_ref()`, `post_gone_evidence()`, `prefill_matches()`, `same_company()`, `same_member()`, `slug_of()`, `text_matches()` | `browser-free` |
 | `ext_post` | `ExtPostComposer`, `FEED_URL`, `RECENT_ACTIVITY_URL`, `SHARE_URL` | `browser-free` |
 | `ext_post_outcome` | `CARDS_JS`, `CARD_RENDER_INTERVAL`, `CARD_RENDER_POLLS`, `DATED_CARD_MIN_AGE`, `DISCARD_PROMPT_JS`, `DISCARD_WORDS`, `DRAFT_PROMPT_WORDS`, `DUPLICATE_WINDOW_SECONDS`, `ERROR_POLLS`, `FRESH_SECONDS`, `ME_ALIAS`, `MIN_TRUNCATED_CHARS`, `Navigate`, `PREFIX_CHARS`, `READBACK_WAITS`, `SETTLE_POLL`, `SETTLE_TIMEOUT`, `SHORT_READBACK_WAITS`, `STATE_JS`, `Sleep`, `UPLOAD_TIMEOUT`, `card_age_seconds()`, `card_body()`, `card_matches()`, `classify()`, `decide()`, `find_matches()`, `fresh_hit()`, `normalize()`, `post_url()`, `prefix()`, `read_activity()`, `read_state()`, `recent_duplicate()`, `resolve_me()`, `settle()`, `state_arg()`, `wait_for_upload()` | `browser-free` |
+| `ext_profile` | `ADD_LINK_WORDS`, `ADD_WORDS`, `CONFIRM_DELETE_WORDS`, `DELETE_SUFFIXES`, `DESCRIPTION_LABELS`, `DISCARD_WORDS`, `ExtProfileEditor`, `FEATURED_MENU_WORDS`, `FEATURED_URL`, `HEADLINE_LABELS`, `INTRO_URL`, `PROFILE_URL`, `SAVE_WORDS`, `TITLE_LABELS` | `browser-free` |
+| `ext_profile_cv` | `BASE`, `DELETE_WORDS`, `DETAILS`, `ExtProfileCv`, `FORBIDDEN_CHECK`, `FORM_NEW`, `NOTIFY_SWITCH`, `SECTIONS`, `SINGLETONS`, `compare()`, `date_text()`, `form_values()`, `item_key()`, `norm()`, `parse_date()` | `browser-free` |
 | `ext_repost` | `ExtReposter`, `classify_menu_entry()`, `is_share_menu()`, `new_lines()`, `pick_entry()` | `browser-free` |
 | `ext_saved` | `CARD_HEADINGS`, `ExtSavedReader`, `REACTIONS_URL`, `SAVED_POSTS_URL`, `activity_id()`, `matches()`, `normalise_cards()`, `own_slug()`, `split_feed_text()` | `browser-free` |
 | `ext_selftest` | `outreach_selftest()` | `page-owning` |
@@ -85,6 +87,8 @@ a page-owning collaborator.
 - `ext_own_content` -> `ext_actions`, `ext_composer_labels`, `ext_engagement`, `ext_inmail`, `ext_mentions`
 - `ext_post` -> `ext_composer_labels`, `ext_media`, `ext_mentions`, `ext_post_outcome`, `navigation`, `session`
 - `ext_post_outcome` -> _(none)_
+- `ext_profile` -> `ext_composer_labels`, `ext_own_content`
+- `ext_profile_cv` -> `ext_profile`
 - `ext_repost` -> `ext_actions`
 - `ext_saved` -> _(none)_
 - `ext_selftest` -> `connection`, `connection_actions`, `ext_urls`, `identifiers`, `message_sender`, `navigation`, `session`

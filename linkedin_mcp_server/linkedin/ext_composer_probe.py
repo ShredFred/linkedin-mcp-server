@@ -311,7 +311,29 @@ _REPORT_JS = r"""(limit) => {
     componentkey: (el.getAttribute('componentkey') || '').slice(0, 60),
     disabled: el.disabled === true || el.getAttribute('aria-disabled') === 'true',
     dialog: !!el.closest('[role="dialog"], dialog'),
+    href: el.closest('a[href]') ? el.closest('a[href]').getAttribute('href').slice(0, 160) : '',
   }));
+}"""
+
+# Links/anchors (2026-11-11): edit forms are reached through anchors such as
+# ``/in/<slug>/edit/forms/...``; a report of buttons alone hides them. Only
+# linkedin-relative or linkedin.com hrefs, query strings cut, de-duplicated.
+_LINKS_JS = r"""(limit) => {
+  const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const t = v => String(v || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+  const seen = new Set(); const out = [];
+  for (const a of document.querySelectorAll('a[href]')) {
+    if (!visible(a)) continue;
+    let h = a.getAttribute('href') || '';
+    if (!(h.startsWith('/') || /^https:\/\/([a-z]+\.)?linkedin\.com\//.test(h))) continue;
+    h = h.replace(/^https:\/\/([a-z]+\.)?linkedin\.com/, '').split('?')[0].slice(0, 160);
+    const key = h + '|' + t(a.getAttribute('aria-label') || a.innerText);
+    if (seen.has(key)) continue; seen.add(key);
+    out.push({href: h, label: t(a.getAttribute('aria-label')), text: t(a.innerText),
+              dialog: !!a.closest('[role="dialog"], dialog')});
+    if (out.length >= limit) break;
+  }
+  return out;
 }"""
 
 # Mark one element by exact aria-label or exact text. Exactly one or nothing.
@@ -389,6 +411,7 @@ class ExtComposerProbe:
         result["status"] = "probed"
         result["current_url"] = self._page.url
         result["elements"] = await self._page.evaluate(_REPORT_JS, limit)
+        result["links"] = await self._page.evaluate(_LINKS_JS, limit)
         return result
 
     async def _measure_typeahead(
@@ -705,6 +728,7 @@ async def run_probe_steps(
                 await asyncio.sleep(float(step["seconds"]))
             elif action == "page":
                 rec["elements"] = await page.evaluate(_REPORT_JS, 200)
+                rec["links"] = await page.evaluate(_LINKS_JS, 200)
             elif action == "html":
                 # The last visible dialog's markup, attributes included: the
                 # one place an identifier can hide that the reports skip.

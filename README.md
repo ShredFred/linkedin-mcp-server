@@ -31,9 +31,10 @@
 >
 > **Added tools**
 >
+> - `apply_profile_cv` — Bring the signed-in member's profile to a target CV (YAML or JSON text, same form as get_profile_cv's cv_file).
 > - `comment_on_post` — Comment on a post.
 > - `company_access` — Read the signed-in session's role on a company page (numeric page id): super_admin, content_admin, analyst, curator, admin_unreadable (the admin list is not readable but the admin view offers posting), or none; role unknown with status admin_view_blocked when LinkedIn serves a bot-protection block page instead of the admin view.
-> - `composer_probe` — Report the visible interactive controls of a LinkedIn page: tag, role, aria-label, text, componentkey, disabled state and whether the element sits inside a dialog.
+> - `composer_probe` — Report the visible interactive controls of a LinkedIn page: tag, role, aria-label, text, componentkey, disabled state, whether the element sits inside a dialog and its link target (href), plus a separate "links" list of the page's LinkedIn anchors (edit forms are reached through anchors).
 > - `connect_with_person` — Without confirm_send=true this is a dry run only: nothing is sent.
 > - `create_company_post` — Compose a post authored by a company page the signed-in member administers.
 > - `create_post` — Compose a post on the signed-in member's personal profile (or, with as_company, on a company page the member administers).
@@ -42,6 +43,7 @@
 > - `edit_own_comment` — Replace the text of one of your own comments.
 > - `edit_own_post` — Replace the text of one of your own posts -- or, with as_company (the page slug or numeric id the post card links), of a post authored by a company page you administer.
 > - `edit_profile_intro` — Edit the signed-in member's intro: the custom profile button (link URL and link text) and/or the headline.
+> - `edit_profile_section` — Create, change or delete one item of a CV section (experience, education, certifications, languages, projects, volunteering, honors, publications) or set about/location.
 > - `edit_sent_message` — Edit one of your own sent messages in a thread (URL or thread id).
 > - `find_events` — Find LinkedIn events by keyword (event search, upcoming only) and by organiser page (company slug; its "Events" tab, upcoming and with include_past also past ones).
 > - `follow_up_list` — Who answered which ledger message, and who is due for a follow-up.
@@ -54,6 +56,7 @@
 > - `get_page_followers` — Newest followers of a company page the account administers (numeric page id, e.g. 12345678), with name, degree, headline and the month followed.
 > - `get_post_analytics` — Impressions, members reached, reactions, comments, reposts, saves, sends, profile views and followers gained for the account's own posts.
 > - `get_post_engagers` — Who reacted to a post (with reaction kind) and who commented.
+> - `get_profile_cv` — Read the signed-in member's profile as a CV document: headline, about, location and the list sections experience, education, certifications, languages, projects, volunteering, honors, publications.
 > - `get_profile_viewers` — Who viewed the account's profile (last 90 days, newest first; full list with Premium / Sales Navigator).
 > - `get_saved_posts` — Posts the signed-in member saved (My items > Saved posts), newest first.
 > - `inmail_credits` — Remaining Sales Navigator InMail credits (one page read).
@@ -116,6 +119,70 @@
 >
 
 <!-- FORK-EXT:END -->
+
+## Profile and CV tools (fork, own profile only)
+
+All of them act on the signed-in member's own profile and share one principle: **identity gate, dry run, pre-image, read-back.**
+
+- **Identity gate.** `expected_slug` (the `/in/<slug>/` of the profile you mean) is required; the tool resolves `/in/me/` and refuses with `wrong_account` / `own_identity_unknown` before any field is touched.
+- **Dry run by default.** Without `dry_run=false` the edit dialog is opened, filled and compared with the wanted values, then discarded -- nothing is saved.
+- **Pre-image and read-back.** A live write stores the values before the change in the local ledger (the way back is known) and re-reads the item; only a matching read-back is `verified`. An identical open change answers `already_attempted`.
+- **Guards in the form.** The "notify network" switch is held off; the position form's checkbox that would end the current position is never touched (`guard_tripped` if it is on). A field that is not exactly one match returns `field_not_unique` with the form's inventory instead of a guess.
+- **Pacing.** `edit_profile_intro` and `replace_featured_link` use `profile_edit` (6/day, 20/week). CV items use `profile_cv_edit` (30/day, 60/week): a CV is many small items, and 6/day would leave a profile half migrated for a week.
+
+| Tool | Parameters | Statuses |
+| --- | --- | --- |
+| `get_profile_cv` | `expected_slug`, `sections` (headline, about, location, experience, education, certifications, languages, projects, volunteering, honors, publications), `output` yaml/json | read, wrong_account, own_identity_unknown, invalid_input, pace_budget_spent |
+| `edit_profile_section` | `expected_slug`, `section`, `values`, `item_href` (from get_profile_cv; none = new item), `delete`, `dry_run` | dry_run, verified, unverified, unchanged, form_missing, add_control_missing, field_not_unique, value_not_offered, editor_mismatch, guard_tripped, save_button_unavailable, delete_control_not_unique, already_attempted, pace_budget_spent, invalid_input, nothing_to_change |
+| `apply_profile_cv` | `expected_slug`, `cv` (YAML or JSON text), `allow_delete`, `dry_run`, `max_steps` (1-30) | planned, applied, stopped (with failed_step), nothing_to_change, too_many_steps, wrong_account, own_identity_unknown, invalid_input |
+
+Items match by key: experience (title, company), education (school, degree), certifications (name, issuer), volunteering (organization, role), the others by title or name. Updates run before creates, creates before deletes, so a section is never emptier than either state. A section whose current items cannot be read as values is skipped (`current_unstructured`): a create there could duplicate an item. Running `apply_profile_cv` again after a stop continues where it stopped, because the plan is made from what LinkedIn shows.
+
+Example CV file (fantasy data):
+
+```yaml
+headline: Werkstoffprüferin bei Musterwerk
+about: |
+  Ich prüfe Gefüge und schreibe darüber.
+location: {country: Deutschland, city: Musterstadt}
+experience:
+  - title: Werkstoffprüferin          # several positions at one company = several items
+    company: Musterwerk GmbH
+    location: Musterstadt
+    employment_type: Vollzeit          # visible option text of the select
+    current: true
+    start: 2021-03                     # YYYY-MM or YYYY
+    description: Gefügeanalysen und Härteprüfung.
+  - title: Laborantin
+    company: Musterwerk GmbH
+    start: 2016-09
+    end: 2021-02
+education:
+  - {school: Hochschule Musterstadt, degree: B.Sc., field: Werkstofftechnik, start: 2012, end: 2016}
+certifications:
+  - name: Beispielzertifikat Härteprüfung
+    issuer: Prüfverband Muster
+    issued: 2022-05
+    credential_id: ABC-123
+    credential_url: https://example.org/zertifikat/abc-123
+languages: [Deutsch, {name: Englisch, proficiency: Verhandlungssicher}]
+projects:   [{title: Gefügeatlas, start: 2023-01, description: Bildsammlung.}]
+volunteering: [{organization: Sportverein Musterstadt, role: Kassenwartin, start: 2019}]
+honors:     [{title: Nachwuchspreis, issuer: Musterverband, date: 2020-11}]
+publications: [{title: Gefüge im Blick, publisher: Musterverlag, date: 2023-04-17}]
+```
+
+### What LinkedIn does not let this server do (yet)
+
+ -- measured on a German profile on 2026-11-11 with `composer_probe`, every dialog discarded:
+
+- Add forms open directly at `/in/<slug>/edit/forms/<kind>/new/` for certification, education, language, project, volunteer-experience, honor, publication and summary (about); the position form only through the experience page's "add position" menu. **Skills** (`/edit/forms/skill/new/`) and **contact info** (`/edit/contact-info/`) open no dialog -- both are read-only here, and skills assigned to a position are reported as `skills_not_measured`.
+- **Open-to flags** (open to work / hiring / services) are read-only by design.
+- **Profiles in a second language** are not written yet: the create and per-language edit paths still have to be measured (`composer_probe` now reports anchors, which is how the locale links are found).
+- Existing items are edited through their `/edit/forms/<kind>/<id>/` anchors; until those are measured on a profile with items, `get_profile_cv` may return items without values, and `apply_profile_cv` then skips that section rather than guessing.
+- A featured link's URL cannot be edited in place (`replace_featured_link` adds the new one, then deletes the old one).
+- A captcha or verification page stops the run; complete it in the browser and call again.
+
 
 <p align="left">
   <a href="https://pypi.org/project/mcp-server-linkedin/" target="_blank"><img src="https://img.shields.io/pypi/v/mcp-server-linkedin?color=blue" alt="PyPI"></a>
