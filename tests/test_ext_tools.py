@@ -258,6 +258,8 @@ def test_fork_tools_are_registered_and_tagged():
         "edit_own_post",
         "delete_own_comment",
         "edit_own_comment",
+        "edit_profile_intro",
+        "replace_featured_link",
         "outreach_selftest",
     }
     assert all("ext" in t.tags for t in tools)

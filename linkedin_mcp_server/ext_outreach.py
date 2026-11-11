@@ -408,6 +408,9 @@ PACE_BUDGETS: dict[str, dict[str, int]] = {
     # network's feed like an own post, so the post cap; the undo likewise.
     "repost": {"day": 3, "week": 10},
     "repost_undo": {"day": 3, "week": 10},
+    # Editing the signed-in member's own profile (2026-11-11): intro fields,
+    # custom button, featured links. Visible to everyone, rare by design.
+    "profile_edit": {"day": 6, "week": 20},
 }
 # Dated temporary raises (operator, 2026-10-13: full event search; raised again
 # 2026-10-14 to finish sooner). Each entry applies through its "until" day
@@ -455,6 +458,7 @@ PACE_WRITE_KINDS = {
     "post",
     "repost",
     "repost_undo",
+    "profile_edit",
 }
 PACE_WRITE_TOTAL_PER_DAY = 150
 # LinkedIn's own event-invitation ceiling per organiser account and week.
@@ -475,6 +479,7 @@ _LEDGER_KINDS = {
     "withdraw",
     "repost",
     "repost_undo",
+    "profile_edit",
 }
 
 

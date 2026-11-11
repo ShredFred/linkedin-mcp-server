@@ -41,6 +41,7 @@
 > - `delete_own_post` — Delete one of your own posts (post URL, activity URN or id; create_post returns activity_id).
 > - `edit_own_comment` — Replace the text of one of your own comments.
 > - `edit_own_post` — Replace the text of one of your own posts -- or, with as_company (the page slug or numeric id the post card links), of a post authored by a company page you administer.
+> - `edit_profile_intro` — Edit the signed-in member's intro: the custom profile button (link URL and link text) and/or the headline.
 > - `edit_sent_message` — Edit one of your own sent messages in a thread (URL or thread id).
 > - `find_events` — Find LinkedIn events by keyword (event search, upcoming only) and by organiser page (company slug; its "Events" tab, upcoming and with include_past also past ones).
 > - `follow_up_list` — Who answered which ledger message, and who is due for a follow-up.
@@ -65,6 +66,7 @@
 > - `outreach_selftest` — Read-only check that the Message and Connect actions still resolve, run before a batch so a LinkedIn UI change is caught before the first send.
 > - `pace_status` — The pacer (Taktgeber): per action kind today's and the last seven days' use against its budget, and the daily total of visible actions.
 > - `react_to_post` — React to a post as the signed-in member, or as a company page (as_company = numeric page id, company_name required; only posts on the page's own admin list, only "like" -- the only reaction measured there).
+> - `replace_featured_link` — Replace a link in the signed-in member's Featured section.
 > - `repost_post` — Repost a post instantly to the signed-in member's own feed (never as a company page), or take that repost back with undo=true.
 > - `sales_nav_sent_inmails` — Rows of the Sales Navigator inbox's sent view (read only, one page read).
 > - `search_events` — One LinkedIn event search (/search/results/events/?keywords=...).
