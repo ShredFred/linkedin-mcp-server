@@ -426,10 +426,15 @@ PACE_BUDGETS: dict[str, dict[str, int]] = {
 # nothing needs to be reverted by hand.
 PACE_TEMP_RAISES: dict[str, dict[str, Any]] = {
     "search": {
-        "day": 200,
-        "week": 1100,
-        "until": "2026-11-03",
-        "reason": "operator 2026-10-21: extended for the event backfill",
+        # Operator 2026-11-17: event backfill over all active European
+        # countries and target industries. Doubled (80/400 -> 160/800), not
+        # more: the 200/1100 raise of Oct 2026 ran three weeks without a
+        # LinkedIn warning, so 160/day stays below a measured-safe level.
+        # Falls back to PACE_BUDGETS by itself on 2026-11-25 (local date).
+        "day": 160,
+        "week": 800,
+        "until": "2026-11-24",
+        "reason": "operator 2026-11-17: doubled for the event backfill",
     },
 }
 
@@ -746,6 +751,21 @@ class Pacer:
                         _count(row),
                     )
                 )
+            elif row.get("kind") == "pace_refund":
+                # A booked read that failed before LinkedIn answered (browser
+                # start, unconfirmed empty page, tool error) gives its units
+                # back (operator 2026-11-17: on 2026-11-12, 7 searches were
+                # booked and only 3 answered). Negative units, never below the
+                # booking: refund() caps the count at what it is told was booked.
+                if row.get("action") in _LEDGER_KINDS:
+                    continue
+                events.append(
+                    (
+                        str(row.get("action") or ""),
+                        counted_time(row),
+                        -_count(row),
+                    )
+                )
             elif row.get("kind") == "rate_limited":
                 # Units carry the cooldown in seconds; see rate_limited_until().
                 events.append(
@@ -917,6 +937,29 @@ class Pacer:
                 )
                 state = self.state(action)
         return state
+
+    def refund(
+        self, action: str, count: int = 1, *, tool: str | None = None, reason: str = ""
+    ) -> None:
+        """Give back *count* units of a pace booking whose read failed.
+
+        Only for pace-row kinds (search, page_read, profile_view); a ledger
+        kind's attempt row is its own record and is never refunded. A write
+        that may have happened must keep counting, so callers refund only
+        reads that produced no answer.
+        """
+        if action in _LEDGER_KINDS or action in PACE_WRITE_KINDS or count < 1:
+            return
+        with _file_lock(self.ledger.path.with_suffix(".lock")):
+            self.ledger.append(
+                {
+                    "kind": "pace_refund",
+                    "action": action,
+                    "count": int(count),
+                    "tool": tool,
+                    "reason": (reason or "")[:120],
+                }
+            )
 
     def summary(self) -> dict[str, Any]:
         events = self._events()

@@ -1480,6 +1480,31 @@ def register_ext_stage2_tools(
 
     # -- events and page followers -------------------------------------------------
 
+    def _refund(count: int, tool: str, reason: str) -> None:
+        """A search that produced no answer gives its booking back (2026-11-17)."""
+        try:
+            outreach.Pacer(outreach.Ledger.default()).refund(
+                "search", count, tool=tool, reason=reason
+            )
+        except Exception:  # a refund must never turn an answer into an error
+            pass
+
+    async def _booked_search(
+        ctx: Context, tool: str, booked: int, body: Any
+    ) -> dict[str, Any]:
+        """Run *body*; refund the whole booking on an error, a part on partial errors."""
+        try:
+            result = await _run(ctx, tool, body)
+        except BaseException as exc:
+            _refund(booked, tool, type(exc).__name__)
+            raise
+        if isinstance(result, dict):
+            if result.get("error"):
+                _refund(booked, tool, str(result["error"])[:80])
+            elif result.get("errors"):
+                _refund(min(booked, len(result["errors"])), tool, "query_errors")
+        return result
+
     @mcp.tool(
         timeout=BATCH_TIMEOUT_SECONDS,
         title="Find Events",
@@ -1542,7 +1567,9 @@ def register_ext_stage2_tools(
                 "errors": errors,
             }
 
-        return await _run(ctx, "find_events", body)
+        return await _booked_search(
+            ctx, "find_events", max(1, len(kws) + len(orgs)), body
+        )
 
     @mcp.tool(
         timeout=tool_timeout,
@@ -1601,7 +1628,7 @@ def register_ext_stage2_tools(
                 "has_more": truncated or bool(getattr(finder, "last_has_more", False)),
             }
 
-        return await _run(ctx, "search_events", body)
+        return await _booked_search(ctx, "search_events", 1, body)
 
     @mcp.tool(
         timeout=tool_timeout,
@@ -1632,7 +1659,7 @@ def register_ext_stage2_tools(
             out = [event_summary(e) for e in events]
             return {"company_slug": slug, "count": len(out), "events": out}
 
-        return await _run(ctx, "get_company_events", body)
+        return await _booked_search(ctx, "get_company_events", 1, body)
 
     @mcp.tool(
         timeout=tool_timeout,
