@@ -241,6 +241,7 @@ def test_fork_tools_are_registered_and_tagged():
         "get_profile_viewers",
         "get_saved_posts",
         "get_my_reactions",
+        "get_post_media",
         "comment_on_post",
         "repost_post",
         "job_watch",
