@@ -49,6 +49,7 @@ dependencies = [
     "opentelemetry-api>=1.45.1",
     "packaging>=26.2",
     "patchright>=1.55.0",
+    "pillow>=13.0.0",
     "pydantic-settings>=2.14.2",
     "python-dotenv>=1.1.1",
     "pywin32>=312 ; sys_platform == 'win32'",

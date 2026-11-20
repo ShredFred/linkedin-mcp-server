@@ -161,6 +161,30 @@ def check_download(content_type: str | None, size: int) -> str | None:
     return None
 
 
+def gif_still(path: Path) -> Path | None:
+    """Write the last frame of an animated GIF next to it as PNG.
+
+    Live 2026-11-20: animated infographics open on a blank first frame and
+    build up to the finished graphic, so the last frame is the one worth
+    looking at. Pillow is optional; without it the caller notes the gap.
+    """
+    try:
+        from PIL import Image  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    try:
+        with Image.open(path) as image:
+            frames = getattr(image, "n_frames", 1)
+            if frames <= 1:
+                return None
+            image.seek(frames - 1)
+            still = path.with_name(path.stem + "-still.png")
+            image.convert("RGB").save(still)
+            return still
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def file_name(index: int, item: dict[str, Any], content_type: str) -> str:
     ext = _ALLOWED_TYPES[content_type.split(";")[0].strip().lower()]
     return f"{index:02d}-{item['type']}.{ext}"
@@ -223,6 +247,15 @@ class ExtPostMediaReader:
                 bytes=len(body),
                 content_type=ctype.split(";")[0].strip().lower(),
             )
+            if item["content_type"] == "image/gif":
+                still = gif_still(path)
+                if still is not None:
+                    item["still_path"] = str(still)
+                else:
+                    notes.append(
+                        f"item {index}: animated gif saved; its first frame is "
+                        "often blank, extract the last frame to view it"
+                    )
 
     async def read(
         self, post_url: str, save_dir: str | None, max_items: int

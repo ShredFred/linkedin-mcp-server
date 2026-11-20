@@ -158,3 +158,22 @@ def test_download_writes_images_and_refuses_html_and_oversize(tmp_path):
     assert any("content_type_rejected:text/html" in n for n in notes)
     assert any("too_large" in n for n in notes)
     assert any("HTTP 403" in n for n in notes)
+
+
+def test_gif_still_takes_last_frame_of_animation(tmp_path):
+    from PIL import Image
+
+    from linkedin_mcp_server.linkedin.ext_post_media import gif_still
+
+    blank = Image.new("RGB", (8, 8), (240, 240, 240))
+    done = Image.new("RGB", (8, 8), (10, 120, 10))
+    gif = tmp_path / "00-image.gif"
+    blank.save(gif, save_all=True, append_images=[done], duration=50)
+    still = gif_still(gif)
+    assert still is not None and still.name == "00-image-still.png"
+    with Image.open(still) as image:
+        assert image.convert("RGB").getpixel((0, 0))[1] > 100
+
+    single = tmp_path / "01-image.gif"
+    done.save(single)
+    assert gif_still(single) is None
