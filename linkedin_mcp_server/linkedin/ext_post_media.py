@@ -30,7 +30,15 @@ _ALLOWED_TYPES = {
 }
 
 # Asset kinds that are never post media (people and page pictures).
-_EXCLUDED = ("profile-", "company-logo", "-logo_", "background", "ghost")
+_EXCLUDED = (
+    "profile-",
+    "company-logo",
+    "-logo_",
+    "background",
+    "ghost",
+    # Images attached to comments under the post, not the post itself.
+    "comment-image",
+)
 _SIZE_RE = re.compile(r"_(\d{2,5})(?:_(\d{2,5}))?(?:/|$)")
 _ASSET_RE = re.compile(r"/dms/(?:image|document)/(?:v2/)?([^/]+)/")
 

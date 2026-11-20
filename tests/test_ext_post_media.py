@@ -32,6 +32,8 @@ def test_classify_feedshare_vs_avatars_and_logos():
     assert classify(AVATAR) is None
     assert classify(FRAMED) is None
     assert classify(LOGO) is None
+    # Live 2026-11-20: images attached to comments rode along on a post page.
+    assert classify(M + "D4E2CAQH/comment-image-shrink_8192_160/B4Ea/0/1?e=1") is None
     assert classify(POSTER) == "video_poster"
     assert classify(DOC_P1) == "document_page"
     assert classify(DOC_FILE) == "document"
