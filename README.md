@@ -56,6 +56,7 @@
 > - `get_page_followers` — Newest followers of a company page the account administers (numeric page id, e.g. 12345678), with name, degree, headline and the month followed.
 > - `get_post_analytics` — Impressions, members reached, reactions, comments, reposts, saves, sends, profile views and followers gained for the account's own posts.
 > - `get_post_engagers` — Who reacted to a post (with reaction kind) and who commented.
+> - `get_post_media` — The media of one post so it can be looked at: full-size images (all slides of a multi-image post), document carousel page images plus the document URL when the page exposes it, and a video's poster image.
 > - `get_profile_cv` — Read the signed-in member's profile as a CV document: headline, about, location and the list sections experience, education, certifications, languages, projects, volunteering, honors, publications.
 > - `get_profile_viewers` — Who viewed the account's profile (last 90 days, newest first; full list with Premium / Sales Navigator).
 > - `get_saved_posts` — Posts the signed-in member saved (My items > Saved posts), newest first.

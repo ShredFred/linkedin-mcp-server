@@ -33,6 +33,10 @@ from linkedin_mcp_server.linkedin.ext_network import (
 from linkedin_mcp_server.linkedin.ext_events import ExtEventFinder, event_summary
 from linkedin_mcp_server.linkedin.ext_repost import ExtReposter
 from linkedin_mcp_server.linkedin.ext_saved import ExtSavedReader
+from linkedin_mcp_server.linkedin.ext_post_media import (
+    ExtPostMediaReader,
+    post_target,
+)
 from linkedin_mcp_server.linkedin.ext_engagement import (
     ExtEngagementReader,
     SeenStore,
@@ -797,6 +801,52 @@ def register_ext_stage2_tools(
             ctx,
             "get_my_reactions",
             lambda ex: _saved(ex).read("reactions", limit, query),
+        )
+
+    @mcp.tool(
+        timeout=tool_timeout,
+        title="Get Post Media",
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+        tags={TAG, "post"},
+    )
+    async def get_post_media(
+        post_url: str,
+        ctx: Context,
+        save_dir: str | None = None,
+        max_items: Annotated[int, Field(ge=1, le=100)] = 20,
+    ) -> dict[str, Any]:
+        """
+        The media of one post so it can be looked at: full-size images (all
+        slides of a multi-image post), document carousel page images plus the
+        document URL when the page exposes it, and a video's poster image.
+        Avatars and logos are excluded by their media URL path.
+
+        Args:
+            post_url: Post URL (feed/update/urn:li:activity:..., /posts/...)
+                or the activity URN / id.
+            save_dir: When given, each item is downloaded in the same browser
+                session and written there (images and PDF only, 15 MB cap).
+
+        Returns:
+            url, kind (image/multi_image/document/video/none), items [{type
+            image/document_page/document/video_poster, url, page_index?, path?,
+            bytes?, content_type?}], count, notes (anything incomplete).
+
+        Refusals: invalid_post_url, pace_budget_spent, pace_lock_busy.
+        """
+        try:
+            post_target(post_url)
+        except (ValueError, AttributeError) as bad:
+            return {"status": "invalid_post_url", "message": str(bad)[:300]}
+        refusal = _pace("page_read", tool="get_post_media")
+        if refusal:
+            return refusal
+        return await _run(
+            ctx,
+            "get_post_media",
+            lambda ex: ExtPostMediaReader(ex.ext_session, ex.ext_navigator).read(
+                post_url, save_dir, max_items
+            ),
         )
 
     # -- 6. comments -------------------------------------------------------------
