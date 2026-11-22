@@ -12,6 +12,7 @@ import os
 import re
 import time
 from pathlib import Path
+from linkedin_mcp_server.state_home import default_profile_dir
 from urllib.parse import urlparse
 from collections.abc import Coroutine, Mapping, Sequence
 from typing import Any, TypeVar
@@ -73,7 +74,7 @@ logger = logging.getLogger(__name__)
 
 
 # Default persistent profile directory
-DEFAULT_PROFILE_DIR = Path.home() / ".linkedin-mcp" / "profile"
+DEFAULT_PROFILE_DIR = default_profile_dir()
 # Global browser instance (singleton)
 _browser: BrowserManager | None = None
 _browser_cookie_export_path: Path | None = None

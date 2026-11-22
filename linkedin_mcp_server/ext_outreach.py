@@ -24,6 +24,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from linkedin_mcp_server.state_home import state_home
 from typing import Any, Callable, Iterable
 
 LEDGER_ENV = "LINKEDIN_MCP_LEDGER"
@@ -64,7 +65,7 @@ def state_file(name: str, base: Path | None = None) -> Path:
     ledger after an upgrade would lift every block as well, so two candidates
     are an error, not a fresh start -- and so is a plain file next to a
     prefixed one: that is a split already, and neither half is the truth."""
-    path = (base or Path.home() / ".linkedin-mcp") / name
+    path = (base or state_home()) / name
     try:
         legacy = sorted(p for p in path.parent.glob(f"*-{name}") if p.is_file())
     except OSError:

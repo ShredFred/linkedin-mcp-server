@@ -6,6 +6,7 @@ import itertools
 import json
 import os
 from pathlib import Path
+from linkedin_mcp_server.state_home import default_profile_dir
 import shutil
 import tempfile
 import time
@@ -224,7 +225,7 @@ def _safe_source_profile_dir() -> Path:
     try:
         return get_source_profile_dir()
     except Exception:
-        return Path("~/.linkedin-mcp/profile").expanduser()
+        return default_profile_dir()
 
 
 async def record_page_trace(

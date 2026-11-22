@@ -32,6 +32,7 @@ import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from linkedin_mcp_server.state_home import state_home
 from typing import Any
 
 from linkedin_mcp_server import ext_outreach as outreach
@@ -918,9 +919,7 @@ async def _main(args: argparse.Namespace) -> int:
 
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
     out_path = Path(args.out)
-    state_dir = (
-        Path(args.state_dir) if args.state_dir else Path.home() / ".linkedin-mcp"
-    )
+    state_dir = Path(args.state_dir) if args.state_dir else state_home()
     status, code = "ok", EXIT_OK
     report: dict[str, Any] = {}
     set_headless(True)

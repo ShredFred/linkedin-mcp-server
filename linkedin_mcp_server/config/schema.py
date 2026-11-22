@@ -10,6 +10,7 @@ import logging
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
+from linkedin_mcp_server.state_home import configured_state_home, default_profile_dir
 from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
 
@@ -80,7 +81,12 @@ DEFAULT_BROWSER_IDLE_TIMEOUT_SECONDS: float = 600.0
 #: image it is ``/home/pwuser``, which is what ``docker-compose.yml`` mounts.
 #: ``profile_claim`` compares against it, so it has to be one string rather than
 #: a literal repeated at both ends.
-DEFAULT_USER_DATA_DIR: str = "~/.linkedin-mcp/profile"
+#: ``LINKEDIN_MCP_HOME`` (see ``state_home``) relocates it as a whole.
+DEFAULT_USER_DATA_DIR: str = (
+    str(default_profile_dir())
+    if configured_state_home() is not None
+    else "~/.linkedin-mcp/profile"
+)
 
 
 # Proxy schemes Chromium understands on --proxy-server. The SOCKS ones are

@@ -6,6 +6,7 @@ import os
 import stat
 from datetime import UTC, datetime
 from pathlib import Path
+from linkedin_mcp_server.state_home import is_state_root
 import re
 import tempfile
 
@@ -51,12 +52,12 @@ def harden_linkedin_tree(path: Path) -> None:
         return
     d = path if path.is_dir() else path.parent
     # Bail out early when the path is not inside a .linkedin-mcp tree.
-    if not any(p.name == ".linkedin-mcp" for p in (d, *d.parents)):
+    if not any(is_state_root(p) for p in (d, *d.parents)):
         return
     for p in (d, *d.parents):
         if p.is_dir() and stat.S_IMODE(p.stat().st_mode) != _PRIVATE_DIR_MODE:
             p.chmod(_PRIVATE_DIR_MODE)
-        if p.name == ".linkedin-mcp":
+        if is_state_root(p):
             return
 
 

@@ -7,6 +7,7 @@ from dataclasses import asdict
 import json
 import socket
 from pathlib import Path
+from linkedin_mcp_server.state_home import default_profile_dir
 from typing import Any
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
@@ -239,7 +240,7 @@ def _safe_source_profile_dir():
     try:
         return get_source_profile_dir()
     except Exception:
-        return (Path.home() / ".linkedin-mcp" / "profile").expanduser()
+        return default_profile_dir()
 
 
 def _suggest_issue_title(

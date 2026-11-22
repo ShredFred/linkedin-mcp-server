@@ -7,6 +7,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from linkedin_mcp_server.state_home import default_profile_dir
 from collections.abc import Coroutine, Mapping
 from typing import Any, TypeVar
 
@@ -50,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-_DEFAULT_USER_DATA_DIR = Path.home() / ".linkedin-mcp" / "profile"
+_DEFAULT_USER_DATA_DIR = default_profile_dir()
 _PRIVATE_FILE_MODE = 0o600
 _CLEANUP_TIMEOUT_SECONDS = 10
 

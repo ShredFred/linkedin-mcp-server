@@ -245,6 +245,27 @@ def _usable_home(entry: str) -> Path:
     return home if os.name == "nt" else home.resolve()
 
 
+def _daemon_anchor() -> Path:
+    """Return the directory the daemon namespace is created in.
+
+    The account home by default. With ``LINKEDIN_MCP_HOME`` set, the parent of
+    that state directory, so the daemon namespace moves with the rest of the
+    state and is checked under the same rules as an account home. The test
+    suite's own variable still wins, so tests never touch a configured root.
+    """
+    if os.environ.get(TEST_ACCOUNT_HOME_ENV):
+        return _account_home()
+    from linkedin_mcp_server.state_home import configured_state_home
+
+    try:
+        configured = configured_state_home()
+    except ValueError as exc:
+        raise DescriptorError(str(exc)) from exc
+    if configured is None:
+        return _account_home()
+    return _usable_home(str(configured.parent))
+
+
 def daemon_state_root() -> Path:
     """Return the private application root shared by every local daemon.
 
@@ -253,7 +274,7 @@ def daemon_state_root() -> Path:
     link, a renamed directory) splits the lock, as it does the profile lease;
     no lock addressed by path avoids that.
     """
-    root = _account_home() / _APPLICATION_STATE_DIR / _DAEMON_DIR
+    root = _daemon_anchor() / _APPLICATION_STATE_DIR / _DAEMON_DIR
     # Windows must inspect each application-owned component before following it.
     # Resolving here would turn a junction into an ordinary-looking target first.
     return root if _WINDOWS else root.resolve()
@@ -476,7 +497,7 @@ def prepare_daemon_state(auth_root: Path) -> Path:
     """
     root = daemon_state_root()
     if _WINDOWS:
-        home = _account_home()
+        home = _daemon_anchor()
         from linkedin_mcp_server.windows_acl import (
             verify_children_cannot_be_replaced,
         )

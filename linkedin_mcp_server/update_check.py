@@ -22,6 +22,7 @@ import os
 import time
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
+from linkedin_mcp_server.state_home import state_home
 from urllib.request import Request, urlopen
 
 import mcp.types as mt
@@ -37,7 +38,7 @@ _PYPI_URL = "https://pypi.org/pypi/mcp-server-linkedin/json"
 _LATEST_RELEASE_URL = (
     "https://github.com/stickerdaniel/linkedin-mcp-server/releases/latest"
 )
-_CACHE_PATH = Path.home() / ".linkedin-mcp" / "update-check.json"
+_CACHE_PATH = state_home() / "update-check.json"
 _CACHE_TTL_SECONDS = 24 * 60 * 60
 _REQUEST_TIMEOUT_SECONDS = 2.0
 _DISABLED_VALUES = {"0", "false", "off", "no"}
