@@ -83,6 +83,11 @@ BEHAVIOUR_CHANGES = [
     "mean the action may have happened: never retry, check the thread or "
     "post by hand. `tests/test_ext_r6_doku.py` keeps descriptions and code "
     "in step.",
+    "`get_feed` scrolls until `num_posts` distinct posts have loaded, three "
+    "scrolls in a row bring nothing new, or a ceiling of `num_posts + 10` "
+    "scrolls (12 to 60) is reached; upstream stopped at twelve scrolls. Each "
+    "scroll books one `page_read`; a budget spent mid-scroll returns what "
+    "loaded with `pace_stopped: true`.",
 ]
 
 
@@ -144,7 +149,10 @@ SAFETY_MODEL = [
     "(`unknown`, `unverified`) blocks a retry.",
     "**Pacer.** Each action kind has a daily and a rolling 7-day budget plus a "
     "daily total of visible actions (`pace_status`); a spent budget refuses "
-    "before anything is loaded.",
+    "before anything is loaded. The upstream read tools book too: profile reads "
+    "`profile_view`, searches `search` (one unit per result page), feed, "
+    "company, job, post and inbox pages `page_read`; a read that fails before "
+    "LinkedIn answered gives its units back.",
     "**Read-back.** Messages, posts, comments, invitations and reposts are read "
     "back from the page; only a confirmed read-back counts as `verified`.",
     "**Unguarded upstream writes are hidden.** The fork's guarded tools take "

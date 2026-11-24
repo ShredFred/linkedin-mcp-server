@@ -16,6 +16,7 @@ from linkedin_mcp_server.core.exceptions import (
     InvalidReferenceError,
 )
 from linkedin_mcp_server.dependencies import get_ready_extractor, tool_errors
+from linkedin_mcp_server.tools.read_pace import is_refusal, paced_read
 from linkedin_mcp_server.linkedin.contracts import (
     SEND_INTERRUPTED_WARNING,
     before_the_reply_deadline,
@@ -75,7 +76,13 @@ def register_messaging_tools(
             progress=0, total=100, message="Loading messaging inbox"
         )
 
-        result = await extractor.get_inbox(limit=limit)
+        result = await paced_read(
+            "page_read",
+            "get_inbox",
+            lambda: extractor.get_inbox(limit=limit),
+        )
+        if is_refusal(result):
+            return result
 
         await ctx.report_progress(progress=100, total=100, message="Complete")
 
@@ -149,11 +156,17 @@ def register_messaging_tools(
 
         await ctx.report_progress(progress=0, total=100, message="Loading conversation")
 
-        result = await extractor.get_conversation(
-            linkedin_username=linkedin_username,
-            thread_id=thread_id,
-            index=index,
+        result = await paced_read(
+            "page_read",
+            "get_conversation",
+            lambda: extractor.get_conversation(
+                linkedin_username=linkedin_username,
+                thread_id=thread_id,
+                index=index,
+            ),
         )
+        if is_refusal(result):
+            return result
 
         await ctx.report_progress(progress=100, total=100, message="Complete")
 
@@ -205,7 +218,13 @@ def register_messaging_tools(
 
         await ctx.report_progress(progress=0, total=100, message="Searching messages")
 
-        result = await extractor.search_conversations(keywords, limit=limit)
+        result = await paced_read(
+            "page_read",
+            "search_conversations",
+            lambda: extractor.search_conversations(keywords, limit=limit),
+        )
+        if is_refusal(result):
+            return result
 
         await ctx.report_progress(progress=100, total=100, message="Complete")
 

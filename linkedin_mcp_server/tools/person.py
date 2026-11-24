@@ -20,6 +20,7 @@ from linkedin_mcp_server.linkedin import parse_person_sections
 from linkedin_mcp_server.linkedin.contracts import FilterValidationError
 from linkedin_mcp_server.linkedin.identifiers import normalize_person_identifier
 from linkedin_mcp_server.linkedin.search_urls import build_people_search_url
+from linkedin_mcp_server.tools.read_pace import is_refusal, paced_read
 
 logger = logging.getLogger(__name__)
 
@@ -115,12 +116,18 @@ def register_person_tools(
         )
 
         cb = MCPContextProgressCallback(ctx)
-        result = await extractor.read_person(
-            linkedin_username,
-            requested,
-            callbacks=cb,
-            max_scrolls=max_scrolls,
+        result = await paced_read(
+            "profile_view",
+            "get_person_profile",
+            lambda: extractor.read_person(
+                linkedin_username,
+                requested,
+                callbacks=cb,
+                max_scrolls=max_scrolls,
+            ),
         )
+        if is_refusal(result):
+            return result
 
         if unknown:
             result["unknown_sections"] = unknown
@@ -196,11 +203,15 @@ def register_person_tools(
         )
 
         try:
-            result = await extractor.search_people(
-                keywords,
-                location,
-                network=network,
-                current_company=current_company,
+            result = await paced_read(
+                "search",
+                "search_people",
+                lambda: extractor.search_people(
+                    keywords,
+                    location,
+                    network=network,
+                    current_company=current_company,
+                ),
             )
         except FilterValidationError as e:
             # Validation messages carry actionable detail; surface
@@ -319,7 +330,11 @@ def register_person_tools(
             progress=0, total=100, message="Extracting sidebar profiles"
         )
 
-        result = await extractor.get_sidebar_profiles(linkedin_username)
+        result = await paced_read(
+            "profile_view",
+            "get_sidebar_profiles",
+            lambda: extractor.get_sidebar_profiles(linkedin_username),
+        )
 
         await ctx.report_progress(progress=100, total=100, message="Complete")
 
@@ -369,11 +384,17 @@ def register_person_tools(
         logger.info("Reading own profile (sections=%s)", sections)
 
         cb = MCPContextProgressCallback(ctx)
-        result = await extractor.get_my_profile(
-            sections=requested,
-            callbacks=cb,
-            max_scrolls=max_scrolls,
+        result = await paced_read(
+            "page_read",
+            "get_my_profile",
+            lambda: extractor.get_my_profile(
+                sections=requested,
+                callbacks=cb,
+                max_scrolls=max_scrolls,
+            ),
         )
+        if is_refusal(result):
+            return result
 
         if unknown:
             result["unknown_sections"] = unknown

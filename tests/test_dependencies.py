@@ -321,7 +321,8 @@ class TestGetReadyExtractor:
                 with pytest.raises(ToolError, match="login opened"):
                     await client.call_tool("get_feed", {"num_posts": 1})
 
-        extractor.extract_feed.assert_awaited_once_with(num_posts=1)
+        extractor.extract_feed.assert_awaited_once()
+        assert extractor.extract_feed.await_args.kwargs["num_posts"] == 1
         routed.assert_awaited_once()
         routed_call = routed.await_args
         assert routed_call is not None

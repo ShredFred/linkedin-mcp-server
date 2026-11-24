@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import asyncio
@@ -31,6 +32,23 @@ from linkedin_mcp_server.linkedin.text import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: A feed scroll gate: called before every wheel, ``False`` stops the scroll.
+ScrollGate = Callable[[], bool]
+
+# The scroll ceiling grows with the request. LinkedIn delivers a batch per
+# wheel that is often a single post, so a fixed twelve wheels returned 12 of
+# 50 requested posts (live, 2026-11-24). Ten wheels of headroom over the
+# request, never fewer than twelve, never more than sixty.
+_MIN_SCROLLS = 12
+_SCROLL_HEADROOM = 10
+_SCROLL_CAP = 60
+
+
+def max_feed_scrolls(num_posts: int) -> int:
+    """Scroll ceiling for a feed read of *num_posts* posts."""
+    return min(_SCROLL_CAP, max(_MIN_SCROLLS, num_posts + _SCROLL_HEADROOM))
+
 
 # collectPostBoundaries: pair each rendered feed post with its own URN.
 # The scroll-progress signal and the text read stay as they are; this second
@@ -150,10 +168,15 @@ class FeedReader:
     async def extract_feed(
         self,
         num_posts: int = 10,
+        scroll_gate: ScrollGate | None = None,
     ) -> ExtractedSection:
-        """Read the LinkedIn home feed, scrolling until *num_posts* are loaded."""
+        """Read the LinkedIn home feed, scrolling until *num_posts* are loaded.
+
+        *scroll_gate* is asked before every wheel; a ``False`` ends the
+        scroll with what has loaded so far (the pacer's per-scroll booking).
+        """
         try:
-            return await self._extract_feed_once(num_posts)
+            return await self._extract_feed_once(num_posts, scroll_gate)
         except LinkedInOperationError:
             raise
         except Exception as e:
@@ -167,6 +190,7 @@ class FeedReader:
     async def _extract_feed_once(
         self,
         num_posts: int,
+        scroll_gate: ScrollGate | None = None,
     ) -> ExtractedSection:
         """Single attempt: navigate, scroll until post count, extract."""
         url = "https://www.linkedin.com/feed/"
@@ -205,7 +229,7 @@ class FeedReader:
         page.on("response", _handle_response)
         try:
             return await self._extract_feed_body(
-                url, num_posts, captured_urls, pending_reads
+                url, num_posts, captured_urls, pending_reads, scroll_gate
             )
         finally:
             try:
@@ -229,6 +253,7 @@ class FeedReader:
         num_posts: int,
         captured_urls: list[str],
         pending_reads: list[asyncio.Task[None]],
+        scroll_gate: ScrollGate | None = None,
     ) -> ExtractedSection:
         page = self._session.page
         await self._navigator._navigate_to_page(url)
@@ -255,7 +280,7 @@ class FeedReader:
 
         # The feed has its own scroll container — window.scrollTo is a no-op.
         # mouse.wheel over the viewport center triggers the real scroll.
-        _MAX_SCROLLS = 12
+        _MAX_SCROLLS = max_feed_scrolls(num_posts)
         _MAX_STALE = 3
         _BATCH_WAIT = 6.0
         _WHEEL_DELTA = 2000
@@ -270,6 +295,10 @@ class FeedReader:
             count = len(captured_urls)
             logger.debug("Feed scroll %d: %d permalinks captured", i, count)
             if count >= num_posts:
+                break
+
+            if scroll_gate is not None and not scroll_gate():
+                logger.debug("Feed scroll gate closed after %d scrolls", i)
                 break
 
             await page.mouse.wheel(0, _WHEEL_DELTA)

@@ -22,7 +22,7 @@
       },
       "extract_feed": {
         "coroutine": true,
-        "signature": "(self, num_posts: 'int' = 10) -> 'ExtractedSection'"
+        "signature": "(self, num_posts: 'int' = 10, scroll_gate: 'ScrollGate | None' = None) -> 'ExtractedSection'"
       },
       "extract_page": {
         "coroutine": true,
@@ -304,7 +304,7 @@
           "properties": {
             "num_posts": {
               "default": 10,
-              "description": "Number of posts to fetch (1-50, default 10).\n       Posts are loaded in batches of ~5 as the page scrolls,\n       so the actual count may slightly exceed the target.",
+              "description": "Number of posts to fetch (1-50, default 10).\n       The feed is scrolled until this many distinct posts\n       (deduplicated by permalink) have loaded, three scrolls\n       in a row bring nothing new, or the scroll ceiling\n       (num_posts + 10, at least 12, at most 60) is reached.\n       A batch may slightly exceed the target.",
               "maximum": 50,
               "minimum": 1,
               "type": "integer"

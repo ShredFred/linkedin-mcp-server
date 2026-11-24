@@ -16,6 +16,7 @@ from pydantic import Field
 
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.dependencies import get_ready_extractor, tool_errors
+from linkedin_mcp_server.tools.read_pace import is_refusal, paced_read, take_read
 from linkedin_mcp_server.linkedin.contracts import RATE_LIMITED_SECTION_TEXT
 from linkedin_mcp_server.linkedin.contracts import rate_limited_section_error
 from linkedin_mcp_server.linkedin.link_metadata import Reference
@@ -45,8 +46,17 @@ def register_feed_tools(
         Args:
             ctx: FastMCP context for progress reporting
             num_posts: Number of posts to fetch (1-50, default 10).
-                       Posts are loaded in batches of ~5 as the page scrolls,
-                       so the actual count may slightly exceed the target.
+                       The feed is scrolled until this many distinct posts
+                       (deduplicated by permalink) have loaded, three scrolls
+                       in a row bring nothing new, or the scroll ceiling
+                       (num_posts + 10, at least 12, at most 60) is reached.
+                       A batch may slightly exceed the target.
+
+        Pacing: the first page load books one ``page_read``, and every
+        further scroll books one more. When the budget runs out mid-scroll
+        the posts loaded so far are returned with ``pace_stopped: true``;
+        when it is spent before the load, the ``pace_budget_spent`` dict is
+        returned instead.
 
         Returns:
             Dict with url, sections (name -> raw text), and optional keys:
@@ -71,7 +81,24 @@ def register_feed_tools(
             progress=0, total=100, message="Reading the home feed"
         )
 
-        extracted = await extractor.extract_feed(num_posts=num_posts)
+        pace_stopped = False
+
+        def scroll_gate() -> bool:
+            nonlocal pace_stopped
+            if take_read("page_read", tool="get_feed") is None:
+                return True
+            pace_stopped = True
+            return False
+
+        extracted = await paced_read(
+            "page_read",
+            "get_feed",
+            lambda: extractor.extract_feed(
+                num_posts=num_posts, scroll_gate=scroll_gate
+            ),
+        )
+        if is_refusal(extracted):
+            return extracted
 
         url = "https://www.linkedin.com/feed/"
         sections: dict[str, str] = {}
@@ -93,4 +120,6 @@ def register_feed_tools(
             result["references"] = references
         if section_errors:
             result["section_errors"] = section_errors
+        if pace_stopped:
+            result["pace_stopped"] = True
         return result
