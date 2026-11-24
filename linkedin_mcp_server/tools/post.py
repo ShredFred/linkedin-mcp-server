@@ -17,6 +17,7 @@ from pydantic import Field
 
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.dependencies import get_ready_extractor, tool_errors
+from linkedin_mcp_server.tools.read_pace import is_refusal, paced_read
 from linkedin_mcp_server.linkedin.contracts import FilterValidationError
 
 logger = logging.getLogger(__name__)
@@ -92,12 +93,19 @@ def register_post_tools(
         await ctx.report_progress(progress=0, total=100, message="Starting post search")
 
         try:
-            result = await extractor.search_posts(
-                keywords,
-                date_posted=date_posted,
-                content_type=content_type,
-                max_pages=max_pages,
+            result = await paced_read(
+                "search",
+                "search_posts",
+                lambda: extractor.search_posts(
+                    keywords,
+                    date_posted=date_posted,
+                    content_type=content_type,
+                    max_pages=max_pages,
+                ),
+                count=max_pages,
             )
+            if is_refusal(result):
+                return result
         except FilterValidationError as e:
             # Validation messages carry actionable detail; surface them as
             # ToolError so mask_error_details doesn't reduce them to a

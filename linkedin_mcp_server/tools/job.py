@@ -13,6 +13,7 @@ from pydantic import Field
 
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.dependencies import get_ready_extractor, tool_errors
+from linkedin_mcp_server.tools.read_pace import is_refusal, paced_read
 from linkedin_mcp_server.linkedin.identifiers import normalize_job_id
 from linkedin_mcp_server.linkedin.job_policy import JobsTrackerStage
 
@@ -62,7 +63,13 @@ def register_job_tools(
             progress=0, total=100, message="Reading the job posting"
         )
 
-        result = await extractor.read_job(job_id)
+        result = await paced_read(
+            "page_read",
+            "get_job_details",
+            lambda: extractor.read_job(job_id),
+        )
+        if is_refusal(result):
+            return result
 
         await ctx.report_progress(progress=100, total=100, message="Complete")
 
@@ -101,7 +108,13 @@ def register_job_tools(
 
         await ctx.report_progress(progress=0, total=100, message="Opening job posting")
 
-        result = await extractor.get_job_apply_url(job_id)
+        result = await paced_read(
+            "page_read",
+            "get_job_apply_url",
+            lambda: extractor.get_job_apply_url(job_id),
+        )
+        if is_refusal(result):
+            return result
 
         await ctx.report_progress(progress=100, total=100, message="Complete")
 
@@ -183,19 +196,26 @@ def register_job_tools(
 
         await ctx.report_progress(progress=0, total=100, message="Starting job search")
 
-        result = await extractor.search_jobs(
-            keywords,
-            location=location,
-            max_pages=max_pages,
-            date_posted=date_posted,
-            job_type=job_type,
-            experience_level=experience_level,
-            work_type=work_type,
-            easy_apply=easy_apply,
-            sort_by=sort_by,
-            # What is left of the figure FastMCP cancels this call on.
-            tool_timeout=max(0.0, tool_timeout - (time.monotonic() - started)),
+        result = await paced_read(
+            "search",
+            "search_jobs",
+            lambda: extractor.search_jobs(
+                keywords,
+                location=location,
+                max_pages=max_pages,
+                date_posted=date_posted,
+                job_type=job_type,
+                experience_level=experience_level,
+                work_type=work_type,
+                easy_apply=easy_apply,
+                sort_by=sort_by,
+                # What is left of the figure FastMCP cancels this call on.
+                tool_timeout=max(0.0, tool_timeout - (time.monotonic() - started)),
+            ),
+            count=max_pages,
         )
+        if is_refusal(result):
+            return result
 
         await ctx.report_progress(progress=100, total=100, message="Complete")
 
@@ -234,7 +254,14 @@ def register_job_tools(
 
         await ctx.report_progress(progress=0, total=100, message="Loading saved jobs")
 
-        result = await extractor.get_saved_jobs(max_pages=max_pages, stage=stage)
+        result = await paced_read(
+            "page_read",
+            "get_saved_jobs",
+            lambda: extractor.get_saved_jobs(max_pages=max_pages, stage=stage),
+            count=max_pages,
+        )
+        if is_refusal(result):
+            return result
 
         await ctx.report_progress(progress=100, total=100, message="Complete")
 

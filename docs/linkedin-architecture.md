@@ -37,6 +37,7 @@ a page-owning collaborator.
 | `ext_network` | `ATTENDEE_FIELDS_CARD`, `ATTENDEE_FIELDS_MINIMAL`, `CONNECTIONS_URL`, `EVENT_COUNT_JS`, `EVENT_COUNT_WAIT_SECONDS`, `EVENT_STATUS_JS`, `ExtNetworkReader`, `MAX_ATTENDEE_PAGES`, `MAX_LIST_LIMIT`, `SENT_INVITATIONS_URL`, `SearchLimitReached`, `classify_action()`, `event_attendees_url()`, `event_page_flags()`, `is_search_limit_text()`, `own_rsvp_from()`, `parse_connected_date()`, `parse_degree()`, `project_attendees()`, `read_event_count()`, `split_person_lines()` | `browser-free` |
 | `ext_own_content` | `CANCEL_WORDS`, `CONFIRM_DELETE_WORDS`, `DELETE_COMMENT_WORDS`, `DELETE_POST_WORDS`, `DISCARD_WORDS`, `EDIT_COMMENT_WORDS`, `EDIT_POST_WORDS`, `ExtOwnContent`, `ME_URL`, `SAVE_WORDS`, `comment_permalink()`, `company_of()`, `parse_comment_ref()`, `post_gone_evidence()`, `prefill_matches()`, `same_company()`, `same_member()`, `slug_of()`, `text_matches()` | `browser-free` |
 | `ext_post` | `ExtPostComposer`, `FEED_URL`, `RECENT_ACTIVITY_URL`, `SHARE_URL` | `browser-free` |
+| `ext_post_media` | `ExtPostMediaReader`, `MAX_FILE_BYTES`, `check_download()`, `classify()`, `file_name()`, `gif_still()`, `post_kind()`, `post_target()`, `select_media()` | `browser-free` |
 | `ext_post_outcome` | `CARDS_JS`, `CARD_RENDER_INTERVAL`, `CARD_RENDER_POLLS`, `DATED_CARD_MIN_AGE`, `DISCARD_PROMPT_JS`, `DISCARD_WORDS`, `DRAFT_PROMPT_WORDS`, `DUPLICATE_WINDOW_SECONDS`, `ERROR_POLLS`, `FRESH_SECONDS`, `ME_ALIAS`, `MIN_TRUNCATED_CHARS`, `Navigate`, `PREFIX_CHARS`, `READBACK_WAITS`, `SETTLE_POLL`, `SETTLE_TIMEOUT`, `SHORT_READBACK_WAITS`, `STATE_JS`, `Sleep`, `UPLOAD_TIMEOUT`, `card_age_seconds()`, `card_body()`, `card_matches()`, `classify()`, `decide()`, `find_matches()`, `fresh_hit()`, `normalize()`, `post_url()`, `prefix()`, `read_activity()`, `read_state()`, `recent_duplicate()`, `resolve_me()`, `settle()`, `state_arg()`, `wait_for_upload()` | `browser-free` |
 | `ext_profile` | `ADD_LINK_WORDS`, `ADD_WORDS`, `CONFIRM_DELETE_WORDS`, `DELETE_SUFFIXES`, `DESCRIPTION_LABELS`, `DISCARD_WORDS`, `ExtProfileEditor`, `FEATURED_MENU_WORDS`, `FEATURED_URL`, `HEADLINE_LABELS`, `INTRO_URL`, `PROFILE_URL`, `SAVE_WORDS`, `TITLE_LABELS` | `browser-free` |
 | `ext_profile_cv` | `BASE`, `DELETE_WORDS`, `DETAILS`, `ExtProfileCv`, `FORBIDDEN_CHECK`, `FORM_NEW`, `NOTIFY_SWITCH`, `SECTIONS`, `SINGLETONS`, `compare()`, `date_text()`, `form_values()`, `item_key()`, `norm()`, `parse_date()` | `browser-free` |
@@ -45,7 +46,7 @@ a page-owning collaborator.
 | `ext_selftest` | `outreach_selftest()` | `page-owning` |
 | `ext_urls` | `BENIGN_PROFILE_QUERY`, `benign_query()`, `canonical_profile_path()`, `identity_path()`, `profile_key()`, `profile_slug_from_url()` | `browser-free` |
 | `extractor` | `LinkedInExtractor` | `page-owning` |
-| `feed` | `FEED_POST_BOUNDARIES_JS`, `FeedReader` | `page-owning` |
+| `feed` | `FEED_POST_BOUNDARIES_JS`, `FeedReader`, `ScrollGate`, `max_feed_scrolls()` | `page-owning` |
 | `feed_payload` | `POST_SLUG_URL_RE`, `append_permalink_references()`, `build_feed_references()`, `is_feed_payload_response()`, `is_permalink_payload_response()`, `permalink_paths_from_payload()` | `browser-free` |
 | `fields` | `COMPANY_SECTIONS`, `PERSON_SECTIONS`, `parse_company_sections()`, `parse_person_sections()` | `browser-free` |
 | `identifiers` | `company_page_url()`, `job_view_url()`, `landed_identity_mismatch()`, `messaging_thread_url()`, `normalize_company_identifier()`, `normalize_job_id()`, `normalize_opaque_id()`, `normalize_person_identifier()`, `normalize_profile_urn()`, `normalize_thread_id()`, `person_profile_url()` | `browser-free` |
@@ -86,6 +87,7 @@ a page-owning collaborator.
 - `ext_network` -> `navigation`, `session`
 - `ext_own_content` -> `ext_actions`, `ext_composer_labels`, `ext_engagement`, `ext_inmail`, `ext_mentions`
 - `ext_post` -> `ext_composer_labels`, `ext_media`, `ext_mentions`, `ext_post_outcome`, `navigation`, `session`
+- `ext_post_media` -> `ext_engagement`
 - `ext_post_outcome` -> _(none)_
 - `ext_profile` -> `ext_composer_labels`, `ext_own_content`
 - `ext_profile_cv` -> `ext_profile`

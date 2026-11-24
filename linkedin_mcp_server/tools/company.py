@@ -6,7 +6,7 @@ with configurable section selection.
 """
 
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
@@ -15,6 +15,8 @@ from pydantic import Field
 from linkedin_mcp_server.callbacks import MCPContextProgressCallback
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.dependencies import get_ready_extractor, tool_errors
+from linkedin_mcp_server.linkedin.contracts import ExtractedSection
+from linkedin_mcp_server.tools.read_pace import is_refusal, paced_read
 from linkedin_mcp_server.linkedin import parse_company_sections
 from linkedin_mcp_server.linkedin.contracts import RATE_LIMITED_SECTION_TEXT
 from linkedin_mcp_server.linkedin.contracts import rate_limited_section_error
@@ -81,7 +83,13 @@ def register_company_tools(
         )
 
         cb = MCPContextProgressCallback(ctx)
-        result = await extractor.read_company(company_name, requested, callbacks=cb)
+        result = await paced_read(
+            "page_read",
+            "get_company_profile",
+            lambda: extractor.read_company(company_name, requested, callbacks=cb),
+        )
+        if is_refusal(result):
+            return result
 
         if unknown:
             result["unknown_sections"] = unknown
@@ -122,9 +130,16 @@ def register_company_tools(
         )
 
         url = company_page_url(company_name, "/posts/")
-        extracted = await extractor.extract_page(
-            url, section_name="posts", max_scrolls=max_scrolls
+        extracted = await paced_read(
+            "page_read",
+            "get_company_posts",
+            lambda: extractor.extract_page(
+                url, section_name="posts", max_scrolls=max_scrolls
+            ),
         )
+        if is_refusal(extracted):
+            return cast(dict[str, Any], extracted)
+        extracted = cast(ExtractedSection, extracted)
 
         sections: dict[str, str] = {}
         references: dict[str, list[Reference]] = {}
@@ -182,7 +197,13 @@ def register_company_tools(
             progress=0, total=100, message="Starting company search"
         )
 
-        result = await extractor.search_companies(keywords)
+        result = await paced_read(
+            "search",
+            "search_companies",
+            lambda: extractor.search_companies(keywords),
+        )
+        if is_refusal(result):
+            return result
 
         await ctx.report_progress(progress=100, total=100, message="Complete")
 
@@ -239,7 +260,13 @@ def register_company_tools(
             progress=0, total=100, message="Loading company employees"
         )
 
-        result = await extractor.get_company_employees(company_name, keywords=keywords)
+        result = await paced_read(
+            "page_read",
+            "get_company_employees",
+            lambda: extractor.get_company_employees(company_name, keywords=keywords),
+        )
+        if is_refusal(result):
+            return result
 
         await ctx.report_progress(progress=100, total=100, message="Complete")
 

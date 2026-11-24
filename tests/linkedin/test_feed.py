@@ -86,6 +86,7 @@ class TestFeedListenerLifecycle:
             num_posts: int,
             captured_urls: list[str],
             pending_reads: list[asyncio.Task[None]],
+            scroll_gate=None,
         ) -> ExtractedSection:
             assert url == "https://www.linkedin.com/feed/"
             assert num_posts == 3
@@ -118,6 +119,7 @@ class TestFeedListenerLifecycle:
             num_posts: int,
             captured_urls: list[str],
             pending_reads: list[asyncio.Task[None]],
+            scroll_gate=None,
         ) -> ExtractedSection:
             task = asyncio.create_task(failing_read())
             await asyncio.wait({task})
@@ -163,7 +165,9 @@ class TestExtractFeedFailures:
 
     @staticmethod
     def _once_raising(error: Exception):
-        async def _extract_feed_once(num_posts: int) -> ExtractedSection:
+        async def _extract_feed_once(
+            num_posts: int, scroll_gate=None
+        ) -> ExtractedSection:
             raise error
 
         return _extract_feed_once
@@ -202,23 +206,16 @@ class TestFeedScrollCeiling:
 
     ``stale_count`` resets on every round that yields a permalink, so a
     feed that keeps loading never stale-stops and the ceiling is the only
-    thing left to end the loop. Neither canonical fixture reaches it: one
-    stale-stops after three wheels, the other satisfies ``num_posts=1`` on
-    the first. The pacing is what differs here: exactly one batch lands per
-    wheel, which keeps every round productive without ever reaching
-    ``num_posts``, so the count the loop returns is the ceiling itself.
+    thing left to end the loop. The ceiling grows with the request
+    (``max_feed_scrolls``): a fixed twelve returned 12 of 50 requested posts
+    live on 2026-11-24, because LinkedIn often delivers one post per wheel.
     """
 
-    _CEILING = 12
-    # The tool's own upper bound. Anything the loop could reach in twelve
-    # rounds at one post per scroll stays far below it, which is the point:
-    # the ceiling truncates the result the caller asked for.
     _NUM_POSTS = 50
 
     @staticmethod
-    def _one_batch_per_wheel(page: ScriptedPage, index: int):
+    def _one_batch(page: ScriptedPage, slug: str):
         """One SDUI payload, delivered only when the wheel fires."""
-        slug = f"ceiling-ugcPost-{index}-example"
         response = ScriptedResponse(
             page.recorder,
             "https://www.linkedin.com/feed/",
@@ -226,17 +223,29 @@ class TestFeedScrollCeiling:
         )
         return lambda: page.emit("response", response)
 
-    async def test_a_producing_feed_is_truncated_at_the_twelfth_scroll(self):
-        recorder = TraceRecorder(
-            "feed-scroll-ceiling",
-            _COMMON_ALLOWED | {"response.body.start", "response.body.finish"},
+    @staticmethod
+    def _recorder(name: str) -> TraceRecorder:
+        return TraceRecorder(
+            name, _COMMON_ALLOWED | {"response.body.start", "response.body.finish"}
         )
+
+    @pytest.mark.parametrize(
+        ("num_posts", "ceiling"), [(1, 12), (2, 12), (10, 20), (30, 40), (50, 60)]
+    )
+    def test_the_ceiling_grows_with_the_request(self, num_posts, ceiling):
+        assert feed_module.max_feed_scrolls(num_posts) == ceiling
+
+    async def test_one_post_per_wheel_still_reaches_fifty(self):
+        recorder = self._recorder("feed-scroll-fifty")
         clock = FakeClock(recorder)
         page = _page(recorder).script("evaluate:root_content", _root("Feed content"))
         page.script("evaluate:feed_post_boundaries", {"posts": []})
         page.script(
             "mouse.wheel",
-            *[self._one_batch_per_wheel(page, index) for index in range(self._CEILING)],
+            *[
+                self._one_batch(page, f"fifty-ugcPost-{i}-example")
+                for i in range(self._NUM_POSTS)
+            ],
         )
         reader = _reader(page)
 
@@ -245,14 +254,67 @@ class TestFeedScrollCeiling:
                 result = await reader.extract_feed(num_posts=self._NUM_POSTS)
 
         wheels = [event for event in recorder.events if event["kind"] == "mouse.wheel"]
-        # Exactly the literal, in both directions: a thirteenth wheel finds no
-        # scripted batch behind it, and an eleventh leaves one unspent, which
-        # ``assert_clean`` below reports as well.
-        assert len(wheels) == self._CEILING
-        # Every round produced, so nothing stopped for staleness here, and the
-        # requested count is still nowhere near when the loop gives up.
-        assert len(result.references) == self._CEILING
-        assert len(result.references) < self._NUM_POSTS
+        assert len(wheels) == self._NUM_POSTS
+        assert len(result.references) == self._NUM_POSTS
+        page.assert_clean()
+
+    async def test_a_slow_feed_is_truncated_at_the_ceiling(self):
+        """One post every third wheel: never stale, never at the target."""
+        recorder = self._recorder("feed-scroll-ceiling")
+        clock = FakeClock(recorder)
+        ceiling = feed_module.max_feed_scrolls(self._NUM_POSTS)
+        page = _page(recorder).script("evaluate:root_content", _root("Feed content"))
+        page.script("evaluate:feed_post_boundaries", {"posts": []})
+        page.script(
+            "mouse.wheel",
+            *[
+                self._one_batch(page, f"slow-ugcPost-{i}-example")
+                if i % 3 == 0
+                else (lambda: None)
+                for i in range(ceiling)
+            ],
+        )
+        reader = _reader(page)
+
+        async with boundaries(recorder, clock):
+            with recorder.context("extract_feed", "feed"):
+                result = await reader.extract_feed(num_posts=self._NUM_POSTS)
+
+        wheels = [event for event in recorder.events if event["kind"] == "mouse.wheel"]
+        # Exactly the ceiling: one more finds no scripted wheel behind it,
+        # one fewer leaves one unspent, which ``assert_clean`` reports.
+        assert len(wheels) == ceiling
+        assert len(result.references) == ceiling // 3
+        page.assert_clean()
+
+    async def test_the_scroll_gate_is_asked_before_every_wheel(self):
+        recorder = self._recorder("feed-scroll-gate")
+        clock = FakeClock(recorder)
+        page = _page(recorder).script("evaluate:root_content", _root("Feed content"))
+        page.script("evaluate:feed_post_boundaries", {"posts": []})
+        page.script(
+            "mouse.wheel",
+            *[self._one_batch(page, f"gate-ugcPost-{i}-example") for i in range(3)],
+        )
+        reader = _reader(page)
+        asked = 0
+
+        def gate() -> bool:
+            nonlocal asked
+            asked += 1
+            return asked <= 3  # the fourth scroll is refused
+
+        async with boundaries(recorder, clock):
+            with recorder.context("extract_feed", "feed"):
+                result = await reader.extract_feed(
+                    num_posts=self._NUM_POSTS, scroll_gate=gate
+                )
+
+        wheels = [event for event in recorder.events if event["kind"] == "mouse.wheel"]
+        assert asked == 4
+        assert len(wheels) == 3
+        # What loaded before the refusal is still returned.
+        assert len(result.references) == 3
         page.assert_clean()
 
 
@@ -939,7 +1001,7 @@ class TestFeedToolDeadline:
 
         reads: list[asyncio.Task[None]] = []
 
-        async def extract_feed(num_posts: int = 1) -> ExtractedSection:
+        async def extract_feed(num_posts: int = 1, scroll_gate=None) -> ExtractedSection:
             started = asyncio.Event()
 
             async def read() -> None:

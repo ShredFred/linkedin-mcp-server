@@ -17,7 +17,7 @@ from linkedin_mcp_server.linkedin.contracts import (
     rate_limited_section_error as rate_limited_section_error,
 )
 from linkedin_mcp_server.linkedin.conversations import ConversationReader
-from linkedin_mcp_server.linkedin.feed import FeedReader
+from linkedin_mcp_server.linkedin.feed import FeedReader, ScrollGate
 from linkedin_mcp_server.linkedin.job_pages import JobPageReader
 from linkedin_mcp_server.linkedin.job_policy import JobsTrackerStage
 from linkedin_mcp_server.linkedin.jobs import JobReader
@@ -84,9 +84,11 @@ class LinkedInExtractor:
             text, scope=scope, timeout=timeout
         )
 
-    async def extract_feed(self, num_posts: int = 10) -> ExtractedSection:
+    async def extract_feed(
+        self, num_posts: int = 10, scroll_gate: ScrollGate | None = None
+    ) -> ExtractedSection:
         """Read the LinkedIn home feed, scrolling until enough posts load."""
-        return await self._feed.extract_feed(num_posts)
+        return await self._feed.extract_feed(num_posts, scroll_gate)
 
     async def extract_page(
         self,
