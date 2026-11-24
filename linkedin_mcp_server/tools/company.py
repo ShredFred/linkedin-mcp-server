@@ -6,7 +6,7 @@ with configurable section selection.
 """
 
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
@@ -137,8 +137,9 @@ def register_company_tools(
                 url, section_name="posts", max_scrolls=max_scrolls
             ),
         )
-        if not isinstance(extracted, ExtractedSection):
-            return extracted  # the pacer's refusal dict
+        if is_refusal(extracted):
+            return cast(dict[str, Any], extracted)
+        extracted = cast(ExtractedSection, extracted)
 
         sections: dict[str, str] = {}
         references: dict[str, list[Reference]] = {}
