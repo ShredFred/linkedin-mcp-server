@@ -15,6 +15,7 @@ from pydantic import Field
 from linkedin_mcp_server.callbacks import MCPContextProgressCallback
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.dependencies import get_ready_extractor, tool_errors
+from linkedin_mcp_server.linkedin.contracts import ExtractedSection
 from linkedin_mcp_server.tools.read_pace import is_refusal, paced_read
 from linkedin_mcp_server.linkedin import parse_company_sections
 from linkedin_mcp_server.linkedin.contracts import RATE_LIMITED_SECTION_TEXT
@@ -136,8 +137,8 @@ def register_company_tools(
                 url, section_name="posts", max_scrolls=max_scrolls
             ),
         )
-        if is_refusal(extracted):
-            return extracted
+        if not isinstance(extracted, ExtractedSection):
+            return extracted  # the pacer's refusal dict
 
         sections: dict[str, str] = {}
         references: dict[str, list[Reference]] = {}

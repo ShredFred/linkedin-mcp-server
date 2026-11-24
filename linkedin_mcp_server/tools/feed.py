@@ -16,7 +16,8 @@ from pydantic import Field
 
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.dependencies import get_ready_extractor, tool_errors
-from linkedin_mcp_server.tools.read_pace import is_refusal, paced_read, take_read
+from linkedin_mcp_server.linkedin.contracts import ExtractedSection
+from linkedin_mcp_server.tools.read_pace import paced_read, take_read
 from linkedin_mcp_server.linkedin.contracts import RATE_LIMITED_SECTION_TEXT
 from linkedin_mcp_server.linkedin.contracts import rate_limited_section_error
 from linkedin_mcp_server.linkedin.link_metadata import Reference
@@ -97,8 +98,8 @@ def register_feed_tools(
                 num_posts=num_posts, scroll_gate=scroll_gate
             ),
         )
-        if is_refusal(extracted):
-            return extracted
+        if not isinstance(extracted, ExtractedSection):
+            return extracted  # the pacer's refusal dict
 
         url = "https://www.linkedin.com/feed/"
         sections: dict[str, str] = {}
